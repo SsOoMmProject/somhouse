@@ -1,3 +1,7 @@
 .DS_Store
 *.log
 somhouse-backup*.json
+__pycache__/
+*.sqlite3*
+initial-accounts.txt
+.local-data/
