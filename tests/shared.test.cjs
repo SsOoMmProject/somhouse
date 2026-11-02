@@ -64,3 +64,22 @@ test('expired session exposes login and prevents accidental device fallback',asy
  assert.equal(b.sessionData.has('somhouse-session-v1'),false);
  assert.equal(await b.eval("changeItem('shopping',{id:'blocked',title:'차단',quantity:'1'})"),false);
 });
+
+test('shared records with no device originals do not offer an unnecessary migration',async()=>{
+ const b=browser();await b.eval("shared.login('http://127.0.0.1:8787','family1','password')");
+ b.eval("mode='shared';sharedReady=true;connectionView()");
+ await b.eval("changeItem('shopping',{id:'shared',title:'공유',quantity:'1'})");
+ assert.equal(b.get('#migrate-local').hidden,true);
+ assert.equal(b.get('#export-device').hidden,true);
+ assert.ok(b.get('#migration-help').textContent.includes('이미 공유 저장'));
+ assert.equal(b.eval('data.shopping.length'),1);
+ assert.equal(JSON.parse(b.local.get('somhouse-v1')).shopping.length,0);
+});
+
+test('existing device originals remain available for explicit migration',()=>{
+ const raw=JSON.stringify({records:[],schedule:[],shopping:[{id:'device',title:'기존 기록',quantity:'1'}]});
+ const b=browser({raw});b.eval("mode='shared';sharedReady=true;connectionView()");
+ assert.equal(b.get('#migrate-local').hidden,false);
+ assert.ok(b.get('#migrate-local').textContent.includes('원본 1개'));
+ assert.equal(b.local.get('somhouse-v1'),raw);
+});

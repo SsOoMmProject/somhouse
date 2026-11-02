@@ -26,6 +26,9 @@ const shared=window.SomhouseShared?new window.SomhouseShared.Client():null;
 let deviceData=data, mode=shared?.token?'shared':'local', sharedReady=false, busy=false, refreshing=false;
 if(mode==='shared')data=empty();
 function message(text){if(shared)$('#connection-status').textContent=text;}
+function deviceRecordCount(){
+ try{const raw=localStorage.getItem(KEY),original=raw===null?empty():JSON.parse(raw);if(!valid(original))return null;return ['records','schedule','shopping'].reduce((n,k)=>n+original[k].length,0);}catch{return null;}
+}
 function connectionView(){
  if(!shared)return;
  const connected=mode==='shared';
@@ -34,6 +37,10 @@ function connectionView(){
  $('#storage-title').textContent=connected?'맥미니에 함께 저장해요':'우리 기기에만 저장돼요';
  $('#storage-description').textContent=connected?'두 가족 계정이 같은 기록을 사용해요. 공유 기록은 화면을 다시 열거나 새로고침하면 갱신됩니다. 이 기기의 원본 기록은 별도로 남아 있어요.':'기록은 이 브라우저에만 저장돼요. 가족 공유에 로그인하면 맥미니의 공유 기록을 사용할 수 있어요.';
  $('#migrate-local').disabled=storageBlocked||busy||!sharedReady;
+ const count=deviceRecordCount();
+ $('#migrate-local').hidden=count===0;$('#export-device').hidden=count===0;
+ $('#migrate-local').textContent=count===null?'이 기기 원본 확인 필요':'이 기기 원본 '+count+'개를 공유에 병합';
+ $('#migration-help').textContent=count===0?'로그인 후 입력한 기록은 이미 공유 저장돼요. 별도로 옮길 필요 없이 다른 휴대폰에서도 로그인해 확인하세요.':count===null?'기기 원본을 읽지 못했어요. 원본은 변경하지 않았습니다. 복구 안내를 확인해 주세요.':'로그인 후 입력한 기록은 자동으로 공유 저장돼요. 이 기기에 남아 있는 기존 원본만 추가로 병합할 수 있어요. 같은 내용은 건너뛰고 원본은 유지합니다.';
  document.querySelectorAll('#connection button, #connection input').forEach(el=>{if(el.id!=='migrate-local')el.disabled=busy;});
  $('#import').disabled=busy;
  document.querySelectorAll('#content button[data-add], #content button[data-action]').forEach(el=>el.disabled=busy||(connected&&!sharedReady));
@@ -50,7 +57,7 @@ async function sharedChange(operation){
  if(busy||refreshing){message('저장 또는 새로고침이 끝난 뒤 다시 시도해 주세요.');return false;}
  if(!sharedReady){message('공유 기록을 먼저 불러와 주세요.');return false;}
  busy=true;connectionView();
- try{const next=await operation();if(!valid(next))throw Error('저장 결과를 확인하지 못했어요. 새로고침해 주세요.');data=next;message('맥미니에 저장했어요.');return true;}
+ try{const next=await operation();if(!valid(next))throw Error('저장 결과를 확인하지 못했어요. 새로고침해 주세요.');data=next;message('공유 저장 완료. 다른 휴대폰에서도 로그인하면 볼 수 있어요. 별도로 옮길 필요는 없습니다.');return true;}
  catch(error){message(error.message);if(error.status===401){shared.clear();sharedReady=false;}alert(error.message);return false;}
  finally{busy=false;connectionView();}
 }
@@ -162,7 +169,7 @@ if(shared){
   try{
    const raw=localStorage.getItem(KEY);const original=raw===null?empty():JSON.parse(raw);if(!valid(original))throw Error();
    const count=['records','schedule','shopping'].reduce((n,k)=>n+original[k].length,0);
-   if(!count){message('이 브라우저에는 이전할 기록이 없어요. 다른 휴대폰에서는 JSON 백업 파일로 가져올 수 있어요.');return;}
+   if(!count){message('로그인 후 입력한 기록은 이미 공유 저장돼요. 별도로 옮길 필요 없이 다른 휴대폰에서도 로그인해 확인하세요.');return;}
    if(!confirm('이 기기 기록 '+count+'개를 공유 기록에 병합할까요? 원본 백업을 내려받고, 브라우저 원본도 그대로 남겨요.'))return;
    downloadBackup(original,'somhouse-backup-device-before-move');await mergeShared(original);
   }catch{message('기기 원본 기록을 읽지 못했어요. 원본은 변경하지 않았습니다.');}
