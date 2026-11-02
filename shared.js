@@ -55,7 +55,7 @@
     async load() {return (await this.request('/api/data')).data;}
     async put(kind, item) {return (await this.request('/api/items/' + kind + '/' + encodeURIComponent(item.id), 'PUT', item)).data;}
     async remove(kind, id) {return (await this.request('/api/items/' + kind + '/' + encodeURIComponent(id), 'DELETE')).data;}
-    async merge(data, restore=false) {return this.request(restore?'/api/restore':'/api/merge', 'POST', data);}
+    async merge(data) {return this.request('/api/merge', 'POST', data);}
   }
   const api = {Client, serverURL};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

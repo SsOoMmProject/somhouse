@@ -1,6 +1,20 @@
-const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const vm=require('node:vm');
-function run(raw=null){let stored=raw,fail=false;const elements=new Map();const get=()=>({classList:{add(){},toggle(){}},setAttribute(){},removeAttribute(){},prepend(){},addEventListener(){},innerHTML:'',textContent:''});const window={addEventListener(){}};const scope={console,window,location:{hash:''},document:{querySelector(sel){if(!elements.has(sel))elements.set(sel,get());return elements.get(sel)},querySelectorAll(){return []},addEventListener(){},createElement:get},localStorage:{getItem(){return stored},setItem(k,v){if(fail)throw Error('full');stored=v}},alert(){},Somhouse:require('../service.js')};vm.createContext(scope);vm.runInContext(fs.readFileSync(require.resolve('../app.js'),'utf8'),scope);return {eval:x=>vm.runInContext(x,scope),set:v=>stored=v,stored:()=>stored,fail:()=>fail=true}}
-const blank={records:[],schedule:[],shopping:[]};
-test('broken source remains unchanged when save is attempted',()=>{const c=run('{bad');assert.equal(c.eval('save({records:[],schedule:[],shopping:[]})'),false);assert.equal(c.stored(),'{bad')});
-test('storage write failure does not modify application data',()=>{const c=run(JSON.stringify(blank));c.fail();assert.equal(c.eval('save({records:[],schedule:[],shopping:[{id:"x"}]})'),false);assert.equal(c.eval('data.shopping.length'),0);assert.equal(c.stored(),JSON.stringify(blank))});
-test('another tab modification prevents stale overwrite',()=>{const c=run(JSON.stringify(blank));const updated=JSON.stringify({...blank,shopping:[{id:'other',title:'분유',quantity:'1'}]});c.set(updated);assert.equal(c.eval('save({records:[],schedule:[],shopping:[]})'),false);assert.equal(c.stored(),updated)});
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const {browser}=require('./helpers/browser.cjs');
+test('corrupt legacy source is preserved while shared records remain usable',async()=>{
+ const b=browser({raw:'{broken'});await b.login();
+ assert.equal(b.local.get('somhouse-v1'),'{broken');assert.equal(b.eval('sharedReady'),true);
+ assert.equal(b.calls.filter(x=>x.url.endsWith('/api/merge')).length,0);
+ assert.ok(b.get('#connection-status').textContent.includes('원본은 보존'));
+});
+test('blocked legacy reads never cause a destructive replacement',async()=>{
+ const raw=JSON.stringify({records:[],schedule:[],shopping:[{id:'original',title:'원본',quantity:'1'}]});
+ const b=browser({raw});b.blockRead();await b.login();
+ assert.equal(b.local.get('somhouse-v1'),raw);assert.equal(b.eval('sharedReady'),true);
+ assert.equal(b.calls.filter(x=>x.url.endsWith('/api/merge')).length,0);
+});
+test('shared mutations work even when local storage writes are unavailable',async()=>{
+ const b=browser();b.blockWrite();const original=b.local.get('somhouse-v1');await b.login();
+ assert.equal(await b.eval("changeItem('shopping',{id:'server',title:'서버 저장',quantity:'1'})"),true);
+ assert.equal(b.local.get('somhouse-v1'),original);assert.equal(b.eval('data.shopping[0].id'),'server');
+});

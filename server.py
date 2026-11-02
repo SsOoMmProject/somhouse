@@ -108,6 +108,7 @@ class Store:
             file.write(encode(self.state(db)))
             file.flush()
             os.fsync(file.fileno())
+        return path
 
     def password(self, username, password):
         salt = secrets.token_hex(16)
@@ -261,8 +262,8 @@ class Handler(BaseHTTPRequestHandler):
                     result = {"ok": True}
                 elif path == "/api/data" and self.command == "GET":
                     result = {"data": store.state(db)}
-                elif path in ("/api/merge", "/api/restore") and self.command == "POST":
-                    result = store.merge(db, self.body(), restore=path == "/api/restore")
+                elif path == "/api/merge" and self.command == "POST":
+                    result = store.merge(db, self.body())
                 elif path.startswith("/api/items/"):
                     parts = path.split("/")
                     if len(parts) != 5 or parts[3] not in KINDS or self.command not in ("PUT", "DELETE"):
@@ -294,11 +295,12 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("init", "serve", "password"), nargs="?", default="serve")
+    parser.add_argument("command", choices=("init", "serve", "password", "backup", "restore"), nargs="?", default="serve")
     parser.add_argument("username", nargs="?")
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA)
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--origin", action="append", default=[])
+    parser.add_argument("--file", type=Path, help="관리자 복원용 JSON 파일")
     args = parser.parse_args()
     os.umask(0o077)
     store = Store(args.data_dir)
@@ -314,6 +316,20 @@ def main():
                 store.password(name, password)
                 file.write(f"아이디: {name}\n비밀번호: {password}\n\n")
         print(f"가족 계정 두 개를 생성했습니다. 로그인 정보: {path}")
+    elif args.command == "backup":
+        with store.lock, store.connect() as db:
+            path = store.snapshot(db)
+        print(f"관리자 백업 완료: {path}")
+    elif args.command == "restore":
+        if not args.file:
+            parser.error("복원할 백업을 --file 로 지정해 주세요.")
+        try:
+            original = validate_data(json.loads(args.file.read_text(encoding="utf-8")))
+            with store.lock, store.connect() as db:
+                result = store.merge(db, original, restore=True)
+        except (OSError, ValueError, Problem) as error:
+            parser.exit(1, f"복원하지 못했습니다. 기존 기록은 유지됩니다: {error}\n")
+        print(f"관리자 복원 완료: {result['added']}개 추가, {result['skipped']}개 중복 건너뜀. 기존 기록 유지.")
     elif args.command == "password":
         with store.connect() as db:
             if not db.execute("SELECT 1 FROM users WHERE username=?", (args.username,)).fetchone():

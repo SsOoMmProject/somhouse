@@ -3,6 +3,8 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import subprocess
+import shutil
 import tempfile
 import threading
 import time
@@ -138,9 +140,38 @@ class FamilyAPI(unittest.TestCase):
         self.request("/api/merge", "POST", backup, token)
         self.request("/api/items/shopping/a", "DELETE", token=token)
         self.assertEqual(self.request("/api/merge", "POST", backup, token)[1]["added"], 0)
-        restored = self.request("/api/restore", "POST", backup, token)[1]
-        self.assertEqual(restored["added"], 1)
-        self.assertEqual(restored["data"], backup)
+        # A normal family login cannot use the administrator restore path.
+        self.assertEqual(self.request("/api/restore", "POST", backup, token)[0], 404)
+        path = Path(self.temp.name) / "restore-input.json"
+        path.write_text(json.dumps(backup), encoding="utf-8")
+        result = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1]/"server.py"), "restore", "--data-dir", self.temp.name, "--file", str(path)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.request("/api/data", token=token)[1]["data"], backup)
+
+    def test_admin_backup_and_invalid_restore_preserve_current_data(self):
+        token = self.login()
+        a = self.item()
+        self.request("/api/items/shopping/a", "PUT", a, token)
+        command = [sys.executable, str(Path(__file__).resolve().parents[1]/"server.py")]
+        result = subprocess.run(command+["backup", "--data-dir", self.temp.name], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        path = Path(result.stdout.strip().split(": ", 1)[1])
+        self.assertEqual(json.loads(path.read_text()), self.blank([a]))
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        invalid = Path(self.temp.name) / "invalid.json"
+        invalid.write_text('{"records":[]}', encoding="utf-8")
+        result = subprocess.run(command+["restore", "--data-dir", self.temp.name, "--file", str(invalid)], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.request("/api/data", token=token)[1]["data"], self.blank([a]))
+
+    def test_two_frontend_sessions_automatically_follow_real_api_changes(self):
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node.js is required for the frontend integration check")
+        script = Path(__file__).with_name("two_clients.cjs")
+        result = subprocess.run([node, str(script), self.base], capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with self.store.connect() as db:
+            self.assertEqual(self.store.state(db), self.blank())
 
     def test_feeding_hospital_and_schedule_are_shared_with_legacy_fields(self):
         first, second = self.login(), self.login(2)
