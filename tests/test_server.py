@@ -331,5 +331,48 @@ class FamilyAPI(unittest.TestCase):
             self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 200)
 
 
+    def test_gemini_checks_the_session_before_validating_the_question(self):
+        original = self.server.gemini
+        self.addCleanup(setattr, self.server, "gemini", original)
+        self.server.gemini = Gemini("isolated-test-key")
+        for body in ({"question": ""}, {"question": "안녕", "scope": "unknown"}):
+            self.assertEqual(self.request("/api/ai", "POST", body, "not-a-session")[0], 401)
+
+    def test_gemini_deadline_covers_a_slowly_dripping_reply(self):
+        import gemini as gemini_module
+        token = self.login()
+        original = self.server.gemini
+        self.addCleanup(setattr, self.server, "gemini", original)
+        self.server.gemini = Gemini("isolated-test-key")
+        closed = threading.Event()
+
+        class Socket:
+            def shutdown(self, _):
+                closed.set()
+
+        class SlowConnection:
+            # Each read would finish inside a per-read timeout, so only a total
+            # deadline stops it. The read ends when the watchdog shuts it down.
+            def __init__(self, *_, **__):
+                self.sock = Socket()
+            def request(self, *_):
+                pass
+            def getresponse(self):
+                if not closed.wait(5):
+                    raise AssertionError("deadline did not stop the reply")
+                raise OSError("socket shut down")
+            def close(self):
+                pass
+
+        with patch.object(gemini_module, "DEADLINE_SECONDS", 0.3), \
+                patch("gemini.http.client.HTTPSConnection", SlowConnection):
+            started = time.monotonic()
+            code, result, _ = self.request("/api/ai", "POST", {"question": "안녕"}, token)
+            self.assertEqual(code, 504)
+            self.assertLess(time.monotonic() - started, 3)
+            self.assertNotIn("isolated-test-key", json.dumps(result))
+        self.assertNotIn("family1", self.server.gemini.active)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -279,10 +279,13 @@ class Handler(BaseHTTPRequestHandler):
                 store.user(db, token)
             return gemini.status()
 
-        question, scope = parse_question(self.body(24 * 1024))
+        # Read the small body before taking the lock, but check the session
+        # before validating it so signed-out callers only ever see 401.
+        body = self.body(24 * 1024)
         summary = None
         with store.lock, store.connect() as db:
             username = store.user(db, token)
+            question, scope = parse_question(body)
             if not gemini.key:
                 raise Problem(503, "Gemini를 사용하려면 맥미니에 API 키를 설정해야 해요.")
             if scope != "none":

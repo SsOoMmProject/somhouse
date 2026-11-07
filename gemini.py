@@ -6,12 +6,16 @@ import json
 import os
 from pathlib import Path
 import re
+import socket
 import tempfile
 import threading
 import time
 
 CONFIG_NAME = "gemini-config.json"
 MODEL = "gemini-3.5-flash-lite"
+# Whole Google exchange, kept below the browser's 25-second limit so a slow
+# reply frees the per-account slot before the family member can retry.
+DEADLINE_SECONDS = 18
 SCOPES = {"none": None, "feeding": "records", "schedule": "schedule", "shopping": "shopping"}
 VOLUME = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*(?:ml|미리|밀리리터)", re.IGNORECASE)
 SYSTEM = (
@@ -131,7 +135,23 @@ class Gemini:
             "generationConfig": {"maxOutputTokens": 1024},
             "store": False,
         }
-        connection = http.client.HTTPSConnection("generativelanguage.googleapis.com", timeout=18)
+        connection = http.client.HTTPSConnection("generativelanguage.googleapis.com", timeout=DEADLINE_SECONDS)
+        expired = threading.Event()
+
+        def stop():
+            # A socket timeout only bounds each read, so a slowly dripping reply
+            # could keep going. Shutting the socket down interrupts a blocked read.
+            expired.set()
+            sock = getattr(connection, "sock", None)
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+        watchdog = threading.Timer(DEADLINE_SECONDS, stop)
+        watchdog.daemon = True
+        watchdog.start()
         try:
             connection.request("POST", f"/v1beta/models/{MODEL}:generateContent", json.dumps(request), {
                 "Content-Type": "application/json",
@@ -153,10 +173,15 @@ class Gemini:
         except TimeoutError:
             raise GeminiError(504, "Gemini 응답이 늦어지고 있어요. 잠시 후 다시 시도해 주세요.") from None
         except (OSError, http.client.HTTPException):
+            if expired.is_set():
+                raise GeminiError(504, "Gemini 응답이 늦어지고 있어요. 잠시 후 다시 시도해 주세요.") from None
             raise GeminiError(502, "Gemini에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.") from None
         except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+            if expired.is_set():
+                raise GeminiError(504, "Gemini 응답이 늦어지고 있어요. 잠시 후 다시 시도해 주세요.") from None
             raise GeminiError(502, "Gemini가 표시할 수 있는 답변을 보내지 않았어요.") from None
         finally:
+            watchdog.cancel()
             connection.close()
         if not answer or finish not in ("STOP", "MAX_TOKENS"):
             raise GeminiError(502, "Gemini가 표시할 수 있는 답변을 보내지 않았어요.")
