@@ -1,7 +1,9 @@
 """Exercise the actual HTTP API against an isolated temporary database."""
 import hashlib
+import http.client
 import json
 from pathlib import Path
+import socket
 import sys
 import subprocess
 import shutil
@@ -374,6 +376,27 @@ class FamilyAPI(unittest.TestCase):
             self.assertEqual(code, 504)
             self.assertLess(time.monotonic() - started, 3)
             self.assertNotIn("isolated-test-key", json.dumps(result))
+        self.assertNotIn("family1", self.server.gemini.active)
+
+    def test_gemini_deadline_interrupts_a_detached_response_socket(self):
+        token = self.login()
+        original = self.server.gemini
+        self.addCleanup(setattr, self.server, "gemini", original)
+        self.server.gemini = Gemini("isolated-test-key")
+        client, peer = socket.socketpair()
+        with client, peer:
+            client.settimeout(3)
+            connection = http.client.HTTPConnection("gemini.test")
+            connection.sock = client
+            # Connection: close makes getresponse() hand the socket to the
+            # response. Leave its body incomplete until the watchdog stops it.
+            peer.sendall(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\n{")
+            with patch("gemini.DEADLINE_SECONDS", 0.2), \
+                    patch("gemini.http.client.HTTPSConnection", return_value=connection):
+                started = time.monotonic()
+                code, _, _ = self.request("/api/ai", "POST", {"question": "안녕"}, token)
+            self.assertEqual(code, 504)
+            self.assertLess(time.monotonic() - started, 2)
         self.assertNotIn("family1", self.server.gemini.active)
 
 

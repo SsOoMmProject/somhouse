@@ -13,7 +13,7 @@ import time
 
 CONFIG_NAME = "gemini-config.json"
 MODEL = "gemini-3.5-flash-lite"
-# Whole Google exchange, kept below the browser's 25-second limit so a slow
+# Keep the response deadline below the browser's 25-second limit so a slow
 # reply frees the per-account slot before the family member can retry.
 DEADLINE_SECONDS = 18
 SCOPES = {"none": None, "feeding": "records", "schedule": "schedule", "shopping": "shopping"}
@@ -137,12 +137,14 @@ class Gemini:
         }
         connection = http.client.HTTPSConnection("generativelanguage.googleapis.com", timeout=DEADLINE_SECONDS)
         expired = threading.Event()
+        response_socket = None
+        response = None
 
         def stop():
             # A socket timeout only bounds each read, so a slowly dripping reply
             # could keep going. Shutting the socket down interrupts a blocked read.
             expired.set()
-            sock = getattr(connection, "sock", None)
+            sock = response_socket or getattr(connection, "sock", None)
             if sock is not None:
                 try:
                     sock.shutdown(socket.SHUT_RDWR)
@@ -157,14 +159,23 @@ class Gemini:
                 "Content-Type": "application/json",
                 "x-goog-api-key": self.key,
             })
+            # getresponse() detaches the socket when the peer sends Connection: close.
+            response_socket = connection.sock
+            if expired.is_set():
+                raise TimeoutError
             response = connection.getresponse()
+            if expired.is_set():
+                raise TimeoutError
             if response.status == 429:
                 raise GeminiError(429, "Gemini 사용 한도에 도달했어요. 잠시 후 다시 시도해 주세요.")
             if response.status in (401, 403):
                 raise GeminiError(503, "Gemini 인증을 확인해 주세요. 관리자 설정이 필요해요.")
             if response.status != 200:
                 raise GeminiError(502, "Gemini가 요청을 처리하지 못했어요. 잠시 후 다시 시도해 주세요.")
-            data = json.loads(response.read(256 * 1024))
+            body = response.read(256 * 1024)
+            if expired.is_set():
+                raise TimeoutError
+            data = json.loads(body)
             candidate = data["candidates"][0]
             finish = candidate.get("finishReason", "STOP")
             answer = "\n".join(part["text"] for part in candidate["content"]["parts"]
@@ -182,6 +193,8 @@ class Gemini:
             raise GeminiError(502, "Gemini가 표시할 수 있는 답변을 보내지 않았어요.") from None
         finally:
             watchdog.cancel()
+            if response is not None:
+                response.close()
             connection.close()
         if not answer or finish not in ("STOP", "MAX_TOKENS"):
             raise GeminiError(502, "Gemini가 표시할 수 있는 답변을 보내지 않았어요.")
