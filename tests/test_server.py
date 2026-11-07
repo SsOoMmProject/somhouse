@@ -90,19 +90,45 @@ class FamilyAPI(unittest.TestCase):
         with reopened.connect() as db:
             self.assertEqual(reopened.state(db)["shopping"], [a])
 
-    def test_login_logout_expiration_and_stored_secrets(self):
+    def test_login_stays_active_until_logout_and_stores_hashes(self):
         self.assertEqual(self.request("/api/data")[0], 401)
         self.assertEqual(self.request("/api/login", "POST", {"username": "family1", "password": "wrong"})[0], 401)
         token = self.login()
         with self.store.connect() as db:
             self.assertEqual(db.execute("SELECT token FROM sessions").fetchone()[0], hashlib.sha256(token.encode()).hexdigest())
             self.assertNotIn("test-password-1", db.execute("SELECT password FROM users WHERE username='family1'").fetchone()[0])
+        with patch("server.time.time", return_value=time.time() + 365 * 86400):
+            self.assertEqual(self.request("/api/data", token=token)[0], 200)
         self.assertEqual(self.request("/api/logout", "POST", {}, token)[0], 200)
         self.assertEqual(self.request("/api/data", token=token)[0], 401)
-        token = self.login()
+
+    def test_upgrade_keeps_only_previously_valid_legacy_sessions(self):
+        active, expired = self.login(), self.login()
+        now = time.time()
         with self.store.connect() as db:
-            db.execute("UPDATE sessions SET expires=?", (time.time()-1,))
-        self.assertEqual(self.request("/api/data", token=token)[0], 401)
+            for token, expires in ((active, now + 60), (expired, now - 1)):
+                db.execute("UPDATE sessions SET expires=? WHERE token=?",
+                           (expires, hashlib.sha256(token.encode()).hexdigest()))
+        with FamilyServer(("127.0.0.1", 0), Store(self.temp.name)):
+            with patch("server.time.time", return_value=now + 365 * 86400):
+                self.assertEqual(self.request("/api/data", token=active)[0], 200)
+                self.assertEqual(self.request("/api/data", token=expired)[0], 401)
+
+    def test_password_change_keeps_current_session_and_revokes_other_sessions(self):
+        current, other_device, other_account = self.login(), self.login(), self.login(2)
+        self.addCleanup(self.store.password, "family1", "test-password-1")
+        path = "/api/password"
+        body = {"currentPassword": "test-password-1", "newPassword": "가족이 함께 기억하는 문구"}
+        self.assertEqual(self.request(path, "POST", body)[0], 401)
+        self.assertEqual(self.request(path, "POST", dict(body, currentPassword="wrong"), current)[0], 403)
+        self.assertEqual(self.request(path, "POST", dict(body, newPassword="too short"), current)[0], 400)
+        self.assertEqual(self.request("/api/me", token=other_device)[0], 200)
+        self.assertEqual(self.request(path, "POST", body, current)[0], 200)
+        self.assertEqual(self.request("/api/me", token=current)[0], 200)
+        self.assertEqual(self.request("/api/me", token=other_device)[0], 401)
+        self.assertEqual(self.request("/api/me", token=other_account)[0], 200)
+        for password, status in ((body["currentPassword"], 401), (body["newPassword"], 200)):
+            self.assertEqual(self.request("/api/login", "POST", {"username": "family1", "password": password})[0], status)
 
     def test_merge_preserves_collisions_and_skips_repeat_after_edit_and_delete(self):
         token = self.login()
@@ -165,6 +191,7 @@ class FamilyAPI(unittest.TestCase):
         self.assertEqual(self.request("/api/data", token=token)[1]["data"], self.blank([a]))
 
     def test_two_frontend_sessions_automatically_follow_real_api_changes(self):
+        self.addCleanup(self.store.password, "family1", "test-password-1")
         node = shutil.which("node")
         self.assertIsNotNone(node, "Node.js is required for the frontend integration check")
         script = Path(__file__).with_name("two_clients.cjs")

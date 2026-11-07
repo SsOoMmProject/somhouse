@@ -3,13 +3,13 @@ const vm=require('node:vm');
 const blank=()=>({records:[],schedule:[],shopping:[]});
 const clone=value=>JSON.parse(JSON.stringify(value));
 function family(){return {data:blank(),imported:new Set(),failure:null,readGate:null};}
-function browser({raw=JSON.stringify(blank()),session=null,server=family(),fetcher=null}={}){
- const local=new Map([['somhouse-v1',raw]]),sessionData=new Map(session?[['somhouse-session-v1',JSON.stringify(session)]]:[]);
+function browser({raw=JSON.stringify(blank()),session=null,local=new Map([['somhouse-v1',raw]]),server=family(),fetcher=null}={}){
+ const sessionData=new Map(session?[['somhouse-session-v1',JSON.stringify(session)]]:[]);
  const elements=new Map(),events=new Map(),calls=[],alerts=[],timers=[];
  let blockRead=false,blockWrite=false;
- const element=()=>({classList:{add(){},toggle(){}},setAttribute(){},removeAttribute(){},prepend(){},addEventListener(){},querySelector(){return element();},innerHTML:'',textContent:'',value:'',hidden:false,open:false,close(){this.open=false;},showModal(){this.open=true;}});
+ const element=()=>({classList:{add(){},toggle(){}},setAttribute(){},removeAttribute(){},prepend(){},addEventListener(){},querySelector(){return element();},values:{},reset(){this.values={};},innerHTML:'',textContent:'',value:'',hidden:false,open:false,close(){this.open=false;},showModal(){this.open=true;}});
  const get=sel=>{if(!elements.has(sel))elements.set(sel,element());return elements.get(sel);};
- const context={console,URL,AbortController,setTimeout,clearTimeout,setInterval:(callback,delay)=>timers.push({callback,delay}),Date,location:{hash:'',hostname:'localhost'},
+ const context={console,URL,AbortController,FormData:class extends Map{constructor(form){super(Object.entries(form.values));}},setTimeout,clearTimeout,setInterval:(callback,delay)=>timers.push({callback,delay}),Date,location:{hash:'',hostname:'localhost'},
  localStorage:{getItem:k=>{if(blockRead&&k==='somhouse-v1')throw Error('blocked');return local.get(k)??null;},setItem:(k,v)=>{if(blockWrite)throw Error('full');local.set(k,v);},removeItem:k=>local.delete(k)},
  sessionStorage:{getItem:k=>sessionData.get(k)??null,setItem:(k,v)=>sessionData.set(k,v),removeItem:k=>sessionData.delete(k)},alert:s=>alerts.push(s),confirm:()=>true,
  document:{hidden:false,activeElement:null,querySelector:get,querySelectorAll:()=>[],addEventListener:(name,fn)=>events.set(name,fn),createElement:element},

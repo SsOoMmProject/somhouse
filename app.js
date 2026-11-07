@@ -14,15 +14,25 @@ function valid(d){
 const shared=window.SomhouseShared?new window.SomhouseShared.Client():null;
 let mode=shared?.token?'shared':'login', sharedReady=false, busy=false, refreshing=false, refreshTask=null, migratedRaw, legacyWarning='', needsRender=false;
 function message(text){$('#connection-status').textContent=text;}
+function accountMessage(text){
+ const status=$('#account-status');
+ status.textContent=text;status.hidden=!text;
+}
 function connectionView(){
  const connected=mode==='shared'&&Boolean(shared?.token);
  $('#connection-title').textContent=connected?'가족 기록 · '+shared.username:'가족 로그인';
- $('#login-form').hidden=connected;$('#logout').hidden=!connected;
+ $('#login-form').hidden=connected;$('#logout').hidden=!connected;$('#change-password').hidden=!connected;
  $('nav').hidden=!connected||!sharedReady;
  document.querySelectorAll('#connection button, #connection input').forEach(el=>el.disabled=busy);
+ document.querySelectorAll('#password-form button, #password-form input').forEach(el=>el.disabled=busy);
  document.querySelectorAll('#content button[data-add], #content button[data-action]').forEach(el=>el.disabled=busy||!sharedReady);
 }
-function editingScreen(){return $('#dialog').open||Boolean(document.activeElement?.closest?.('#filter-form'));}
+function showLogin(text){
+ shared.clear();mode='login';sharedReady=false;data=empty();migratedRaw=undefined;
+ for(const dialog of [$('#dialog'),$('#password-dialog')])if(dialog.open)dialog.close();
+ accountMessage('');render();message(text);
+}
+function editingScreen(){return $('#dialog').open||$('#password-dialog').open||Boolean(document.activeElement?.closest?.('#filter-form'));}
 async function loadFamilyData(){
  let raw, original;
  try{
@@ -45,32 +55,42 @@ function refreshShared(force=false){
  if(!shared?.token||mode!=='shared'||busy)return Promise.resolve();
  if(refreshTask)return refreshTask;
  if(!force&&editingScreen())return Promise.resolve();
+ const token=shared.token;
  refreshing=true;
  refreshTask=(async()=>{
   try{
-   const next=await loadFamilyData();if(!valid(next))throw Error('기록을 확인하지 못했어요. 다시 연결하고 있습니다.');
+   const next=await loadFamilyData();
+   if(shared.token!==token)return;
+   if(!valid(next))throw Error('기록을 확인하지 못했어요. 다시 연결하고 있습니다.');
    const changed=JSON.stringify(next)!==JSON.stringify(data),wasReady=sharedReady;
    data=next;sharedReady=true;if(changed)needsRender=true;
    message('기록은 자동으로 저장되고 가족과 함께 업데이트돼요.'+legacyWarning);
    if((needsRender||!wasReady)&&(!editingScreen()||!wasReady))render();else connectionView();
   }catch(error){
-   message(error.message);
-   if(error.status===401){shared.clear();sharedReady=false;mode='login';render();}
+   if(shared.token!==token)return;
+   if(error.status===401)showLogin(error.message);else message(error.message);
   }finally{refreshing=false;refreshTask=null;}
  })();
  return refreshTask;
 }
 async function sharedChange(operation){
  if(busy||mode!=='shared'||!shared?.token)return false;
+ const token=shared.token;
  busy=true;connectionView();
  try{
   // An in-flight automatic read finishes before the write; it cannot overwrite the result.
   if(refreshTask)await refreshTask;
   if(!sharedReady||!shared.token){message('로그인 후 기록을 불러오고 있어요. 잠시 후 다시 시도해 주세요.');return false;}
-  const next=await operation();if(!valid(next))throw Error('저장 결과를 확인하지 못했어요. 입력을 유지하고 다시 연결해 주세요.');
+  const next=await operation();
+  if(shared.token!==token)return false;
+  if(!valid(next))throw Error('저장 결과를 확인하지 못했어요. 입력을 유지하고 다시 연결해 주세요.');
   data=next;message('저장했어요. 가족의 기록에 반영됐어요.');return true;
  }catch(error){
-  message(error.message);if(error.status===401){shared.clear();sharedReady=false;mode='login';connectionView();}alert(error.message);return false;
+  if(shared.token===token){
+   if(error.status===401)showLogin(error.message);else message(error.message);
+   alert(error.message);
+  }
+  return false;
  }finally{busy=false;connectionView();}
 }
 async function changeItem(k,x,remove=false){return sharedChange(()=>remove?shared.remove(k,x.id):shared.put(k,x));}
@@ -141,14 +161,59 @@ if(shared){
   if(mode==='shared')await refreshShared(true);
  };
  $('#logout').onclick=async()=>{
-  if(busy||refreshing)return;busy=true;connectionView();
-  try{await shared.logout();}catch{}finally{
-   mode='login';sharedReady=false;busy=false;data=empty();migratedRaw=undefined;render();message('로그아웃했어요. 가족 계정으로 다시 로그인할 수 있어요.');
+  if(busy||!shared.token)return;busy=true;connectionView();
+  accountMessage('로그아웃하고 있어요…');
+  try{
+   if(refreshTask)await refreshTask;
+   if(!shared.token)return;
+   await shared.logout();
+   showLogin('로그아웃했어요. 가족 계정으로 다시 로그인할 수 있어요.');
+  }catch{
+   if(shared.token)accountMessage('로그아웃하지 못했어요. 연결을 확인한 뒤 다시 시도해 주세요.');
+  }finally{busy=false;connectionView();}
+ };
+ const passwordDialog=$('#password-dialog'),passwordForm=$('#password-form'),passwordStatus=$('#password-status');
+ $('#change-password').onclick=()=>{
+  if(busy||!shared.token)return;
+  accountMessage('');
+  passwordForm.reset();
+  passwordForm.querySelector('[name="username"]').value=shared.username;
+  passwordStatus.textContent='';
+  passwordDialog.showModal();
+ };
+ $('#cancel-password').onclick=()=>{if(!busy)passwordDialog.close();};
+ passwordDialog.addEventListener('cancel',e=>{if(busy)e.preventDefault();});
+ passwordDialog.addEventListener('close',()=>{passwordForm.reset();passwordStatus.textContent='';refreshShared();});
+ passwordForm.onsubmit=async e=>{
+  e.preventDefault();if(busy||!shared.token)return;
+  const values=new FormData(passwordForm);
+  const currentPassword=values.get('currentPassword'),newPassword=values.get('newPassword');
+  if(!newPassword.trim()||Array.from(newPassword).length<12){
+   passwordStatus.textContent='새 비밀번호를 12자 이상 입력해 주세요.';return;
   }
+  if(newPassword!==values.get('confirmPassword')){
+   passwordStatus.textContent='새 비밀번호와 확인 입력이 서로 달라요.';return;
+  }
+  busy=true;connectionView();passwordStatus.textContent='비밀번호를 변경하고 있어요…';
+  try{
+   if(refreshTask)await refreshTask;
+   if(!shared.token)return;
+   await shared.changePassword(currentPassword,newPassword);
+   if(!shared.token)return;
+   passwordDialog.close();
+   accountMessage('비밀번호를 변경했어요. 이 기기의 로그인은 유지돼요.');
+  }catch(error){
+   if(shared.token){
+    if(error.status===401)showLogin(error.message);else passwordStatus.textContent=error.message;
+   }
+  }finally{busy=false;connectionView();}
  };
  window.addEventListener('focus',()=>refreshShared());
  window.addEventListener('online',()=>refreshShared());
- window.addEventListener('storage',e=>{if(e.key===KEY||e.key===null)refreshShared();});
+ window.addEventListener('storage',e=>{
+  if(shared.sessionEnded(e))showLogin('이 브라우저에서 로그아웃됐어요. 가족 계정으로 다시 로그인할 수 있어요.');
+  else if(e.key===KEY||e.key===null)refreshShared();
+ });
  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshShared();});
  $('#dialog').addEventListener('close',()=>refreshShared());
  setInterval(()=>{if(!document.hidden)refreshShared();},2000);

@@ -1,17 +1,33 @@
 <!doctype html>
 <html lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f8f5ef"><title>솜하우스</title><link rel="stylesheet" href="style.css?v=auto-20261102"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f8f5ef"><title>솜하우스</title><link rel="stylesheet" href="style.css?v=account-20261107"></head>
 <body>
 <header><div><span class="logo">✿</span> <strong>솜하우스</strong><small>우리 가족의 작은 기록</small></div></header>
 <main>
 <section id="connection" class="card connection" aria-label="가족 로그인">
-<div class="heading"><h2 id="connection-title">가족 로그인</h2><button id="logout" class="plain" hidden>로그아웃</button></div>
+<div class="heading">
+<h2 id="connection-title">가족 로그인</h2>
+<div class="account-actions"><button type="button" id="change-password" class="plain" hidden>비밀번호 변경</button><button type="button" id="logout" class="plain" hidden>로그아웃</button></div>
+</div>
 <p id="connection-status" role="status" aria-live="polite">로그인하면 가족의 기록을 함께 보고 관리할 수 있어요.</p>
+<p id="account-status" role="status" hidden></p>
 <form id="login-form"><label class="field">아이디<input name="username" autocomplete="username" required maxlength="100"></label><label class="field">비밀번호<input name="password" type="password" autocomplete="current-password" required maxlength="256"></label><button type="submit">로그인</button></form>
 </section>
 <nav aria-label="메뉴" hidden><button data-page="home">홈</button><button data-page="records">육아 기록</button><button data-page="schedule">일정</button><button data-page="shopping">구매 목록</button><button data-page="ai">AI 대화</button></nav>
 <div id="content"></div>
 </main>
 <dialog id="dialog"><form id="form"><div class="formhead"><h2 id="formtitle"></h2><button type="button" id="close" class="plain" aria-label="닫기">✕</button></div><div id="fields"></div><div class="actions"><button type="button" id="cancel" class="secondary">취소</button><button type="submit">저장하기</button></div></form></dialog>
-<script src="config.js?v=auto-20261102" defer></script><script src="service.js?v=auto-20261102" defer></script><script src="shared.js?v=auto-20261102" defer></script><script src="app.js?v=auto-20261102" defer></script>
+<dialog id="password-dialog" aria-labelledby="password-title">
+<form id="password-form">
+<h2 id="password-title">비밀번호 변경</h2>
+<input name="username" autocomplete="username" hidden>
+<label class="field">현재 비밀번호<input name="currentPassword" type="password" autocomplete="current-password" required maxlength="256" autofocus></label>
+<label class="field">새 비밀번호<input name="newPassword" type="password" autocomplete="new-password" required minlength="12" maxlength="256" aria-describedby="password-help"></label>
+<label class="field">새 비밀번호 확인<input name="confirmPassword" type="password" autocomplete="new-password" required maxlength="256"></label>
+<p id="password-help" class="caption">기억하기 쉬운 12자 이상의 문구를 사용할 수 있어요. 변경하면 같은 계정의 다른 기기에서는 다시 로그인해야 해요.</p>
+<p id="password-status" role="status"></p>
+<div class="actions"><button type="button" id="cancel-password" class="secondary">취소</button><button type="submit">비밀번호 저장</button></div>
+</form>
+</dialog>
+<script src="config.js?v=auto-20261102" defer></script><script src="service.js?v=auto-20261102" defer></script><script src="shared.js?v=account-20261107" defer></script><script src="app.js?v=account-20261107" defer></script>
 </body></html>

@@ -26,21 +26,39 @@ test('shared save preserves device originals and failure preserves entered data'
  assert.equal(b.local.get('somhouse-v1'),original);
  const call=b.calls.find(x=>x.options.method==='PUT');
  assert.equal(call.options.headers.Authorization,'Bearer test-token');assert.equal(call.options.credentials,'omit');
- assert.ok(!b.local.has('somhouse-session-v1'));assert.ok(b.sessionData.has('somhouse-session-v1'));
+ assert.ok(b.local.has('somhouse-session-v1'));assert.ok(!b.sessionData.has('somhouse-session-v1'));
 });
 
-test('saved session restores shared data without replacing local originals',async()=>{
+test('existing tab session becomes persistent without replacing local originals',async()=>{
  const b=browser({session:{base:'http://127.0.0.1:8787',token:'existing',username:'family2'}});
  const original=b.local.get('somhouse-v1');await b.settle();
  assert.equal(b.eval('mode'),'shared');assert.equal(b.eval('sharedReady'),true);
  assert.equal(b.local.get('somhouse-v1'),original);assert.equal(b.calls[0].options.headers.Authorization,'Bearer existing');
+ assert.equal(b.sessionData.has('somhouse-session-v1'),false);
+ const reopened=browser({local:b.local});await reopened.settle();
+ assert.equal(reopened.eval('mode'),'shared');assert.equal(reopened.eval('sharedReady'),true);
+ assert.equal(reopened.calls[0].options.headers.Authorization,'Bearer existing');
 });
 
-test('expired session exposes login and never falls back to device-only storage',async()=>{
+test('logout removes the persisted login and signs out other open tabs',async()=>{
+ const b=browser();await b.login();
+ const key='somhouse-session-v1',oldValue=b.local.get(key);
+ const other=browser({local:b.local,server:b.server});await other.settle();
+ assert.equal(other.get('#change-password').hidden,false);
+ b.fail(Error('offline'));await b.get('#logout').onclick();
+ assert.equal(b.local.get(key),oldValue);assert.match(b.get('#account-status').textContent,/로그아웃하지 못했어요/);
+ b.fail(null);await b.get('#logout').onclick();
+ assert.equal(b.local.has(key),false);
+ other.events.get('storage')({key,oldValue,newValue:null});
+ assert.equal(other.eval('mode'),'login');assert.equal(other.get('#change-password').hidden,true);
+ assert.equal(browser({local:b.local}).eval('mode'),'login');
+});
+
+test('revoked session exposes login and never falls back to device-only storage',async()=>{
  const b=browser();await b.login();
  const expired=Error('다시 로그인');expired.status=401;b.fail(expired);await b.eval('refreshShared(true)');
  assert.equal(b.eval('mode'),'login');assert.equal(b.eval('sharedReady'),false);assert.equal(b.get('#login-form').hidden,false);
- assert.equal(b.sessionData.has('somhouse-session-v1'),false);
+ assert.equal(b.local.has('somhouse-session-v1'),false);
  assert.equal(await b.eval("changeItem('shopping',{id:'blocked',title:'차단',quantity:'1'})"),false);
 });
 

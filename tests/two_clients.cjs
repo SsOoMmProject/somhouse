@@ -16,7 +16,24 @@ async function waitFor(check){
  b.timers[0].callback();await waitFor(()=>b.eval("data.shopping.some(x=>x.id==='frontend'&&x.title==='자동 수정')"));
  assert.equal(await a.eval("changeItem('shopping',{id:'frontend'},true)"),true);
  b.timers[0].callback();await waitFor(()=>b.eval("!data.shopping.some(x=>x.id==='frontend')"));
+
+ const reopened=browser({local:a.local,fetcher:fetch});
+ await waitFor(()=>reopened.eval('sharedReady'));
+ reopened.get('#change-password').onclick();
+ const form=reopened.get('#password-form'),submit={preventDefault(){}};
+ const newPassword='easier family passphrase';
+ form.values={currentPassword:'test-password-1',newPassword,confirmPassword:'different'};
+ await form.onsubmit(submit);
+ assert.match(reopened.get('#password-status').textContent,/서로 달라요/);
+ form.values.confirmPassword=newPassword;
+ await form.onsubmit(submit);
+ assert.equal(reopened.get('#password-dialog').open,false);
+ assert.match(reopened.get('#account-status').textContent,/로그인은 유지돼요/);
+ await reopened.eval('refreshShared(true)');
+ assert.equal(reopened.eval('sharedReady'),true);
+ await reopened.get('#logout').onclick();
+ assert.equal(browser({local:a.local,fetcher:fetch}).eval('mode'),'login');
  await a.get('#logout').onclick();await b.get('#logout').onclick();
  assert.equal(a.eval('mode'),'login');assert.equal(b.eval('mode'),'login');
- console.log('Two frontend sessions + real HTTP API: add, edit, delete automatically synchronized.');
+ console.log('Frontend + real HTTP API: automatic record sync, persistent login, password change and logout.');
 })().catch(error=>{console.error(error.message);process.exitCode=1;});

@@ -21,6 +21,9 @@ KINDS = ("records", "schedule", "shopping")
 STATIC = {"index.html", "app.js", "service.js", "shared.js", "config.js", "style.css"}
 ITERATIONS = 600_000
 MAX_BODY = 4 * 1024 * 1024
+MIN_PASSWORD_LENGTH = 12
+MAX_PASSWORD_LENGTH = 256
+NO_SESSION_EXPIRY = float("inf")
 
 
 class Problem(Exception):
@@ -68,6 +71,20 @@ def fingerprint(kind, item):
     return hashlib.sha256(encode(content).encode()).hexdigest()
 
 
+def password_text(value):
+    if not isinstance(value, str) or not 0 < len(value) <= MAX_PASSWORD_LENGTH:
+        return False
+    try:
+        value.encode()
+    except UnicodeError:
+        return False
+    return True
+
+
+def valid_new_password(value):
+    return password_text(value) and len(value) >= MIN_PASSWORD_LENGTH and bool(value.strip())
+
+
 class Store:
     def __init__(self, directory):
         self.directory = Path(directory)
@@ -111,23 +128,41 @@ class Store:
         return path
 
     def password(self, username, password):
-        salt = secrets.token_hex(16)
-        digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), ITERATIONS).hex()
         with self.lock, self.connect() as db:
-            db.execute("INSERT INTO users VALUES(?,?,?) ON CONFLICT(username) DO UPDATE SET salt=excluded.salt,password=excluded.password", (username, salt, digest))
+            self.write_password(db, username, password)
             db.execute("DELETE FROM sessions WHERE username=?", (username,))
 
+    @staticmethod
+    def write_password(db, username, password):
+        salt = secrets.token_hex(16)
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), ITERATIONS).hex()
+        db.execute("INSERT INTO users VALUES(?,?,?) ON CONFLICT(username) DO UPDATE SET salt=excluded.salt,password=excluded.password", (username, salt, digest))
+
+    @staticmethod
+    def password_matches(db, username, password):
+        row = db.execute("SELECT salt,password FROM users WHERE username=?", (username,)).fetchone()
+        salt, expected = row or ("00" * 16, "00" * 32)
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), ITERATIONS).hex()
+        return row is not None and hmac.compare_digest(expected, digest)
+
     def login(self, username, password):
-        with self.connect() as db:
-            row = db.execute("SELECT salt,password FROM users WHERE username=?", (username,)).fetchone()
-            salt, expected = row or ("00" * 16, "00" * 32)
-            digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), ITERATIONS).hex()
-            if not row or not hmac.compare_digest(expected, digest):
+        with self.lock, self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not self.password_matches(db, username, password):
                 raise Problem(401, "아이디 또는 비밀번호를 확인해 주세요.")
             token = secrets.token_urlsafe(32)
-            db.execute("DELETE FROM sessions WHERE expires<?", (time.time(),))
-            db.execute("INSERT INTO sessions VALUES(?,?,?)", (hashlib.sha256(token.encode()).hexdigest(), username, time.time() + 30 * 86400))
+            db.execute("INSERT INTO sessions VALUES(?,?,?)", (hashlib.sha256(token.encode()).hexdigest(), username, NO_SESSION_EXPIRY))
             return {"token": token, "username": username}
+
+    def change_password(self, token, current, new):
+        with self.lock, self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            username = self.user(db, token)
+            if not self.password_matches(db, username, current):
+                raise Problem(403, "현재 비밀번호를 확인해 주세요.")
+            self.write_password(db, username, new)
+            db.execute("DELETE FROM sessions WHERE username=? AND token<>?",
+                       (username, hashlib.sha256(token.encode()).hexdigest()))
 
     def user(self, db, token):
         row = db.execute("SELECT username FROM sessions WHERE token=? AND expires>?", (hashlib.sha256(token.encode()).hexdigest(), time.time())).fetchone()
@@ -165,11 +200,30 @@ class FamilyServer(ThreadingHTTPServer):
     def __init__(self, address, store, origins=()):
         super().__init__(address, Handler)
         self.store = store
+        # Keep valid legacy sessions and discard only sessions that already expired.
+        with store.lock, store.connect() as db:
+            now = time.time()
+            db.execute("DELETE FROM sessions WHERE expires<=?", (now,))
+            db.execute("UPDATE sessions SET expires=? WHERE expires<?", (NO_SESSION_EXPIRY, NO_SESSION_EXPIRY))
         port = self.server_port
         self.origins = set(origins) | {"https://ssoommproject.github.io", f"http://127.0.0.1:{port}",
                                        f"http://localhost:{port}", "http://127.0.0.1:8765", "http://localhost:8765"}
         self.failures = []
         self.login_lock = threading.Lock()
+
+    @contextmanager
+    def credential_attempt(self, failure_status):
+        # A global bound also works behind Funnel, whose requests share loopback IPs.
+        with self.login_lock:
+            self.failures = [t for t in self.failures if t > time.time() - 60]
+            if len(self.failures) >= 10:
+                raise Problem(429, "비밀번호 확인 시도가 많습니다. 1분 후 다시 시도해 주세요.")
+            try:
+                yield
+            except Problem as error:
+                if error.status == failure_status:
+                    self.failures.append(time.time())
+                raise
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -235,24 +289,27 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/login" and self.command == "POST":
                 body = self.body()
                 username, password = body.get("username"), body.get("password")
-                if not isinstance(username, str) or not isinstance(password, str) or len(username) > 100 or len(password) > 256:
+                if not isinstance(username, str) or len(username) > 100 or not password_text(password):
                     raise Problem(400, "아이디와 비밀번호를 확인해 주세요.")
-                # A global bound also works behind Funnel, whose requests share loopback IPs.
-                with self.server.login_lock:
-                    self.server.failures = [t for t in self.server.failures if t > time.time() - 60]
-                    if len(self.server.failures) >= 10:
-                        raise Problem(429, "로그인 시도가 많습니다. 1분 후 다시 시도해 주세요.")
-                    try:
-                        result = store.login(username, password)
-                    except Problem:
-                        self.server.failures.append(time.time())
-                        raise
+                with self.server.credential_attempt(401):
+                    result = store.login(username, password)
                 self.respond(200, result)
                 return
             auth = self.headers.get("Authorization", "")
             if not auth.startswith("Bearer ") or len(auth) > 200:
                 raise Problem(401, "로그인이 필요합니다.")
             token = auth[7:]
+            if path == "/api/password" and self.command == "POST":
+                body = self.body()
+                current, new = body.get("currentPassword"), body.get("newPassword")
+                if not password_text(current):
+                    raise Problem(400, "현재 비밀번호를 입력해 주세요.")
+                if not valid_new_password(new):
+                    raise Problem(400, f"새 비밀번호를 {MIN_PASSWORD_LENGTH}~{MAX_PASSWORD_LENGTH}자로 입력해 주세요.")
+                with self.server.credential_attempt(403):
+                    store.change_password(token, current, new)
+                self.respond(200, {"ok": True})
+                return
             with store.lock, store.connect() as db:
                 username = store.user(db, token)
                 if path == "/api/me" and self.command == "GET":
@@ -334,9 +391,9 @@ def main():
         with store.connect() as db:
             if not db.execute("SELECT 1 FROM users WHERE username=?", (args.username,)).fetchone():
                 parser.error("기존 계정 아이디를 지정해 주세요.")
-        password = getpass.getpass("새 비밀번호 (12자 이상): ")
-        if len(password) < 12 or len(password) > 256 or password != getpass.getpass("다시 입력: "):
-            parser.error("12~256자의 일치하는 비밀번호를 입력해 주세요.")
+        password = getpass.getpass(f"새 비밀번호 ({MIN_PASSWORD_LENGTH}자 이상): ")
+        if not valid_new_password(password) or password != getpass.getpass("다시 입력: "):
+            parser.error(f"{MIN_PASSWORD_LENGTH}~{MAX_PASSWORD_LENGTH}자의 일치하는 비밀번호를 입력해 주세요.")
         store.password(args.username, password)
         print("비밀번호를 변경하고 해당 계정의 기존 로그인을 해제했습니다.")
     else:
