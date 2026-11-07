@@ -5,3 +5,7 @@
 .connection{margin:8px 0 22px;min-height:0}.connection .heading{margin:0}.connection h2{margin:0;font-size:18px}.connection form{max-width:480px}.connection [hidden]{display:none!important}.connection #connection-status{margin-bottom:0}.connection #connection-details{margin-top:18px}button:disabled{cursor:wait}.connection .quick{margin-top:16px}
 [hidden]{display:none!important}
 .account-actions{display:flex;flex-wrap:wrap;gap:8px}
+#ai-fields{border:0;margin:0;padding:0;min-width:0}
+#ai-result{margin-top:14px}
+#ai-asked,#ai-answer{white-space:pre-wrap;overflow-wrap:anywhere}
+#ai-answer{color:inherit}

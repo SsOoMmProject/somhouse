@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from server import FamilyServer, Store
+from gemini import CONFIG_NAME, MODEL, Gemini
 
 
 class FamilyAPI(unittest.TestCase):
@@ -221,7 +222,7 @@ class FamilyAPI(unittest.TestCase):
         self.assertEqual(headers["Access-Control-Allow-Origin"], origin)
         self.assertIn("Authorization", headers["Access-Control-Allow-Headers"])
         self.assertEqual(self.request("/api/data", token=token, origin="https://untrusted.example")[0], 403)
-        for path in ("/server.py", "/.git/config", "/somhouse.sqlite3", "/initial-accounts.txt", "/../server.py"):
+        for path in ("/server.py", "/gemini.py", "/gemini-config.json", "/.git/config", "/somhouse.sqlite3", "/initial-accounts.txt", "/../server.py"):
             self.assertEqual(self.request(path)[0], 404)
         self.assertEqual(self.request("/")[0], 200)
         self.assertEqual(self.request("/api/items/shopping/a", "PUT", self.item("mismatch"), token)[0], 400)
@@ -232,6 +233,102 @@ class FamilyAPI(unittest.TestCase):
         code, _, headers = self.request("/api/login", "POST", {"username": "family1", "password": "test-password-1"})
         self.assertEqual(code, 429)
         self.assertEqual(headers["Retry-After"], "60")
+
+    def test_gemini_configuration_requires_a_private_key_file_and_login(self):
+        self.assertEqual(self.request("/api/ai")[0], 401)
+        token = self.login()
+        self.assertEqual(self.request("/api/ai", token=token)[1]["enabled"], False)
+        self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 503)
+        key = "test-gemini-key-for-isolated-tests"
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve().parents[1]/"server.py"),
+             "gemini-key", "--data-dir", self.temp.name],
+            input=key+"\n", capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(key, result.stdout+result.stderr)
+        path = self.store.directory / CONFIG_NAME
+        self.addCleanup(path.unlink)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(Gemini.load(self.store.directory).status(),
+                         {"enabled": True, "model": MODEL, "recordSummaries": False})
+        path.chmod(0o644)
+        self.assertFalse(Gemini.load(self.store.directory).status()["enabled"])
+
+    def test_gemini_sends_only_the_selected_record_summary(self):
+        from datetime import date
+        token = self.login()
+        original = self.server.gemini
+        self.addCleanup(setattr, self.server, "gemini", original)
+        self.server.gemini = Gemini("isolated-test-key", True)
+        today = date.today().isoformat()
+        private_note = "PRIVATE-NOTE-DO-NOT-SEND"
+        items = [
+            {"id": "feed-1", "type": "feeding", "date": today+"T12:00", "category": "분유", "amount": "80ml", "memo": private_note},
+            {"id": "feed-2", "type": "feeding", "date": today+"T13:00", "category": "모유", "amount": "10분", "memo": private_note},
+            {"id": "hospital-1", "type": "hospital", "date": today+"T14:00", "hospital": "PRIVATE-HOSPITAL", "reason": private_note},
+        ]
+        for item in items:
+            self.request("/api/items/records/"+item["id"], "PUT", item, token)
+        with patch("gemini.http.client.HTTPSConnection") as connection:
+            response = connection.return_value.getresponse.return_value
+            response.status = 200
+            response.read.return_value = json.dumps({"candidates": [{
+                "content": {"parts": [{"text": "thought", "thought": True}, {"text": "모의 답변"}]},
+                "finishReason": "STOP",
+            }]}).encode()
+            self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕", "scope": "none"}, token)[0], 200)
+            payload = json.loads(connection.return_value.request.call_args.args[2])
+            self.assertEqual(payload["contents"][0]["parts"], [{"text": "안녕"}])
+            code, result, _ = self.request("/api/ai", "POST", {"question": "수유 요약", "scope": "feeding"}, token)
+            self.assertEqual((code, result["answer"]), (200, "모의 답변"))
+            payload = json.loads(connection.return_value.request.call_args.args[2])
+            summary = json.loads(payload["contents"][0]["parts"][1]["text"].split(": ", 1)[1])["summary"]
+            self.assertEqual(summary[today], {"count": 2, "measured_count": 1, "volume_ml": 80.0})
+            self.assertNotIn(private_note, json.dumps(payload))
+            self.assertNotIn("PRIVATE-HOSPITAL", json.dumps(payload))
+            self.assertEqual(connection.return_value.request.call_args.args[3]["x-goog-api-key"], "isolated-test-key")
+            self.assertFalse(payload["store"])
+        with self.store.connect() as db:
+            self.assertEqual(len(self.store.state(db)["records"]), 3)
+
+    def test_gemini_limits_and_provider_errors_preserve_records(self):
+        token = self.login()
+        original = self.server.gemini
+        self.addCleanup(setattr, self.server, "gemini", original)
+        self.server.gemini = Gemini("isolated-test-key")
+        self.assertEqual(self.request("/api/ai", "POST", {"question": "요약", "scope": "feeding"}, token)[0], 403)
+        self.assertEqual(self.request("/api/ai", "POST", {"question": "요약", "scope": "unknown"}, token)[0], 400)
+        self.assertEqual(self.request("/api/ai", "POST", {"question": "a"*2001}, token)[0], 400)
+        with patch("gemini.http.client.HTTPSConnection") as connection:
+            connection.return_value.getresponse.return_value.status = 429
+            code, result, _ = self.request("/api/ai", "POST", {"question": "안녕"}, token)
+            self.assertEqual(code, 429)
+            self.assertNotIn("isolated-test-key", json.dumps(result))
+        with patch("gemini.http.client.HTTPSConnection") as connection:
+            connection.return_value.request.side_effect = TimeoutError()
+            self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 504)
+        with patch("gemini.http.client.HTTPSConnection") as connection:
+            response = connection.return_value.getresponse.return_value
+            response.status = 200
+            response.read.return_value = b'{"candidates":[]}'
+            self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 502)
+        with patch("gemini.http.client.HTTPSConnection") as connection:
+            connection.return_value.getresponse.return_value.status = 403
+            self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 503)
+        self.server.gemini.active.add("family1")
+        self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 429)
+
+    def test_gemini_wait_releases_the_record_database_lock(self):
+        token = self.login()
+        original = self.server.gemini
+        self.addCleanup(setattr, self.server, "gemini", original)
+        self.server.gemini = Gemini("isolated-test-key")
+        def generate(*_):
+            self.assertEqual(self.request("/api/data", token=token)[0], 200)
+            return {"answer": "모의 답변", "truncated": False}
+        with patch.object(self.server.gemini, "generate", side_effect=generate):
+            self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 200)
 
 
 if __name__ == "__main__":

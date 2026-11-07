@@ -4,4 +4,5 @@ somhouse-backup*.json
 __pycache__/
 *.sqlite3*
 initial-accounts.txt
+gemini-config.json
 .local-data/

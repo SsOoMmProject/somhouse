@@ -27,9 +27,9 @@
       }
       if (!this.base && ['localhost', '127.0.0.1'].includes(location.hostname)) this.base = 'http://127.0.0.1:8787';
     }
-    async request(path, method = 'GET', body, base = this.base, token = this.token) {
+    async request(path, method = 'GET', body, base = this.base, token = this.token, timeoutMs = 15000) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const headers = {};
         if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -84,6 +84,10 @@
     }
     async changePassword(currentPassword, newPassword) {
       await this.request('/api/password', 'POST', {currentPassword, newPassword});
+    }
+    async aiStatus() {return this.request('/api/ai');}
+    async askAI(question, scope) {
+      return this.request('/api/ai', 'POST', {question, scope}, this.base, this.token, 25000);
     }
     async load() {return (await this.request('/api/data')).data;}
     async put(kind, item) {return (await this.request('/api/items/' + kind + '/' + encodeURIComponent(item.id), 'PUT', item)).data;}
