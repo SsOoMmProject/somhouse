@@ -244,6 +244,9 @@ class FamilyAPI(unittest.TestCase):
             [sys.executable, str(Path(__file__).resolve().parents[1]/"server.py"),
              "gemini-key", "--data-dir", self.temp.name],
             input=key+"\n", capture_output=True, text=True,
+            # Without a controlling terminal getpass reads the piped key, so the
+            # test also runs unattended from an SSH or interactive terminal.
+            start_new_session=True, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn(key, result.stdout+result.stderr)
