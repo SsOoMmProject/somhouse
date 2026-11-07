@@ -29,8 +29,15 @@
 
 AI가 기록을 추가·수정하는 기능을 확장할 때 사용자 확인을 포함한다.
 
+## 네스트 음성 기록 검토
+
+- 한국어로 사용하는 네스트 허브 2세대가 대상이다. Home Assistant 서버 설치 여부와 주소를 확인한다.
+- 네스트에서 추가한 기록도 기존 가족 저장소에 저장해 두 휴대폰에 자동으로 반영한다.
+- 먼저 네스트에서 한국어 음성으로 만든 할 일에 기록 종류와 수량이 남는지 확인한다. 문구가 보존되면 Google Tasks의 읽기 전용 권한으로 시험 항목을 가져와 해석한다.
+- Home Assistant에서는 Google에 노출한 기기·장면 제어와 자유 문장 전달을 별도로 검증한다. Google의 Conversational Actions는 종료됐다. [Google 음성 Tasks](https://support.google.com/googlehome/answer/16722329?hl=ko), [Home Assistant 연동](https://www.home-assistant.io/integrations/google_assistant/), [Conversational Actions 종료](https://developers.google.com/assistant/ca-sunset)
+
 ## 마지막: 동시 수정 충돌 처리
 
 같은 기록의 동시 수정 감지, 충돌 안내와 사용자의 버전 선택을 추가한다.
 
-Google Nest/Calendar/Keep 및 기존 SsOoMm AI 확장은 이후 별도로 검토한다.
+Google Calendar/Keep 및 기존 SsOoMm AI 확장은 별도로 검토한다.
