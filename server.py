@@ -16,7 +16,8 @@ from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
-from gemini import CONFIG_NAME, SCOPES, Gemini, GeminiError, parse_question, save_config, summarize_records, valid_key
+from antigravity import (CONFIG_NAME, SCOPES, Antigravity, AntigravityError,
+                         executable, parse_question, save_config, summarize_records)
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA = Path.home() / "Library/Application Support/Somhouse"
@@ -203,7 +204,7 @@ class FamilyServer(ThreadingHTTPServer):
     def __init__(self, address, store, origins=()):
         super().__init__(address, Handler)
         self.store = store
-        self.gemini = Gemini.load(store.directory)
+        self.antigravity = Antigravity.load(store.directory)
         # Keep valid legacy sessions and discard only sessions that already expired.
         with store.lock, store.connect() as db:
             now = time.time()
@@ -272,12 +273,12 @@ class Handler(BaseHTTPRequestHandler):
             raise Problem(400, "올바른 JSON 요청이 아닙니다.")
 
     def ai_request(self, token):
-        gemini = self.server.gemini
+        ai = self.server.antigravity
         store = self.server.store
         if self.command == "GET":
             with store.lock, store.connect() as db:
                 store.user(db, token)
-            return gemini.status()
+            return ai.status()
 
         # Read the small body before taking the lock, but check the session
         # before validating it so signed-out callers only ever see 401.
@@ -286,16 +287,16 @@ class Handler(BaseHTTPRequestHandler):
         with store.lock, store.connect() as db:
             username = store.user(db, token)
             question, scope = parse_question(body)
-            if not gemini.key:
-                raise Problem(503, "Gemini를 사용하려면 맥미니에 API 키를 설정해야 해요.")
+            if not ai.binary:
+                raise Problem(503, "관리자가 맥미니에 Antigravity CLI를 설정해야 해요.")
             if scope != "none":
-                if not gemini.allow_summaries:
+                if not ai.allow_summaries:
                     raise Problem(403, "관리자가 가족 기록 집계 전송을 활성화해야 해요.")
                 items = [json.loads(row[0]) for row in db.execute(
                     "SELECT body FROM items WHERE kind=?", (SCOPES[scope],))]
                 summary = summarize_records(scope, items, date.today())
         # Release the SQLite connection and lock before waiting for Google.
-        return gemini.answer(username, question, scope, summary)
+        return ai.answer(username, question, scope, summary)
 
     def handle_request(self):
         try:
@@ -376,7 +377,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise Problem(404, "API를 찾을 수 없습니다.")
             # Only acknowledge a change after the SQLite context has committed it.
             self.respond(200, result)
-        except (Problem, GeminiError) as error:
+        except (Problem, AntigravityError) as error:
             self.respond(error.status, {"error": error.message})
         except (OSError, sqlite3.Error):
             self.respond(503, {"error": "맥미니 저장소에 접근하지 못했습니다. 입력을 유지하고 다시 시도해 주세요."})
@@ -386,22 +387,31 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("init", "serve", "password", "backup", "restore", "gemini-key"), nargs="?", default="serve")
+    parser.add_argument("command", choices=("init", "serve", "password", "backup", "restore", "antigravity-config", "antigravity-test"), nargs="?", default="serve")
     parser.add_argument("username", nargs="?")
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA)
     parser.add_argument("--allow-record-summaries", action="store_true")
+    parser.add_argument("--agy", type=Path, default=Path.home() / ".local/bin/agy")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--origin", action="append", default=[])
     parser.add_argument("--file", type=Path, help="관리자 복원용 JSON 파일")
     args = parser.parse_args()
     os.umask(0o077)
     store = Store(args.data_dir)
-    if args.command == "gemini-key":
-        key = getpass.getpass("솜하우스용 Gemini API 키: ").strip()
-        if not valid_key(key):
-            parser.error("Gemini API 키 형식을 확인해 주세요.")
-        save_config(store.directory, key, args.allow_record_summaries)
-        print(f"{CONFIG_NAME}에 저장했습니다. 솜하우스 서버를 다시 시작해 주세요.")
+    if args.command in ("antigravity-config", "antigravity-test"):
+        binary = executable(str(args.agy.resolve()))
+        if binary is None:
+            parser.error("--agy로 실행 가능한 Antigravity CLI 경로를 지정해 주세요.")
+        provider = Antigravity(store.directory, binary)
+        try:
+            result = provider.generate("한국어로 솜하우스 연결 확인이라고 한 줄로 답해 주세요.", "none", None)
+        except AntigravityError as error:
+            parser.exit(1, f"{error.message}\n")
+        if args.command == "antigravity-config":
+            save_config(store.directory, binary, args.allow_record_summaries)
+            print(f"{CONFIG_NAME}에 저장했습니다. 솜하우스 서버를 다시 시작해 주세요.")
+        else:
+            print(result["answer"])
     elif args.command == "init":
         with store.connect() as db:
             if db.execute("SELECT COUNT(*) FROM users").fetchone()[0]:

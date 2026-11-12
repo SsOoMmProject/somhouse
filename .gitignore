@@ -5,4 +5,5 @@ __pycache__/
 *.sqlite3*
 initial-accounts.txt
 gemini-config.json
+antigravity-config.json
 .local-data/

@@ -121,14 +121,14 @@ async function checkAI(){
  const state=ai;
  if(state.checking||state.pending)return;
  state.checking=true;connectionView();
- $('#ai-status').textContent='Gemini 설정을 확인하고 있어요…';
+ $('#ai-status').textContent='Antigravity CLI 설정을 확인하고 있어요…';
  try{
   const config=await shared.aiStatus();
   if(ai!==state)return;
   state.config=config;
   $('#ai-scope-field').hidden=!config.recordSummaries;
   if(!config.recordSummaries)$('#ai-scope').value='none';
-  $('#ai-status').textContent=config.enabled?'질문마다 새로 답해요.':'관리자가 맥미니에 Gemini API 키를 설정하면 질문할 수 있어요.';
+  $('#ai-status').textContent=config.enabled?'질문마다 새로 답해요.':'관리자가 맥미니에 Antigravity CLI를 연결하면 질문할 수 있어요.';
  }catch(error){
   if(ai!==state)return;
   state.config=null;
@@ -143,7 +143,7 @@ async function askAI(e){
  const question=values.get('question').trim(),scope=state.config.recordSummaries?values.get('scope'):'none';
  if(!question){$('#ai-status').textContent='질문을 입력해 주세요.';return;}
  state.pending=true;connectionView();
- $('#ai-status').textContent='Gemini의 답변을 기다리고 있어요…';
+ $('#ai-status').textContent='AI 답변을 기다리고 있어요…';
  try{
   const result=await shared.askAI(question,scope);
   if(ai!==state)return;

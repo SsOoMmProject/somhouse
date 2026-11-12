@@ -1,9 +1,8 @@
 """Exercise the actual HTTP API against an isolated temporary database."""
 import hashlib
-import http.client
 import json
+import os
 from pathlib import Path
-import socket
 import sys
 import subprocess
 import shutil
@@ -17,7 +16,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from server import FamilyServer, Store
-from gemini import CONFIG_NAME, MODEL, Gemini
+from antigravity import CONFIG_NAME, MODEL, Antigravity, save_config
 
 
 class FamilyAPI(unittest.TestCase):
@@ -224,7 +223,7 @@ class FamilyAPI(unittest.TestCase):
         self.assertEqual(headers["Access-Control-Allow-Origin"], origin)
         self.assertIn("Authorization", headers["Access-Control-Allow-Headers"])
         self.assertEqual(self.request("/api/data", token=token, origin="https://untrusted.example")[0], 403)
-        for path in ("/server.py", "/gemini.py", "/gemini-config.json", "/.git/config", "/somhouse.sqlite3", "/initial-accounts.txt", "/../server.py"):
+        for path in ("/server.py", "/antigravity.py", "/antigravity-config.json", "/.git/config", "/somhouse.sqlite3", "/initial-accounts.txt", "/../server.py"):
             self.assertEqual(self.request(path)[0], 404)
         self.assertEqual(self.request("/")[0], 200)
         self.assertEqual(self.request("/api/items/shopping/a", "PUT", self.item("mismatch"), token)[0], 400)
@@ -236,36 +235,32 @@ class FamilyAPI(unittest.TestCase):
         self.assertEqual(code, 429)
         self.assertEqual(headers["Retry-After"], "60")
 
-    def test_gemini_configuration_requires_a_private_key_file_and_login(self):
+    def antigravity(self, allow_summaries=False):
+        provider = Antigravity(self.store.directory, Path(sys.executable), allow_summaries)
+        original = self.server.antigravity
+        self.addCleanup(setattr, self.server, "antigravity", original)
+        self.server.antigravity = provider
+        return provider
+
+    def test_antigravity_configuration_requires_a_private_file_and_login(self):
         self.assertEqual(self.request("/api/ai")[0], 401)
         token = self.login()
-        self.assertEqual(self.request("/api/ai", token=token)[1]["enabled"], False)
+        self.assertFalse(self.request("/api/ai", token=token)[1]["enabled"])
         self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 503)
-        key = "test-gemini-key-for-isolated-tests"
-        result = subprocess.run(
-            [sys.executable, str(Path(__file__).resolve().parents[1]/"server.py"),
-             "gemini-key", "--data-dir", self.temp.name],
-            input=key+"\n", capture_output=True, text=True,
-            # Without a controlling terminal getpass reads the piped key, so the
-            # test also runs unattended from an SSH or interactive terminal.
-            start_new_session=True, timeout=30,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn(key, result.stdout+result.stderr)
         path = self.store.directory / CONFIG_NAME
         self.addCleanup(path.unlink)
+        save_config(self.store.directory, Path(sys.executable), False)
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(Gemini.load(self.store.directory).status(),
-                         {"enabled": True, "model": MODEL, "recordSummaries": False})
-        path.chmod(0o644)
-        self.assertFalse(Gemini.load(self.store.directory).status()["enabled"])
+        with patch("antigravity.SANDBOX", Path(sys.executable)):
+            self.assertEqual(Antigravity.load(self.store.directory).status(),
+                             {"enabled": True, "model": MODEL, "recordSummaries": False})
+            path.chmod(0o644)
+            self.assertFalse(Antigravity.load(self.store.directory).status()["enabled"])
 
-    def test_gemini_sends_only_the_selected_record_summary(self):
+    def test_antigravity_sends_only_the_selected_record_summary_to_stdin(self):
         from datetime import date
         token = self.login()
-        original = self.server.gemini
-        self.addCleanup(setattr, self.server, "gemini", original)
-        self.server.gemini = Gemini("isolated-test-key", True)
+        provider = self.antigravity(allow_summaries=True)
         today = date.today().isoformat()
         private_note = "PRIVATE-NOTE-DO-NOT-SEND"
         items = [
@@ -275,129 +270,108 @@ class FamilyAPI(unittest.TestCase):
         ]
         for item in items:
             self.request("/api/items/records/"+item["id"], "PUT", item, token)
-        with patch("gemini.http.client.HTTPSConnection") as connection:
-            response = connection.return_value.getresponse.return_value
-            response.status = 200
-            response.read.return_value = json.dumps({"candidates": [{
-                "content": {"parts": [{"text": "thought", "thought": True}, {"text": "모의 답변"}]},
-                "finishReason": "STOP",
-            }]}).encode()
-            self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕", "scope": "none"}, token)[0], 200)
-            payload = json.loads(connection.return_value.request.call_args.args[2])
-            self.assertEqual(payload["contents"][0]["parts"], [{"text": "안녕"}])
+        # A separate process echoes the parsed input and ensures it wasn't
+        # passed via arguments, an inherited key or the working directory.
+        fixture = """
+import json, os, pathlib, sys
+assert len(sys.argv) == 1 and "GEMINI_API_KEY" not in os.environ
+assert not list(pathlib.Path.cwd().iterdir())
+message = json.load(sys.stdin)
+assert message["event"] == "user"
+context = message["message"]["content"].splitlines()[-1]
+print(json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": context}}))
+"""
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-secret"}), \
+                patch.object(provider, "command", return_value=[sys.executable, "-c", fixture]):
+            code, result, _ = self.request("/api/ai", "POST", {"question": "안녕"}, token)
+            self.assertEqual(code, 200, result)
+            self.assertEqual(json.loads(result["answer"]), {"question": "안녕"})
             code, result, _ = self.request("/api/ai", "POST", {"question": "수유 요약", "scope": "feeding"}, token)
-            self.assertEqual((code, result["answer"]), (200, "모의 답변"))
-            payload = json.loads(connection.return_value.request.call_args.args[2])
-            summary = json.loads(payload["contents"][0]["parts"][1]["text"].split(": ", 1)[1])["summary"]
-            self.assertEqual(summary[today], {"count": 2, "measured_count": 1, "volume_ml": 80.0})
-            self.assertNotIn(private_note, json.dumps(payload))
-            self.assertNotIn("PRIVATE-HOSPITAL", json.dumps(payload))
-            self.assertEqual(connection.return_value.request.call_args.args[3]["x-goog-api-key"], "isolated-test-key")
-            self.assertFalse(payload["store"])
+            self.assertEqual(code, 200, result)
+            payload = json.loads(result["answer"])
+            self.assertEqual(payload["records"]["summary"][today],
+                             {"count": 2, "measured_count": 1, "volume_ml": 80.0})
+            self.assertNotIn(private_note, result["answer"])
+            self.assertNotIn("PRIVATE-HOSPITAL", result["answer"])
         with self.store.connect() as db:
             self.assertEqual(len(self.store.state(db)["records"]), 3)
 
-    def test_gemini_limits_and_provider_errors_preserve_records(self):
+    def test_antigravity_limits_and_provider_errors(self):
         token = self.login()
-        original = self.server.gemini
-        self.addCleanup(setattr, self.server, "gemini", original)
-        self.server.gemini = Gemini("isolated-test-key")
+        provider = self.antigravity()
         self.assertEqual(self.request("/api/ai", "POST", {"question": "요약", "scope": "feeding"}, token)[0], 403)
         self.assertEqual(self.request("/api/ai", "POST", {"question": "요약", "scope": "unknown"}, token)[0], 400)
         self.assertEqual(self.request("/api/ai", "POST", {"question": "a"*2001}, token)[0], 400)
-        with patch("gemini.http.client.HTTPSConnection") as connection:
-            connection.return_value.getresponse.return_value.status = 429
-            code, result, _ = self.request("/api/ai", "POST", {"question": "안녕"}, token)
-            self.assertEqual(code, 429)
-            self.assertNotIn("isolated-test-key", json.dumps(result))
-        with patch("gemini.http.client.HTTPSConnection") as connection:
-            connection.return_value.request.side_effect = TimeoutError()
-            self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 504)
-        with patch("gemini.http.client.HTTPSConnection") as connection:
-            response = connection.return_value.getresponse.return_value
-            response.status = 200
-            response.read.return_value = b'{"candidates":[]}'
-            self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 502)
-        with patch("gemini.http.client.HTTPSConnection") as connection:
-            connection.return_value.getresponse.return_value.status = 403
-            self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 503)
-        self.server.gemini.active.add("family1")
+        fixture = """
+import json, sys
+question = json.loads(json.load(sys.stdin)["message"]["content"].splitlines()[-1])["question"]
+if question == "로그인":
+    sys.stderr.write("authentication required: PRIVATE-PROVIDER-ERROR")
+else:
+    error = "rate limit" if question == "한도" else "unknown error"
+    print(json.dumps({"event": "result", "result": {"status": "ERROR", "error": error}}))
+sys.exit(1)
+"""
+        with patch.object(provider, "command", return_value=[sys.executable, "-c", fixture]):
+            for question, status in (("한도", 429), ("오류", 502), ("로그인", 503)):
+                code, result, _ = self.request("/api/ai", "POST", {"question": question}, token)
+                self.assertEqual(code, status)
+                self.assertNotIn("PRIVATE-PROVIDER-ERROR", json.dumps(result))
+        provider.active.add("family1")
         self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 429)
 
-    def test_gemini_wait_releases_the_record_database_lock(self):
+    def test_antigravity_wait_releases_the_record_database_lock(self):
         token = self.login()
-        original = self.server.gemini
-        self.addCleanup(setattr, self.server, "gemini", original)
-        self.server.gemini = Gemini("isolated-test-key")
+        provider = self.antigravity()
+
         def generate(*_):
             self.assertEqual(self.request("/api/data", token=token)[0], 200)
             return {"answer": "모의 답변", "truncated": False}
-        with patch.object(self.server.gemini, "generate", side_effect=generate):
+
+        with patch.object(provider, "generate", side_effect=generate):
             self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 200)
 
-
-    def test_gemini_checks_the_session_before_validating_the_question(self):
-        original = self.server.gemini
-        self.addCleanup(setattr, self.server, "gemini", original)
-        self.server.gemini = Gemini("isolated-test-key")
+    def test_antigravity_checks_the_session_before_validating_the_question(self):
+        self.antigravity()
         for body in ({"question": ""}, {"question": "안녕", "scope": "unknown"}):
             self.assertEqual(self.request("/api/ai", "POST", body, "not-a-session")[0], 401)
 
-    def test_gemini_deadline_covers_a_slowly_dripping_reply(self):
-        import gemini as gemini_module
+    @unittest.skipUnless(sys.platform == "darwin", "requires the macOS sandbox")
+    def test_antigravity_process_cannot_read_or_write_family_files(self):
+        secret = self.store.directory / "antigravity-test-private.txt"
+        secret.write_text("private", encoding="utf-8")
+        self.addCleanup(secret.unlink)
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "agy-fixture"
+            binary.write_text(f"""#!{sys.executable}
+import json, pathlib, sys
+private = pathlib.Path({str(secret)!r})
+for action in (private.read_text, lambda: private.write_text("changed")):
+    try:
+        action()
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("family file was accessible")
+settings = json.loads(sys.argv[sys.argv.index("--settings") + 1])
+assert {{"command(*)", "read_file(*)", "write_file(*)", "mcp(*)"}} <= set(settings["permissions"]["deny"])
+print(json.dumps({{"event": "result", "result": {{"status": "SUCCESS", "response": "blocked"}}}}))
+""", encoding="utf-8")
+            binary.chmod(0o700)
+            provider = Antigravity(self.store.directory, binary)
+            self.assertEqual(provider.generate("권한 확인", "none", None)["answer"], "blocked")
+            self.assertEqual(secret.read_text(encoding="utf-8"), "private")
+
+    def test_antigravity_deadline_stops_the_process_and_releases_the_slot(self):
         token = self.login()
-        original = self.server.gemini
-        self.addCleanup(setattr, self.server, "gemini", original)
-        self.server.gemini = Gemini("isolated-test-key")
-        closed = threading.Event()
-
-        class Socket:
-            def shutdown(self, _):
-                closed.set()
-
-        class SlowConnection:
-            # Each read would finish inside a per-read timeout, so only a total
-            # deadline stops it. The read ends when the watchdog shuts it down.
-            def __init__(self, *_, **__):
-                self.sock = Socket()
-            def request(self, *_):
-                pass
-            def getresponse(self):
-                if not closed.wait(5):
-                    raise AssertionError("deadline did not stop the reply")
-                raise OSError("socket shut down")
-            def close(self):
-                pass
-
-        with patch.object(gemini_module, "DEADLINE_SECONDS", 0.3), \
-                patch("gemini.http.client.HTTPSConnection", SlowConnection):
+        provider = self.antigravity()
+        with patch("antigravity.DEADLINE_SECONDS", 0.2), \
+                patch.object(provider, "command", return_value=[sys.executable, "-c", "import time; time.sleep(30)"]):
             started = time.monotonic()
-            code, result, _ = self.request("/api/ai", "POST", {"question": "안녕"}, token)
-            self.assertEqual(code, 504)
-            self.assertLess(time.monotonic() - started, 3)
-            self.assertNotIn("isolated-test-key", json.dumps(result))
-        self.assertNotIn("family1", self.server.gemini.active)
-
-    def test_gemini_deadline_interrupts_a_detached_response_socket(self):
-        token = self.login()
-        original = self.server.gemini
-        self.addCleanup(setattr, self.server, "gemini", original)
-        self.server.gemini = Gemini("isolated-test-key")
-        client, peer = socket.socketpair()
-        with client, peer:
-            client.settimeout(3)
-            connection = http.client.HTTPConnection("gemini.test")
-            connection.sock = client
-            # Connection: close makes getresponse() hand the socket to the
-            # response. Leave its body incomplete until the watchdog stops it.
-            peer.sendall(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\n{")
-            with patch("gemini.DEADLINE_SECONDS", 0.2), \
-                    patch("gemini.http.client.HTTPSConnection", return_value=connection):
-                started = time.monotonic()
-                code, _, _ = self.request("/api/ai", "POST", {"question": "안녕"}, token)
+            code, _, _ = self.request("/api/ai", "POST", {"question": "안녕"}, token)
             self.assertEqual(code, 504)
             self.assertLess(time.monotonic() - started, 2)
-        self.assertNotIn("family1", self.server.gemini.active)
+        self.assertNotIn("family1", provider.active)
 
 
 if __name__ == "__main__":

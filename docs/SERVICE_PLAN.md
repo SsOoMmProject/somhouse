@@ -23,9 +23,9 @@
 
 개인 DB·백업·초기 비밀번호·토큰·API 키는 저장소에 넣지 않는다. 운영법은 README를 참조한다.
 
-## Gemini 검토 브랜치
+## Antigravity CLI 연동
 
-2026-11-07 사용자가 기본 공급자로 Gemini를 선택했다. `feature/gemini`에서 질문·답변과 선택한 수유·일정·구매 집계 전송을 구현했다. 실제 API 키 설정과 실응답 검증은 다음 연결 단계다. 상세 구현과 LLM별 독립 브랜치 검토 방법은 [GEMINI_REVIEW.md](GEMINI_REVIEW.md)를 참조한다.
+맥미니의 Antigravity CLI를 통해 로그인한 가족의 질문에 답한다. 기본 설정은 질문만 전송한다. 계정 로그인 후 개인정보가 없는 한국어 시험 질문으로 응답을 확인한다. 운영 절차는 [README](../README.md#antigravity-cli-연결)를 참조한다.
 
 AI가 기록을 추가·수정하는 기능을 확장할 때 사용자 확인을 포함한다.
 
