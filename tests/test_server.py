@@ -337,30 +337,43 @@ sys.exit(1)
             self.assertEqual(self.request("/api/ai", "POST", body, "not-a-session")[0], 401)
 
     @unittest.skipUnless(sys.platform == "darwin", "requires the macOS sandbox")
-    def test_antigravity_process_cannot_read_or_write_family_files(self):
+    def test_antigravity_process_can_read_only_the_default_project_and_cannot_access_family_files(self):
         secret = self.store.directory / "antigravity-test-private.txt"
         secret.write_text("private", encoding="utf-8")
         self.addCleanup(secret.unlink)
         with tempfile.TemporaryDirectory() as directory:
-            binary = Path(directory) / "agy-fixture"
+            home = Path(directory).resolve()
+            config = home / ".gemini/config"
+            project = config / "projects/default-cli-project.json"
+            project.parent.mkdir(parents=True)
+            project.write_text("test-project", encoding="utf-8")
+            custom = config / "mcp_config.json"
+            custom.write_text("private customization", encoding="utf-8")
+            binary = home / "agy-fixture"
             binary.write_text(f"""#!{sys.executable}
 import json, pathlib, sys
 private = pathlib.Path({str(secret)!r})
-for action in (private.read_text, lambda: private.write_text("changed")):
+project = pathlib.Path({str(project)!r})
+custom = pathlib.Path({str(custom)!r})
+assert project.read_text() == "test-project"
+for action in (private.read_text, lambda: private.write_text("changed"),
+               custom.read_text, lambda: project.write_text("changed")):
     try:
         action()
     except PermissionError:
         pass
     else:
-        raise AssertionError("family file was accessible")
+        raise AssertionError("a blocked path was accessible")
 settings = json.loads(sys.argv[sys.argv.index("--settings") + 1])
 assert {{"command(*)", "read_file(*)", "write_file(*)", "mcp(*)"}} <= set(settings["permissions"]["deny"])
 print(json.dumps({{"event": "result", "result": {{"status": "SUCCESS", "response": "blocked"}}}}))
 """, encoding="utf-8")
             binary.chmod(0o700)
             provider = Antigravity(self.store.directory, binary)
-            self.assertEqual(provider.generate("권한 확인", "none", None)["answer"], "blocked")
+            with patch("antigravity.Path.home", return_value=home):
+                self.assertEqual(provider.generate("권한 확인", "none", None)["answer"], "blocked")
             self.assertEqual(secret.read_text(encoding="utf-8"), "private")
+            self.assertEqual(project.read_text(encoding="utf-8"), "test-project")
 
     def test_antigravity_deadline_stops_the_process_and_releases_the_slot(self):
         token = self.login()

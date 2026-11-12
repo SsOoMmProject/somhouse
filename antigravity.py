@@ -153,11 +153,21 @@ class Antigravity:
         profile = Path.home() / ".gemini"
         blocked = [self.directory, Path(__file__).resolve().parent]
         blocked.extend(profile / name for name in (
-            "config", "AGENTS.md", "GEMINI.md", "settings.json", "mcp_config.json",
+            "AGENTS.md", "GEMINI.md", "settings.json", "mcp_config.json",
             "extensions", "skills", "commands", "antigravity-cli/mcp_config.json",
         ))
         paths = " ".join("(subpath " + json.dumps(str(path), ensure_ascii=False) + ")" for path in blocked)
-        policy = "(version 1) (allow default) (deny file-read* file-write* " + paths + ")"
+        config = profile / "config"
+        config_path = json.dumps(str(config), ensure_ascii=False)
+        default_project = json.dumps(str(config / "projects/default-cli-project.json"), ensure_ascii=False)
+        # The CLI needs its default project to start an authenticated session.
+        # It can read that file while customizations and writes stay blocked.
+        policy = (
+            f"(version 1) (allow default) (deny file-read* file-write* {paths}) "
+            f"(deny file-write* (subpath {config_path})) "
+            f"(deny file-read* (require-all (subpath {config_path}) "
+            f"(require-not (literal {default_project}))))"
+        )
         return [str(SANDBOX), "-p", policy, str(self.binary), "--input-format", "stream-json",
                 "--output-format", "stream-json", "--disable-slash-commands", "--settings", SETTINGS,
                 "--model", MODEL, "--print-timeout", f"{DEADLINE_SECONDS:g}s",
