@@ -5,11 +5,13 @@ import json
 import math
 import re
 import sys
+import threading
 from urllib.parse import urlencode
 
 CONFIG_NAME = "sheets-config.json"
 KEY_NAME = "sheets-service-account.json"
 SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+CHECK_INTERVAL = 3600
 COLUMNS = ("기록 ID", "날짜", "날짜와 시간", "수유 종류", "입력한 양 또는 시간", "용량 (ml)", "메모")
 VOLUME = re.compile(r"\s*(\d+(?:\.\d+)?)\s*(?:ml|미리|밀리리터)\s*", re.IGNORECASE | re.ASCII)
 
@@ -48,6 +50,8 @@ class SheetsSync:
         self.sheet_id = sheet_id
         self.session = session
         self.last_digest = None
+        self.wake = threading.Event()
+        self.lock = threading.Lock()
 
     @classmethod
     def load(cls, store):
@@ -70,14 +74,16 @@ class SheetsSync:
         credentials = Credentials.from_service_account_file(str(key_path), scopes=[SCOPE])
         return cls(store, spreadsheet_id, sheet_id, AuthorizedSession(credentials))
 
-    def sync(self):
+    def sync(self, force=False):
         with self.store.connect() as db:
             records = self.store.state(db)["records"]
         rows = feeding_rows(records)
         digest = hashlib.sha256(json.dumps(rows, ensure_ascii=False).encode()).digest()
-        if digest == self.last_digest:
+        if not force and digest == self.last_digest:
             return False
 
+        # A failed forced refresh must also be retried by the hourly check.
+        self.last_digest = None
         query = urlencode({"fields": "sheets(properties(sheetId,gridProperties(rowCount,columnCount)))"})
         response = self.session.get(f"{self.url}?{query}", timeout=15)
         response.raise_for_status()
@@ -112,11 +118,20 @@ class SheetsSync:
 
     def run(self, stop):
         while not stop.is_set():
+            # Clear before reading SQLite so writes during an export wake the next pass.
+            self.wake.clear()
+            if stop.is_set():
+                return
             try:
-                self.sync()
+                with self.lock:
+                    self.sync()
             except Exception as error:
-                # Response bodies and request details can contain private data.
-                status = getattr(getattr(error, "response", None), "status_code", None)
-                detail = f" (HTTP {status})" if type(status) is int else ""
-                print(f"Google Sheets sync failed: {type(error).__name__}{detail}", file=sys.stderr, flush=True)
-            stop.wait(30)
+                self.log_failure(error)
+            self.wake.wait(CHECK_INTERVAL)
+
+    @staticmethod
+    def log_failure(error):
+        # Response bodies and request details can contain private data.
+        status = getattr(getattr(error, "response", None), "status_code", None)
+        detail = f" (HTTP {status})" if type(status) is int else ""
+        print(f"Google Sheets sync failed: {type(error).__name__}{detail}", file=sys.stderr, flush=True)

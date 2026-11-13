@@ -26,7 +26,7 @@
 ## 수유 통계 및 Google Sheets
 
 - 웹에서 최근 7일·30일의 일별 수유 횟수와 ml 합계를 표와 막대로 표시한다.
-- Google Sheets 연동을 설정하면 수유 기록만 전용 탭으로 복사한다. SQLite가 원본이며, Sheets 오류 시 다음 주기에 다시 시도한다.
+- Google Sheets 연동을 설정하면 수유 기록만 전용 탭으로 복사한다. SQLite 저장 직후 동기화하고, 이벤트가 없으면 1시간마다 변경분과 실패 건을 확인한다. 수유 통계에서 수동 동기화할 수 있다.
 - Google 인증과 운영 설치는 [README](../README.md#수유-통계와-google-sheets)를 참조한다.
 
 ## Antigravity CLI 연동

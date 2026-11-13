@@ -14,6 +14,7 @@ function valid(d){
 const shared=window.SomhouseShared?new window.SomhouseShared.Client():null;
 let mode=shared?.token?'shared':'login', sharedReady=false, busy=false, refreshing=false, refreshTask=null, migratedRaw, legacyWarning='', needsRender=false;
 let ai={config:null,checking:false,pending:false};
+let sheetsSync={pending:false,message:""};
 function message(text){$('#connection-status').textContent=text;}
 function accountMessage(text){
  const status=$('#account-status');
@@ -32,6 +33,7 @@ function connectionView(){
 function showLogin(text){
  shared.clear();mode='login';sharedReady=false;data=empty();migratedRaw=undefined;
  ai={config:null,checking:false,pending:false};
+ sheetsSync={pending:false,message:""};
  $('#ai-form').reset();$('#ai-scope-field').hidden=true;$('#ai-result').hidden=true;
  for(const selector of ['#ai-status','#ai-asked','#ai-answer'])$(selector).textContent='';
  for(const dialog of [$('#dialog'),$('#password-dialog')])if(dialog.open)dialog.close();
@@ -125,7 +127,23 @@ function statsView(){
   const percent=recorded?Math.min(100,volume/max*100):0;
   return `<tr><th scope="row"><time datetime="${date}">${date.slice(5)}</time></th><td>${count}회</td><td>${recorded?`${volume.toLocaleString('ko-KR')} ml`:'—'}</td><td aria-hidden="true"><div class="stats-bar"><span style="width:${percent}%"></span></div></td></tr>`;
  }).join('');
- return `<h1>수유 통계</h1><div class="quick stats-period" aria-label="조회 기간">${periods}</div><section class="card"><h2>최근 ${statsDays}일</h2><p class="caption">횟수에는 모든 수유를, 용량에는 ml 단위가 있는 기록만 집계해요.</p><table class="stats-table"><thead><tr><th scope="col">날짜</th><th scope="col">수유 횟수</th><th scope="col">합계 용량</th><th scope="col">용량 비교</th></tr></thead><tbody>${table}</tbody></table></section>`;
+ return `<h1>수유 통계</h1><div class="quick stats-period" aria-label="조회 기간">${periods}<button data-sheets-sync class="secondary" ${sheetsSync.pending?'disabled':''}>시트 동기화</button></div><p role="status" class="caption" ${sheetsSync.message?'':'hidden'}>${esc(sheetsSync.message)}</p><section class="card"><h2>최근 ${statsDays}일</h2><p class="caption">횟수에는 모든 수유를, 용량에는 ml 단위가 있는 기록만 집계해요.</p><table class="stats-table"><thead><tr><th scope="col">날짜</th><th scope="col">수유 횟수</th><th scope="col">합계 용량</th><th scope="col">용량 비교</th></tr></thead><tbody>${table}</tbody></table></section>`;
+}
+async function syncSheets(){
+ const state=sheetsSync;
+ if(state.pending)return;
+ state.pending=true;state.message='Google Sheets에 반영하고 있어요…';render();
+ try{
+  await shared.syncSheets();
+  state.message='Google Sheets에 반영했어요.';
+ }catch(error){
+  if(sheetsSync!==state)return;
+  if(error.status===401){showLogin(error.message);return;}
+  state.message=error.status?error.message:'Google Sheets 반영 결과를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.';
+ }finally{
+  state.pending=false;
+  if(sheetsSync===state&&page==='stats')render();
+ }
 }
 function filterView(k){const f=filters[k];return `<form id="filter-form" class="filters" aria-label="목록 검색"><label>검색<input name="query" type="search" placeholder="메모, 병원, 품목 검색" value="${esc(f.query||'')}"></label>${k==='records'?`<label>기록 종류<select name="type"><option value="">전체</option><option value="feeding" ${f.type==='feeding'?'selected':''}>수유</option><option value="hospital" ${f.type==='hospital'?'selected':''}>병원</option></select></label>`:''}${k==='shopping'?`<label>구매 상태<select name="status"><option value="">전체</option><option value="pending" ${f.status==='pending'?'selected':''}>구매 예정</option><option value="done" ${f.status==='done'?'selected':''}>구매 완료</option></select></label>`:`<label>시작 날짜<input name="from" type="date" value="${esc(f.from||'')}"></label><label>마지막 날짜<input name="to" type="date" value="${esc(f.to||'')}"></label>`}<button type="submit" class="secondary">검색</button><button type="button" class="plain" data-reset="${k}">초기화</button></form>`}
 function listView(k){const names={records:'소중한 하루를 간단히 남겨보세요.',schedule:'병원 예약과 가족 일정을 관리해요.',shopping:'필요한 물품을 정리해요. 가격 검색과 구매는 아직 연결되지 않았어요.'};const items=Somhouse.filter(sorted(k),filters[k]);return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p><div class="heading"><h2>기록 ${items.length}개</h2><div class="quick">${k==='records'?'<button data-add="feeding">수유 추가</button><button class="secondary" data-add="hospital">병원 추가</button>':`<button data-add="${k}">추가하기</button>`}</div></div>${filterView(k)}${items.map(x=>item(x,k)).join('')||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}`}
@@ -196,6 +214,7 @@ document.addEventListener('click',async e=>{
  }
  if(b.dataset.reset){filters[b.dataset.reset]={};render();}
  if(busy||mode!=='shared'||!sharedReady)return;
+ if(Object.hasOwn(b.dataset,'sheetsSync')){await syncSheets();return;}
  if(b.dataset.add){if(mode==='shared'&&!sharedReady)return;openForm(b.dataset.add);}
  if(b.dataset.action){
   const {action,key,id}=b.dataset,x=data[key].find(i=>i.id===id);if(!x)return;

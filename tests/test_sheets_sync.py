@@ -1,11 +1,12 @@
 """Verify Sheets requests against SQLite without sending family data to Google."""
 
 from tempfile import TemporaryDirectory
+from threading import Event
 import unittest
 from unittest.mock import Mock
 
 from server import Store, encode
-from sheets_sync import SheetsSync
+from sheets_sync import CHECK_INTERVAL, SheetsSync
 
 
 class SheetsExport(unittest.TestCase):
@@ -56,3 +57,27 @@ class SheetsExport(unittest.TestCase):
             deleted = session.post.call_args.kwargs["json"]["requests"][-1]["updateCells"]
             self.assertEqual(len(deleted["rows"]), 1)
             self.assertEqual(deleted["range"]["endRowIndex"], 2)
+
+    def test_worker_wakes_for_events_and_uses_hourly_fallback(self):
+        stop = Event()
+        sync = SheetsSync(None, "test", 8, None)
+        sync.sync = Mock(side_effect=[OSError("offline"), True, False])
+        sync.log_failure = Mock()
+        waits = []
+
+        def wait(timeout):
+            waits.append(timeout)
+            if len(waits) == 1:
+                sync.wake.set()
+                return True
+            if len(waits) == 2:
+                return False
+            stop.set()
+            return True
+
+        sync.wake.wait = wait
+        sync.run(stop)
+        self.assertEqual(waits, [3600, 3600, 3600])
+        self.assertEqual(CHECK_INTERVAL, 3600)
+        self.assertEqual(sync.sync.call_count, 3)
+        sync.log_failure.assert_called_once()

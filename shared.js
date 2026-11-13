@@ -90,6 +90,7 @@
     async askAI(question, scope) {
       return this.request('/api/ai', 'POST', {question, scope}, this.base, this.token, 50000);
     }
+    async syncSheets() {return this.request('/api/sheets/sync', 'POST', {}, this.base, this.token, 70000);}
     async load() {return (await this.request('/api/data')).data;}
     async put(kind, item) {return (await this.request('/api/items/' + kind + '/' + encodeURIComponent(item.id), 'PUT', item)).data;}
     async remove(kind, id) {return (await this.request('/api/items/' + kind + '/' + encodeURIComponent(id), 'DELETE')).data;}

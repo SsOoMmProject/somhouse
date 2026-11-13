@@ -93,6 +93,52 @@ class FamilyAPI(unittest.TestCase):
         with reopened.connect() as db:
             self.assertEqual(reopened.state(db)["shopping"], [a])
 
+    def test_feeding_changes_wake_sheets_only_after_commit(self):
+        from unittest.mock import Mock
+        token = self.login()
+        sheets = Mock()
+        self.server.sheets = sheets
+        self.addCleanup(setattr, self.server, "sheets", None)
+        item = {"id": "feed", "type": "feeding", "date": "2026-11-13T15:00",
+                "category": "분유", "amount": "80ml"}
+        path = "/api/items/records/feed"
+
+        def check_saved():
+            with self.store.connect() as db:
+                self.assertEqual(self.store.state(db)["records"], [item])
+
+        sheets.wake.set.side_effect = check_saved
+        self.assertEqual(self.request(path, "PUT", item, token)[0], 200)
+        sheets.wake.set.assert_called_once()
+        self.assertEqual(self.request(path, "PUT", item, token)[0], 200)
+        self.assertEqual(self.request("/api/items/shopping/a", "PUT", self.item(), token)[0], 200)
+        self.assertEqual(self.request(path, "PUT", dict(item, amount=""), token)[0], 400)
+        sheets.wake.set.assert_called_once()
+        item["amount"] = "90ml"
+        self.assertEqual(self.request(path, "PUT", item, token)[0], 200)
+        sheets.wake.set.side_effect = None
+        self.assertEqual(self.request(path, "DELETE", token=token)[0], 200)
+        self.assertEqual(sheets.wake.set.call_count, 3)
+
+    def test_manual_sheets_sync_checks_login_and_reports_result(self):
+        from unittest.mock import Mock
+        token = self.login()
+        path = "/api/sheets/sync"
+        self.assertEqual(self.request(path, "POST", {})[0], 401)
+        self.assertEqual(self.request(path, "POST", {}, token)[0], 503)
+        sheets = Mock()
+        self.server.sheets = sheets
+        self.addCleanup(setattr, self.server, "sheets", None)
+        sheets.lock.acquire.return_value = False
+        self.assertEqual(self.request(path, "POST", {}, token)[0], 409)
+        sheets.sync.assert_not_called()
+        sheets.lock.acquire.return_value = True
+        self.assertEqual(self.request(path, "POST", {}, token)[0], 200)
+        sheets.sync.assert_called_once_with(force=True)
+        sheets.sync.side_effect = OSError("offline")
+        self.assertEqual(self.request(path, "POST", {}, token)[0], 502)
+        self.assertEqual(sheets.lock.release.call_count, 2)
+
     def test_login_stays_active_until_logout_and_stores_hashes(self):
         self.assertEqual(self.request("/api/data")[0], 401)
         self.assertEqual(self.request("/api/login", "POST", {"username": "family1", "password": "wrong"})[0], 401)
