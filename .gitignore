@@ -7,3 +7,5 @@ initial-accounts.txt
 gemini-config.json
 antigravity-config.json
 .local-data/
+sheets-config.json
+sheets-service-account.json

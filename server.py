@@ -1,4 +1,4 @@
-"""Somhouse's small, local-only family API. Python standard library only."""
+"""Somhouse's small, local-only family API. Optional Google Sheets export."""
 import argparse
 import getpass
 import hashlib
@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
+
+from sheets_sync import SheetsSync
 
 from antigravity import (CONFIG_NAME, SCOPES, Antigravity, AntigravityError,
                          executable, parse_question, save_config, summarize_records)
@@ -458,12 +460,21 @@ def main():
             if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] != 2:
                 parser.error("먼저 python3 server.py init 명령으로 두 계정을 생성해 주세요.")
         server = FamilyServer(("127.0.0.1", args.port), store, args.origin)
+        stop_sheets = threading.Event()
+        try:
+            sheets = SheetsSync.load(store)
+        except Exception as error:
+            print(f"Google Sheets configuration failed: {type(error).__name__}", flush=True)
+            sheets = None
+        if sheets is not None:
+            threading.Thread(target=sheets.run, args=(stop_sheets,), daemon=True).start()
         print(f"솜하우스: http://127.0.0.1:{server.server_port}/", flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             pass
         finally:
+            stop_sheets.set()
             server.server_close()
 
 
