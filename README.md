@@ -21,7 +21,7 @@
 
 ## 맥미니 실행
 
-Python 3.10 이상이면 추가 패키지 없이 실행합니다.
+기본 서버는 Python 3.10 이상에서 실행합니다. Google Sheets를 연결할 때만 추가 패키지를 설치합니다.
 
 ```sh
 python3 server.py init
@@ -119,3 +119,22 @@ JavaScript 검증은 자동 이전·원본 보존·추가/수정/삭제 자동 �
 Antigravity 연동 테스트는 임시 데이터베이스와 모의 CLI 프로세스로 실행합니다.
 
 서로 다른 기록은 항목별로 저장합니다. 같은 항목은 마지막 저장을 적용합니다. 동시 수정 충돌 처리 순서는 [SERVICE_PLAN.md](docs/SERVICE_PLAN.md)를 참조하세요.
+
+## 수유 통계와 Google Sheets
+
+가족 로그인 후 **수유 통계**에서 최근 7일 또는 30일의 일별 수유 횟수와 용량을 표와 막대로 볼 수 있습니다. 시간만 기록한 수유도 횟수에 포함하며, 용량은 ml 단위를 명시한 값만 합산합니다. 웹 통계는 가족 기록 API의 데이터를 사용합니다.
+
+Google Sheets 연동을 켜면 서버 시작 시 기존 수유 기록을 복사합니다. 수유 기록을 추가·수정·삭제하거나 브라우저 기록을 이전하면 SQLite 저장 직후 백그라운드에서 시트에 반영합니다. 마지막 확인 후 1시간 동안 추가 요청이 없으면 변경이나 반영 실패가 있었는지 다시 확인합니다. Google 연결이 끊겨도 SQLite 저장은 계속됩니다. 가족 로그인 후 **수유 통계 → 시트 동기화**를 누르면 현재 기록을 즉시 다시 보낼 수 있습니다. 시트의 A:G는 자동으로 갱신되므로 수식이나 차트는 다른 탭에 두세요. 날짜 열과 숫자로 저장된 용량 열을 사용해 피벗 표나 그래프를 만들 수 있습니다.
+
+1. 가족만 접근 가능한 스프레드시트를 만들고 빈 수유 기록 탭을 추가합니다. 주소의 `/d/` 뒤 문자열은 스프레드시트 ID, 탭을 선택했을 때의 `gid`는 탭 ID입니다.
+2. Google Cloud 프로젝트에서 Sheets API를 활성화하고 [서비스 계정 키](https://developers.google.com/workspace/guides/create-credentials#service-account)를 발급합니다. 스프레드시트에 서비스 계정 이메일을 편집자로 추가합니다.
+3. LaunchAgent가 사용하는 Python에 `python3 -m pip install google-auth requests`를 실행합니다. 가상 환경을 사용하면 그 환경의 Python으로 `scripts/install_service.py`를 실행하세요.
+4. 맥미니의 솜하우스 데이터 폴더에 키를 `sheets-service-account.json`으로 저장하고 파일 권한을 `chmod 600`으로 설정합니다. 같은 폴더에 다음 형식의 `sheets-config.json`을 저장합니다. 예시 ID를 실제 값으로 바꾸세요.
+
+   ```json
+   {"spreadsheetId":"YOUR_SPREADSHEET_ID","sheetId":0}
+   ```
+
+5. `launchctl kickstart -k "gui/$(id -u)/com.ssoomm.somhouse"`로 재시작한 뒤 시트에 기록이 들어오는지 확인합니다. 동기화 오류는 서비스 로그에 기록됩니다. 연결을 끄려면 설정 파일을 제거하고 서비스를 다시 시작합니다.
+
+시트에는 수유 기록의 ID, 날짜·시간, 종류, 양 또는 시간, ml 수치, 메모가 복사됩니다. 이미 복사된 기록은 연결을 끈 뒤에도 시트에 남습니다. 서비스 계정 키와 설정 파일은 맥미니 데이터 폴더에 보관합니다.

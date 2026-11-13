@@ -1,4 +1,4 @@
-"""Somhouse's small, local-only family API. Python standard library only."""
+"""Somhouse's small, local-only family API. Optional Google Sheets export."""
 import argparse
 import getpass
 import hashlib
@@ -15,6 +15,8 @@ from contextlib import contextmanager
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
+
+from sheets_sync import SheetsSync
 
 from antigravity import (CONFIG_NAME, SCOPES, Antigravity, AntigravityError,
                          executable, parse_question, save_config, summarize_records)
@@ -204,6 +206,7 @@ class FamilyServer(ThreadingHTTPServer):
     def __init__(self, address, store, origins=()):
         super().__init__(address, Handler)
         self.store = store
+        self.sheets = None
         self.antigravity = Antigravity.load(store.directory)
         # Keep valid legacy sessions and discard only sessions that already expired.
         with store.lock, store.connect() as db:
@@ -345,6 +348,25 @@ class Handler(BaseHTTPRequestHandler):
                     store.change_password(token, current, new)
                 self.respond(200, {"ok": True})
                 return
+            if path == "/api/sheets/sync" and self.command == "POST":
+                self.body()
+                with store.connect() as db:
+                    store.user(db, token)
+                sheets = self.server.sheets
+                if sheets is None:
+                    raise Problem(503, "맥미니에 Google Sheets 연결을 설정해 주세요.")
+                if not sheets.lock.acquire(blocking=False):
+                    raise Problem(409, "Google Sheets 동기화가 진행 중이에요. 잠시 후 다시 시도해 주세요.")
+                try:
+                    sheets.sync(force=True)
+                except Exception as error:
+                    sheets.log_failure(error)
+                    raise Problem(502, "Google Sheets에 반영하지 못했어요. 다시 시도해 주세요.") from error
+                finally:
+                    sheets.lock.release()
+                self.respond(200, {"ok": True})
+                return
+            feeding_changed = False
             with store.lock, store.connect() as db:
                 username = store.user(db, token)
                 if path == "/api/me" and self.command == "GET":
@@ -355,7 +377,9 @@ class Handler(BaseHTTPRequestHandler):
                 elif path == "/api/data" and self.command == "GET":
                     result = {"data": store.state(db)}
                 elif path == "/api/merge" and self.command == "POST":
+                    before = sum(item["type"] == "feeding" for item in store.state(db)["records"])
                     result = store.merge(db, self.body())
+                    feeding_changed = sum(item["type"] == "feeding" for item in result["data"]["records"]) != before
                 elif path.startswith("/api/items/"):
                     parts = path.split("/")
                     if len(parts) != 5 or parts[3] not in KINDS or self.command not in ("PUT", "DELETE"):
@@ -363,18 +387,29 @@ class Handler(BaseHTTPRequestHandler):
                     kind, item_id = parts[3], unquote(parts[4])
                     if not item_id or len(item_id) > 200:
                         raise Problem(400, "기록 ID를 확인해 주세요.")
+                    previous = None
+                    if kind == "records":
+                        row = db.execute("SELECT body FROM items WHERE kind=? AND id=?", (kind, item_id)).fetchone()
+                        previous = json.loads(row[0]) if row else None
                     if self.command == "PUT":
                         item = validate_item(kind, self.body())
                         if item["id"] != item_id:
                             raise Problem(400, "기록 ID가 일치하지 않습니다.")
                         store.snapshot(db)
                         db.execute("INSERT INTO items VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body", (kind, item_id, encode(item)))
+                        feeding_changed = previous != item and (
+                            item.get("type") == "feeding" or (previous or {}).get("type") == "feeding"
+                        )
                     else:
+                        feeding_changed = (previous or {}).get("type") == "feeding"
                         store.snapshot(db)
                         db.execute("DELETE FROM items WHERE kind=? AND id=?", (kind, item_id))
                     result = {"data": store.state(db)}
                 else:
                     raise Problem(404, "API를 찾을 수 없습니다.")
+            # Wake the worker only after the SQLite transaction has committed.
+            if feeding_changed and self.server.sheets is not None:
+                self.server.sheets.wake.set()
             # Only acknowledge a change after the SQLite context has committed it.
             self.respond(200, result)
         except (Problem, AntigravityError) as error:
@@ -458,12 +493,24 @@ def main():
             if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] != 2:
                 parser.error("먼저 python3 server.py init 명령으로 두 계정을 생성해 주세요.")
         server = FamilyServer(("127.0.0.1", args.port), store, args.origin)
+        stop_sheets = threading.Event()
+        try:
+            sheets = SheetsSync.load(store)
+        except Exception as error:
+            print(f"Google Sheets configuration failed: {type(error).__name__}", flush=True)
+            sheets = None
+        server.sheets = sheets
+        if sheets is not None:
+            threading.Thread(target=sheets.run, args=(stop_sheets,), daemon=True).start()
         print(f"솜하우스: http://127.0.0.1:{server.server_port}/", flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             pass
         finally:
+            stop_sheets.set()
+            if sheets is not None:
+                sheets.wake.set()
             server.server_close()
 
 

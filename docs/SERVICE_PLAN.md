@@ -23,6 +23,12 @@
 
 개인 DB·백업·초기 비밀번호·토큰·API 키는 저장소에 넣지 않는다. 운영법은 README를 참조한다.
 
+## 수유 통계 및 Google Sheets
+
+- 웹에서 최근 7일·30일의 일별 수유 횟수와 ml 합계를 표와 막대로 표시한다.
+- Google Sheets 연동을 설정하면 수유 기록만 전용 탭으로 복사한다. SQLite 저장 직후 동기화하고, 이벤트가 없으면 1시간마다 변경분과 실패 건을 확인한다. 수유 통계에서 수동 동기화할 수 있다.
+- Google 인증과 운영 설치는 [README](../README.md#수유-통계와-google-sheets)를 참조한다.
+
 ## Antigravity CLI 연동
 
 맥미니의 Antigravity CLI를 통해 로그인한 가족의 질문에 답한다. 기본 설정은 질문만 전송한다. 계정 로그인 후 개인정보가 없는 한국어 시험 질문으로 응답을 확인한다. 운영 절차는 [README](../README.md#antigravity-cli-연결)를 참조한다.
@@ -40,4 +46,4 @@ AI가 기록을 추가·수정하는 기능을 확장할 때 사용자 확인을
 
 같은 기록의 동시 수정 감지, 충돌 안내와 사용자의 버전 선택을 추가한다.
 
-Google Calendar/Keep 및 기존 SsOoMm AI 확장은 별도로 검토한다.
+Google Calendar 및 기존 SsOoMm AI 확장은 별도로 검토한다.
