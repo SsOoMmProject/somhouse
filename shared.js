@@ -88,7 +88,7 @@
     }
     async aiStatus() {return this.request('/api/ai');}
     async askAI(question, scope) {
-      return this.request('/api/ai', 'POST', {question, scope}, this.base, this.token, 25000);
+      return this.request('/api/ai', 'POST', {question, scope}, this.base, this.token, 50000);
     }
     async load() {return (await this.request('/api/data')).data;}
     async put(kind, item) {return (await this.request('/api/items/' + kind + '/' + encodeURIComponent(item.id), 'PUT', item)).data;}

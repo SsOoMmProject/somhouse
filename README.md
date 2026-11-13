@@ -101,7 +101,7 @@ python3 server.py antigravity-config
 launchctl kickstart -k "gui/$(id -u)/com.ssoomm.somhouse"
 ```
 
-서버는 질문을 CLI의 표준 입력으로 전달합니다. 기본 모델은 `gemini-3.8-flash-medium`입니다. 각 질문은 별도 CLI 프로세스에서 처리합니다. 질문은 Google로 전송되며, Antigravity 계정에 대화 기록이 남을 수 있습니다. AI 도구 권한은 잠그고, CLI 프로세스가 앱 소스와 가족 데이터 폴더를 읽거나 쓰는 작업은 macOS에서 차단합니다. 응답 제한은 20초입니다. 답변을 받지 못하면 서버가 종료 코드와 CLI 오류 요약을 `service-error.log`에 남기며, 질문 내용은 기록하지 않습니다. 계정에서 지정한 모델을 쓸 수 없으면 별도 안내를 표시합니다.
+서버는 질문을 CLI의 표준 입력으로 전달합니다. 기본 모델은 `gemini-3.8-flash-medium`입니다. 각 질문은 별도 CLI 프로세스에서 처리합니다. 질문은 Google로 전송되며, Antigravity 계정에 대화 기록이 남을 수 있습니다. AI 도구 권한은 잠그고, CLI 프로세스가 앱 소스와 가족 데이터 폴더를 읽거나 쓰는 작업은 macOS에서 차단합니다. 응답 제한은 45초입니다. 답변을 받지 못하면 서버가 종료 코드와 CLI 오류 요약을 `service-error.log`에 남기며, 질문 내용은 기록하지 않습니다. 계정에서 지정한 모델을 쓸 수 없으면 별도 안내를 표시합니다.
 
 기본 설정은 질문만 전송합니다. 사용 중인 계정의 데이터 처리 조건이 허용할 경우, 관리자는 `python3 server.py antigravity-config --allow-record-summaries`로 가족 기록 집계를 활성화할 수 있습니다. 사용자가 질문마다 집계 하나를 선택하면 서버가 날짜와 숫자만 계산해 포함합니다. 원본 기록, 병원 정보, 메모, 제목과 링크는 집계에 포함되지 않습니다.
 

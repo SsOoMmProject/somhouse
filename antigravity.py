@@ -15,7 +15,7 @@ import time
 CONFIG_NAME = "antigravity-config.json"
 MODEL = "gemini-3.8-flash-medium"
 # Leave time for the server to send its error before the browser times out.
-DEADLINE_SECONDS = 20
+DEADLINE_SECONDS = 45
 # The CLI enforces the same limit itself. Wait a little longer so that its own
 # timeout report or a late exit after the answer arrives before the kill.
 EXIT_GRACE_SECONDS = 3
