@@ -40,6 +40,7 @@
         return result;
       } catch (error) {
         if (error.status) throw error;
+        if (controller.signal.aborted) throw Error('응답이 늦어지고 있어요. 잠시 후 다시 시도해 주세요. 입력한 내용은 유지됩니다.');
         throw Error('맥미니에 연결하지 못했어요. 연결을 확인하고 다시 시도해 주세요. 입력한 내용은 유지됩니다.');
       } finally {clearTimeout(timeout);}
     }
@@ -87,7 +88,7 @@
     }
     async aiStatus() {return this.request('/api/ai');}
     async askAI(question, scope) {
-      return this.request('/api/ai', 'POST', {question, scope}, this.base, this.token, 25000);
+      return this.request('/api/ai', 'POST', {question, scope}, this.base, this.token, 50000);
     }
     async load() {return (await this.request('/api/data')).data;}
     async put(kind, item) {return (await this.request('/api/items/' + kind + '/' + encodeURIComponent(item.id), 'PUT', item)).data;}

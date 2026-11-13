@@ -378,9 +378,15 @@ class Handler(BaseHTTPRequestHandler):
             # Only acknowledge a change after the SQLite context has committed it.
             self.respond(200, result)
         except (Problem, AntigravityError) as error:
-            self.respond(error.status, {"error": error.message})
+            self.reply_error(error.status, error.message)
         except (OSError, sqlite3.Error):
-            self.respond(503, {"error": "맥미니 저장소에 접근하지 못했습니다. 입력을 유지하고 다시 시도해 주세요."})
+            self.reply_error(503, "맥미니 저장소에 접근하지 못했습니다. 입력을 유지하고 다시 시도해 주세요.")
+
+    def reply_error(self, status, message):
+        try:
+            self.respond(status, {"error": message})
+        except OSError:
+            self.close_connection = True  # The browser already gave up waiting.
 
     do_GET = do_POST = do_PUT = do_DELETE = do_OPTIONS = handle_request
 

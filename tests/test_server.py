@@ -1,5 +1,6 @@
 """Exercise the actual HTTP API against an isolated temporary database."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -307,16 +308,31 @@ import json, sys
 question = json.loads(json.load(sys.stdin)["message"]["content"].splitlines()[-1])["question"]
 if question == "로그인":
     sys.stderr.write("authentication required: PRIVATE-PROVIDER-ERROR")
+elif question == "모델":
+    print("warning: not a JSON line")
+    print(json.dumps({"event": "result", "result": {"status": "ERROR", "error":
+        'invalid model selection (--model "m" --effort ""): model m is not recognized as a known model or custom model in settings 모델'}}))
 else:
     error = "rate limit" if question == "한도" else "unknown error"
     print(json.dumps({"event": "result", "result": {"status": "ERROR", "error": error}}))
 sys.exit(1)
 """
-        with patch.object(provider, "command", return_value=[sys.executable, "-c", fixture]):
-            for question, status in (("한도", 429), ("오류", 502), ("로그인", 503)):
+        log = io.StringIO()
+        with patch.object(provider, "command", return_value=[sys.executable, "-c", fixture]), \
+                patch("antigravity.sys.stderr", log):
+            for question, status in (("한도", 429), ("오류", 502), ("로그인", 503), ("모델", 503)):
                 code, result, _ = self.request("/api/ai", "POST", {"question": question}, token)
                 self.assertEqual(code, status)
                 self.assertNotIn("PRIVATE-PROVIDER-ERROR", json.dumps(result))
+                provider.attempts.clear()
+        self.assertIn("모델을 사용할 수 없어요", result["error"])
+        # The service log explains each failure without repeating the question.
+        lines = log.getvalue().splitlines()
+        self.assertEqual(len(lines), 4)
+        self.assertIn("status=429 exit=1 timed_out=False", lines[0])
+        self.assertIn("PRIVATE-PROVIDER-ERROR", lines[2])
+        self.assertIn("not recognized as a known model", lines[3])
+        self.assertNotIn("모델", lines[3].split("model=", 1)[1].split(" ", 1)[1])
         provider.active.add("family1")
         self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 429)
 
@@ -375,16 +391,40 @@ print(json.dumps({{"event": "result", "result": {{"status": "SUCCESS", "response
             self.assertEqual(secret.read_text(encoding="utf-8"), "private")
             self.assertEqual(project.read_text(encoding="utf-8"), "test-project")
 
+    def test_antigravity_sandbox_blocks_the_global_cli_settings(self):
+        policy = Antigravity(self.store.directory, Path(sys.executable)).command(Path("agy.log"))[2]
+        blocked = policy.split("(deny file-read* file-write* ", 1)[1].split("))", 1)[0]
+        for name in ("settings.json", "antigravity-cli/settings.json", "antigravity-cli/mcp_config.json"):
+            self.assertIn(json.dumps(str((Path.home() / ".gemini").resolve() / name)), blocked)
+
     def test_antigravity_deadline_stops_the_process_and_releases_the_slot(self):
         token = self.login()
         provider = self.antigravity()
-        with patch("antigravity.DEADLINE_SECONDS", 0.2), \
+        log = io.StringIO()
+        with patch("antigravity.DEADLINE_SECONDS", 0.2), patch("antigravity.EXIT_GRACE_SECONDS", 0.2), \
+                patch("antigravity.sys.stderr", log), \
                 patch.object(provider, "command", return_value=[sys.executable, "-c", "import time; time.sleep(30)"]):
             started = time.monotonic()
             code, _, _ = self.request("/api/ai", "POST", {"question": "안녕"}, token)
             self.assertEqual(code, 504)
             self.assertLess(time.monotonic() - started, 2)
         self.assertNotIn("family1", provider.active)
+        self.assertIn("status=504", log.getvalue())
+        self.assertIn("timed_out=True", log.getvalue())
+
+    def test_antigravity_keeps_an_answer_from_a_process_that_exits_late(self):
+        token = self.login()
+        provider = self.antigravity()
+        fixture = """
+import json, sys, time
+sys.stdin.read()
+print(json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": "늦은 종료"}}), flush=True)
+time.sleep(30)
+"""
+        with patch("antigravity.DEADLINE_SECONDS", 0.5), patch("antigravity.EXIT_GRACE_SECONDS", 0.5), \
+                patch.object(provider, "command", return_value=[sys.executable, "-c", fixture]):
+            code, result, _ = self.request("/api/ai", "POST", {"question": "안녕"}, token)
+        self.assertEqual((code, result.get("answer")), (200, "늦은 종료"))
 
 
 if __name__ == "__main__":

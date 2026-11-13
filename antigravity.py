@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -14,7 +15,10 @@ import time
 CONFIG_NAME = "antigravity-config.json"
 MODEL = "gemini-3.8-flash-medium"
 # Leave time for the server to send its error before the browser times out.
-DEADLINE_SECONDS = 20
+DEADLINE_SECONDS = 45
+# The CLI enforces the same limit itself. Wait a little longer so that its own
+# timeout report or a late exit after the answer arrives before the kill.
+EXIT_GRACE_SECONDS = 3
 MAX_OUTPUT_BYTES = 256 * 1024
 MAX_ANSWER_LENGTH = 8000
 SANDBOX = Path("/usr/bin/sandbox-exec")
@@ -41,8 +45,8 @@ SYSTEM = (
 
 
 class AntigravityError(Exception):
-    def __init__(self, status, message):
-        self.status, self.message = status, message
+    def __init__(self, status, message, detail=""):
+        self.status, self.message, self.detail = status, message, detail
 
 
 def executable(value):
@@ -150,11 +154,12 @@ class Antigravity:
     def command(self, log):
         # The CLI can load global customizations at startup, before processing
         # a prompt. Keep it away from those files, the app and the family DB.
-        profile = Path.home() / ".gemini"
+        profile = (Path.home() / ".gemini").resolve()
         blocked = [self.directory, Path(__file__).resolve().parent]
         blocked.extend(profile / name for name in (
             "AGENTS.md", "GEMINI.md", "settings.json", "mcp_config.json",
             "extensions", "skills", "commands", "antigravity-cli/mcp_config.json",
+            "antigravity-cli/settings.json",
         ))
         paths = " ".join("(subpath " + json.dumps(str(path), ensure_ascii=False) + ")" for path in blocked)
         config = profile / "config"
@@ -193,47 +198,65 @@ class Antigravity:
                 with subprocess.Popen(self.command(log), cwd=workspace, env=environment,
                                       stdin=subprocess.PIPE, stdout=output, stderr=diagnostics,
                                       start_new_session=True) as process:
+                    timed_out = False
                     try:
-                        process.communicate(message.encode(), timeout=DEADLINE_SECONDS)
+                        process.communicate(message.encode(), timeout=DEADLINE_SECONDS + EXIT_GRACE_SECONDS)
                     except subprocess.TimeoutExpired:
+                        timed_out = True
                         try:
                             os.killpg(process.pid, signal.SIGKILL)
                         except ProcessLookupError:
                             pass
                         process.wait()
-                        raise AntigravityError(504, "AI 응답이 늦어지고 있어요. 잠시 후 다시 시도해 주세요.") from None
                     output.seek(0)
                     payload = output.read(MAX_OUTPUT_BYTES + 1)
                     diagnostics.seek(0)
                     error = diagnostics.read(16 * 1024)
-                    if process.returncode and log.is_file():
+                    if (timed_out or process.returncode) and log.is_file():
                         with log.open("rb") as file:
                             error += b"\n" + file.read(16 * 1024)
-                    return decode_answer(payload, process.returncode, error.decode(errors="replace"))
+                    try:
+                        return decode_answer(payload, process.returncode, error.decode(errors="replace"), timed_out)
+                    except AntigravityError as failure:
+                        # The service log is the only place an administrator can
+                        # see why the CLI failed. Never include the prompt.
+                        detail = " ".join(failure.detail.replace(prompt, "").replace(question, "").split())
+                        print(f"antigravity: status={failure.status} exit={process.returncode} "
+                              f"timed_out={timed_out} model={MODEL} {detail[:500]}", file=sys.stderr, flush=True)
+                        raise
         except OSError:
             raise AntigravityError(503, "맥미니에서 Antigravity CLI를 실행할 수 없어요. 관리자 설정을 확인해 주세요.") from None
 
 
-def decode_answer(payload, returncode, diagnostics):
+def decode_answer(payload, returncode, diagnostics, timed_out=False):
     result = {}
     try:
         if len(payload) <= MAX_OUTPUT_BYTES:
             for line in payload.splitlines():
-                event = json.loads(line)
-                if event.get("event") == "result":
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue  # A warning on stdout must not hide the result.
+                if isinstance(event, dict) and event.get("event") == "result":
                     result = event["result"]
-        if result.get("status") == "SUCCESS" and not returncode:
+        # A process stopped after it printed a complete answer still answered.
+        if result.get("status") == "SUCCESS" and (timed_out or not returncode):
             answer = result["response"].strip()
             answer.encode()
             if answer:
                 return {"answer": answer[:MAX_ANSWER_LENGTH], "truncated": len(answer) > MAX_ANSWER_LENGTH}
     except (ValueError, AttributeError, KeyError, TypeError):
         result = {}
-    error = (str(result.get("error", "")) + "\n" + diagnostics).lower()
+    detail = str(result.get("error", "")) + "\n" + diagnostics
+    error = detail.lower()
+    if timed_out:
+        raise AntigravityError(504, "AI 응답이 늦어지고 있어요. 잠시 후 다시 시도해 주세요.", detail)
+    if "invalid model selection" in error or "not recognized as a known model" in error:
+        raise AntigravityError(503, "맥미니의 Antigravity 계정에서 설정된 AI 모델을 사용할 수 없어요. 관리자에게 알려 주세요.", detail)
     if any(message in error for message in ("authentication required", "not authenticated", "sign in to", "unauthorized")):
-        raise AntigravityError(503, "맥미니의 Antigravity CLI 로그인을 확인해 주세요.")
+        raise AntigravityError(503, "맥미니의 Antigravity CLI 로그인을 확인해 주세요.", detail)
     if any(message in error for message in ("quota", "rate limit", "resource_exhausted")):
-        raise AntigravityError(429, "AI 사용 한도에 도달했어요. 잠시 후 다시 시도해 주세요.")
+        raise AntigravityError(429, "AI 사용 한도에 도달했어요. 잠시 후 다시 시도해 주세요.", detail)
     if any(message in error for message in ("deadline exceeded", "timed out", "print timeout")):
-        raise AntigravityError(504, "AI 응답이 늦어지고 있어요. 잠시 후 다시 시도해 주세요.")
-    raise AntigravityError(502, "Antigravity CLI 답변을 받지 못했어요. 관리자 설정을 확인해 주세요.")
+        raise AntigravityError(504, "AI 응답이 늦어지고 있어요. 잠시 후 다시 시도해 주세요.", detail)
+    raise AntigravityError(502, "Antigravity CLI 답변을 받지 못했어요. 관리자 설정을 확인해 주세요.", detail)
