@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f8f5ef"><title>솜하우스</title><link rel="stylesheet" href="style.css?v=account-20261107"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f8f5ef"><title>솜하우스</title><link rel="stylesheet" href="style.css?v=antigravity-20261112"></head>
 <body>
 <header><div><span class="logo">✿</span> <strong>솜하우스</strong><small>우리 가족의 작은 기록</small></div></header>
 <main>
@@ -15,6 +15,28 @@
 </section>
 <nav aria-label="메뉴" hidden><button data-page="home">홈</button><button data-page="records">육아 기록</button><button data-page="schedule">일정</button><button data-page="shopping">구매 목록</button><button data-page="ai">AI 대화</button></nav>
 <div id="content"></div>
+<section id="ai-panel" aria-labelledby="ai-title" hidden>
+<h1 id="ai-title">AI 대화</h1>
+<div class="card">
+<p>질문과 선택한 집계는 Antigravity CLI를 통해 Google로 전송돼요. 질문에 이름이나 건강 정보 같은 개인정보는 입력하지 마세요.</p>
+<p id="ai-status" role="status"></p>
+<form id="ai-form">
+<fieldset id="ai-fields" disabled>
+<label id="ai-scope-field" class="field" hidden>참고할 가족 기록 집계<select id="ai-scope" name="scope">
+<option value="none">기록 없이 질문만</option>
+<option value="feeding">최근 7일 수유 횟수·용량</option>
+<option value="schedule">오늘부터 7일간 일정 건수</option>
+<option value="shopping">구매 예정·완료 건수</option>
+</select></label>
+<label class="field">질문<textarea id="ai-question" name="question" required maxlength="2000" placeholder="질문을 입력해 주세요"></textarea></label>
+<div class="actions"><button type="submit">질문 보내기</button></div>
+</fieldset>
+</form>
+</div>
+<article id="ai-result" class="card" aria-live="polite" hidden>
+<h2>AI 답변</h2><p id="ai-asked"></p><p id="ai-answer"></p>
+</article>
+</section>
 </main>
 <dialog id="dialog"><form id="form"><div class="formhead"><h2 id="formtitle"></h2><button type="button" id="close" class="plain" aria-label="닫기">✕</button></div><div id="fields"></div><div class="actions"><button type="button" id="cancel" class="secondary">취소</button><button type="submit">저장하기</button></div></form></dialog>
 <dialog id="password-dialog" aria-labelledby="password-title">
@@ -29,5 +51,5 @@
 <div class="actions"><button type="button" id="cancel-password" class="secondary">취소</button><button type="submit">비밀번호 저장</button></div>
 </form>
 </dialog>
-<script src="config.js?v=auto-20261102" defer></script><script src="service.js?v=auto-20261102" defer></script><script src="shared.js?v=account-20261107" defer></script><script src="app.js?v=account-20261107" defer></script>
+<script src="config.js?v=auto-20261102" defer></script><script src="service.js?v=auto-20261102" defer></script><script src="shared.js?v=antigravity-20261112" defer></script><script src="app.js?v=antigravity-20261112" defer></script>
 </body></html>

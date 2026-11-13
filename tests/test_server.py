@@ -1,6 +1,8 @@
 """Exercise the actual HTTP API against an isolated temporary database."""
 import hashlib
+import io
 import json
+import os
 from pathlib import Path
 import sys
 import subprocess
@@ -15,6 +17,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from server import FamilyServer, Store
+from antigravity import CONFIG_NAME, MODEL, Antigravity, save_config
 
 
 class FamilyAPI(unittest.TestCase):
@@ -221,7 +224,7 @@ class FamilyAPI(unittest.TestCase):
         self.assertEqual(headers["Access-Control-Allow-Origin"], origin)
         self.assertIn("Authorization", headers["Access-Control-Allow-Headers"])
         self.assertEqual(self.request("/api/data", token=token, origin="https://untrusted.example")[0], 403)
-        for path in ("/server.py", "/.git/config", "/somhouse.sqlite3", "/initial-accounts.txt", "/../server.py"):
+        for path in ("/server.py", "/antigravity.py", "/antigravity-config.json", "/.git/config", "/somhouse.sqlite3", "/initial-accounts.txt", "/../server.py"):
             self.assertEqual(self.request(path)[0], 404)
         self.assertEqual(self.request("/")[0], 200)
         self.assertEqual(self.request("/api/items/shopping/a", "PUT", self.item("mismatch"), token)[0], 400)
@@ -232,6 +235,196 @@ class FamilyAPI(unittest.TestCase):
         code, _, headers = self.request("/api/login", "POST", {"username": "family1", "password": "test-password-1"})
         self.assertEqual(code, 429)
         self.assertEqual(headers["Retry-After"], "60")
+
+    def antigravity(self, allow_summaries=False):
+        provider = Antigravity(self.store.directory, Path(sys.executable), allow_summaries)
+        original = self.server.antigravity
+        self.addCleanup(setattr, self.server, "antigravity", original)
+        self.server.antigravity = provider
+        return provider
+
+    def test_antigravity_configuration_requires_a_private_file_and_login(self):
+        self.assertEqual(self.request("/api/ai")[0], 401)
+        token = self.login()
+        self.assertFalse(self.request("/api/ai", token=token)[1]["enabled"])
+        self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 503)
+        path = self.store.directory / CONFIG_NAME
+        self.addCleanup(path.unlink)
+        save_config(self.store.directory, Path(sys.executable), False)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        with patch("antigravity.SANDBOX", Path(sys.executable)):
+            self.assertEqual(Antigravity.load(self.store.directory).status(),
+                             {"enabled": True, "model": MODEL, "recordSummaries": False})
+            path.chmod(0o644)
+            self.assertFalse(Antigravity.load(self.store.directory).status()["enabled"])
+
+    def test_antigravity_sends_only_the_selected_record_summary_to_stdin(self):
+        from datetime import date
+        token = self.login()
+        provider = self.antigravity(allow_summaries=True)
+        today = date.today().isoformat()
+        private_note = "PRIVATE-NOTE-DO-NOT-SEND"
+        items = [
+            {"id": "feed-1", "type": "feeding", "date": today+"T12:00", "category": "분유", "amount": "80ml", "memo": private_note},
+            {"id": "feed-2", "type": "feeding", "date": today+"T13:00", "category": "모유", "amount": "10분", "memo": private_note},
+            {"id": "hospital-1", "type": "hospital", "date": today+"T14:00", "hospital": "PRIVATE-HOSPITAL", "reason": private_note},
+        ]
+        for item in items:
+            self.request("/api/items/records/"+item["id"], "PUT", item, token)
+        # A separate process echoes the parsed input and ensures it wasn't
+        # passed via arguments, an inherited key or the working directory.
+        fixture = """
+import json, os, pathlib, sys
+assert len(sys.argv) == 1 and "GEMINI_API_KEY" not in os.environ
+assert not list(pathlib.Path.cwd().iterdir())
+message = json.load(sys.stdin)
+assert message["event"] == "user"
+context = message["message"]["content"].splitlines()[-1]
+print(json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": context}}))
+"""
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-secret"}), \
+                patch.object(provider, "command", return_value=[sys.executable, "-c", fixture]):
+            code, result, _ = self.request("/api/ai", "POST", {"question": "안녕"}, token)
+            self.assertEqual(code, 200, result)
+            self.assertEqual(json.loads(result["answer"]), {"question": "안녕"})
+            code, result, _ = self.request("/api/ai", "POST", {"question": "수유 요약", "scope": "feeding"}, token)
+            self.assertEqual(code, 200, result)
+            payload = json.loads(result["answer"])
+            self.assertEqual(payload["records"]["summary"][today],
+                             {"count": 2, "measured_count": 1, "volume_ml": 80.0})
+            self.assertNotIn(private_note, result["answer"])
+            self.assertNotIn("PRIVATE-HOSPITAL", result["answer"])
+        with self.store.connect() as db:
+            self.assertEqual(len(self.store.state(db)["records"]), 3)
+
+    def test_antigravity_limits_and_provider_errors(self):
+        token = self.login()
+        provider = self.antigravity()
+        self.assertEqual(self.request("/api/ai", "POST", {"question": "요약", "scope": "feeding"}, token)[0], 403)
+        self.assertEqual(self.request("/api/ai", "POST", {"question": "요약", "scope": "unknown"}, token)[0], 400)
+        self.assertEqual(self.request("/api/ai", "POST", {"question": "a"*2001}, token)[0], 400)
+        fixture = """
+import json, sys
+question = json.loads(json.load(sys.stdin)["message"]["content"].splitlines()[-1])["question"]
+if question == "로그인":
+    sys.stderr.write("authentication required: PRIVATE-PROVIDER-ERROR")
+elif question == "모델":
+    print("warning: not a JSON line")
+    print(json.dumps({"event": "result", "result": {"status": "ERROR", "error":
+        'invalid model selection (--model "m" --effort ""): model m is not recognized as a known model or custom model in settings 모델'}}))
+else:
+    error = "rate limit" if question == "한도" else "unknown error"
+    print(json.dumps({"event": "result", "result": {"status": "ERROR", "error": error}}))
+sys.exit(1)
+"""
+        log = io.StringIO()
+        with patch.object(provider, "command", return_value=[sys.executable, "-c", fixture]), \
+                patch("antigravity.sys.stderr", log):
+            for question, status in (("한도", 429), ("오류", 502), ("로그인", 503), ("모델", 503)):
+                code, result, _ = self.request("/api/ai", "POST", {"question": question}, token)
+                self.assertEqual(code, status)
+                self.assertNotIn("PRIVATE-PROVIDER-ERROR", json.dumps(result))
+                provider.attempts.clear()
+        self.assertIn("모델을 사용할 수 없어요", result["error"])
+        # The service log explains each failure without repeating the question.
+        lines = log.getvalue().splitlines()
+        self.assertEqual(len(lines), 4)
+        self.assertIn("status=429 exit=1 timed_out=False", lines[0])
+        self.assertIn("PRIVATE-PROVIDER-ERROR", lines[2])
+        self.assertIn("not recognized as a known model", lines[3])
+        self.assertNotIn("모델", lines[3].split("model=", 1)[1].split(" ", 1)[1])
+        provider.active.add("family1")
+        self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 429)
+
+    def test_antigravity_wait_releases_the_record_database_lock(self):
+        token = self.login()
+        provider = self.antigravity()
+
+        def generate(*_):
+            self.assertEqual(self.request("/api/data", token=token)[0], 200)
+            return {"answer": "모의 답변", "truncated": False}
+
+        with patch.object(provider, "generate", side_effect=generate):
+            self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 200)
+
+    def test_antigravity_checks_the_session_before_validating_the_question(self):
+        self.antigravity()
+        for body in ({"question": ""}, {"question": "안녕", "scope": "unknown"}):
+            self.assertEqual(self.request("/api/ai", "POST", body, "not-a-session")[0], 401)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires the macOS sandbox")
+    def test_antigravity_process_can_read_only_the_default_project_and_cannot_access_family_files(self):
+        secret = self.store.directory / "antigravity-test-private.txt"
+        secret.write_text("private", encoding="utf-8")
+        self.addCleanup(secret.unlink)
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            config = home / ".gemini/config"
+            project = config / "projects/default-cli-project.json"
+            project.parent.mkdir(parents=True)
+            project.write_text("test-project", encoding="utf-8")
+            custom = config / "mcp_config.json"
+            custom.write_text("private customization", encoding="utf-8")
+            binary = home / "agy-fixture"
+            binary.write_text(f"""#!{sys.executable}
+import json, pathlib, sys
+private = pathlib.Path({str(secret)!r})
+project = pathlib.Path({str(project)!r})
+custom = pathlib.Path({str(custom)!r})
+assert project.read_text() == "test-project"
+for action in (private.read_text, lambda: private.write_text("changed"),
+               custom.read_text, lambda: project.write_text("changed")):
+    try:
+        action()
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("a blocked path was accessible")
+settings = json.loads(sys.argv[sys.argv.index("--settings") + 1])
+assert {{"command(*)", "read_file(*)", "write_file(*)", "mcp(*)"}} <= set(settings["permissions"]["deny"])
+print(json.dumps({{"event": "result", "result": {{"status": "SUCCESS", "response": "blocked"}}}}))
+""", encoding="utf-8")
+            binary.chmod(0o700)
+            provider = Antigravity(self.store.directory, binary)
+            with patch("antigravity.Path.home", return_value=home):
+                self.assertEqual(provider.generate("권한 확인", "none", None)["answer"], "blocked")
+            self.assertEqual(secret.read_text(encoding="utf-8"), "private")
+            self.assertEqual(project.read_text(encoding="utf-8"), "test-project")
+
+    def test_antigravity_sandbox_blocks_the_global_cli_settings(self):
+        policy = Antigravity(self.store.directory, Path(sys.executable)).command(Path("agy.log"))[2]
+        blocked = policy.split("(deny file-read* file-write* ", 1)[1].split("))", 1)[0]
+        for name in ("settings.json", "antigravity-cli/settings.json", "antigravity-cli/mcp_config.json"):
+            self.assertIn(json.dumps(str((Path.home() / ".gemini").resolve() / name)), blocked)
+
+    def test_antigravity_deadline_stops_the_process_and_releases_the_slot(self):
+        token = self.login()
+        provider = self.antigravity()
+        log = io.StringIO()
+        with patch("antigravity.DEADLINE_SECONDS", 0.2), patch("antigravity.EXIT_GRACE_SECONDS", 0.2), \
+                patch("antigravity.sys.stderr", log), \
+                patch.object(provider, "command", return_value=[sys.executable, "-c", "import time; time.sleep(30)"]):
+            started = time.monotonic()
+            code, _, _ = self.request("/api/ai", "POST", {"question": "안녕"}, token)
+            self.assertEqual(code, 504)
+            self.assertLess(time.monotonic() - started, 2)
+        self.assertNotIn("family1", provider.active)
+        self.assertIn("status=504", log.getvalue())
+        self.assertIn("timed_out=True", log.getvalue())
+
+    def test_antigravity_keeps_an_answer_from_a_process_that_exits_late(self):
+        token = self.login()
+        provider = self.antigravity()
+        fixture = """
+import json, sys, time
+sys.stdin.read()
+print(json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": "늦은 종료"}}), flush=True)
+time.sleep(30)
+"""
+        with patch("antigravity.DEADLINE_SECONDS", 0.5), patch("antigravity.EXIT_GRACE_SECONDS", 0.5), \
+                patch.object(provider, "command", return_value=[sys.executable, "-c", fixture]):
+            code, result, _ = self.request("/api/ai", "POST", {"question": "안녕"}, token)
+        self.assertEqual((code, result.get("answer")), (200, "늦은 종료"))
 
 
 if __name__ == "__main__":

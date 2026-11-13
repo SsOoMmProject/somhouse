@@ -10,7 +10,7 @@
 ## 구현됨
 
 - 수유·병원·일정·구매 CRUD, 빠른 기록, 요약과 검색·필터
-- 가족 두 계정, 로그인 만료·로그아웃, 맥미니 SQLite
+- 가족 두 계정, 로그아웃 전까지 로그인 유지, 사용자 비밀번호 변경, 맥미니 SQLite
 - 항목별 저장, 실패 시 기존 화면과 입력 유지
 - 로그인 전 기존 브라우저 기록 자동 병합. 원본 보존과 중복 방지
 - 2초 간격·화면 복귀·네트워크 복구 시 다른 휴대폰 변경 자동 조회
@@ -23,15 +23,21 @@
 
 개인 DB·백업·초기 비밀번호·토큰·API 키는 저장소에 넣지 않는다. 운영법은 README를 참조한다.
 
-## 다음: 단일 AI 연결
+## Antigravity CLI 연동
 
-- 공급자·모델·비용 결정
-- 서버에서만 API 키 관리
-- 실제 응답과 오류·대기 표시, 필요한 기록만 읽기
-- AI가 기록을 변경할 때 사용자 확인
+맥미니의 Antigravity CLI를 통해 로그인한 가족의 질문에 답한다. 기본 설정은 질문만 전송한다. 계정 로그인 후 개인정보가 없는 한국어 시험 질문으로 응답을 확인한다. 운영 절차는 [README](../README.md#antigravity-cli-연결)를 참조한다.
+
+AI가 기록을 추가·수정하는 기능을 확장할 때 사용자 확인을 포함한다.
+
+## 네스트 음성 기록 검토
+
+- 한국어로 사용하는 네스트 허브 2세대가 대상이다. Home Assistant 서버 설치 여부와 주소를 확인한다.
+- 네스트에서 추가한 기록도 기존 가족 저장소에 저장해 두 휴대폰에 자동으로 반영한다.
+- 먼저 네스트에서 한국어 음성으로 만든 할 일에 기록 종류와 수량이 남는지 확인한다. 문구가 보존되면 Google Tasks의 읽기 전용 권한으로 시험 항목을 가져와 해석한다.
+- Home Assistant에서는 Google에 노출한 기기·장면 제어와 자유 문장 전달을 별도로 검증한다. Google의 Conversational Actions는 종료됐다. [Google 음성 Tasks](https://support.google.com/googlehome/answer/16722329?hl=ko), [Home Assistant 연동](https://www.home-assistant.io/integrations/google_assistant/), [Conversational Actions 종료](https://developers.google.com/assistant/ca-sunset)
 
 ## 마지막: 동시 수정 충돌 처리
 
 같은 기록의 동시 수정 감지, 충돌 안내와 사용자의 버전 선택을 추가한다.
 
-Google Nest/Calendar/Keep 및 기존 SsOoMm AI 확장은 이후 별도로 검토한다.
+Google Calendar/Keep 및 기존 SsOoMm AI 확장은 별도로 검토한다.

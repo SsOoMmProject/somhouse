@@ -12,8 +12,12 @@ import sqlite3
 import threading
 import time
 from contextlib import contextmanager
+from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
+
+from antigravity import (CONFIG_NAME, SCOPES, Antigravity, AntigravityError,
+                         executable, parse_question, save_config, summarize_records)
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA = Path.home() / "Library/Application Support/Somhouse"
@@ -200,6 +204,7 @@ class FamilyServer(ThreadingHTTPServer):
     def __init__(self, address, store, origins=()):
         super().__init__(address, Handler)
         self.store = store
+        self.antigravity = Antigravity.load(store.directory)
         # Keep valid legacy sessions and discard only sessions that already expired.
         with store.lock, store.connect() as db:
             now = time.time()
@@ -250,21 +255,48 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def body(self):
+    def body(self, max_size=MAX_BODY):
         if self.headers.get("Transfer-Encoding"):
             raise Problem(400, "지원하지 않는 요청 형식입니다.")
         if self.headers.get_content_type() != "application/json":
             raise Problem(415, "JSON 형식으로 요청해 주세요.")
         try:
             size = int(self.headers.get("Content-Length", "0"))
-            if size < 1 or size > MAX_BODY:
-                raise Problem(413, "요청 크기는 4MB 이하여야 합니다.")
+            if size < 1 or size > max_size:
+                limit = "4MB" if max_size == MAX_BODY else f"{max_size // 1024}KB"
+                raise Problem(413, f"요청 크기는 {limit} 이하여야 합니다.")
             data = json.loads(self.rfile.read(size))
             if not isinstance(data, dict):
                 raise ValueError()
             return data
         except (ValueError, UnicodeError):
             raise Problem(400, "올바른 JSON 요청이 아닙니다.")
+
+    def ai_request(self, token):
+        ai = self.server.antigravity
+        store = self.server.store
+        if self.command == "GET":
+            with store.lock, store.connect() as db:
+                store.user(db, token)
+            return ai.status()
+
+        # Read the small body before taking the lock, but check the session
+        # before validating it so signed-out callers only ever see 401.
+        body = self.body(24 * 1024)
+        summary = None
+        with store.lock, store.connect() as db:
+            username = store.user(db, token)
+            question, scope = parse_question(body)
+            if not ai.binary:
+                raise Problem(503, "관리자가 맥미니에 Antigravity CLI를 설정해야 해요.")
+            if scope != "none":
+                if not ai.allow_summaries:
+                    raise Problem(403, "관리자가 가족 기록 집계 전송을 활성화해야 해요.")
+                items = [json.loads(row[0]) for row in db.execute(
+                    "SELECT body FROM items WHERE kind=?", (SCOPES[scope],))]
+                summary = summarize_records(scope, items, date.today())
+        # Release the SQLite connection and lock before waiting for Google.
+        return ai.answer(username, question, scope, summary)
 
     def handle_request(self):
         try:
@@ -299,6 +331,9 @@ class Handler(BaseHTTPRequestHandler):
             if not auth.startswith("Bearer ") or len(auth) > 200:
                 raise Problem(401, "로그인이 필요합니다.")
             token = auth[7:]
+            if path == "/api/ai" and self.command in ("GET", "POST"):
+                self.respond(200, self.ai_request(token))
+                return
             if path == "/api/password" and self.command == "POST":
                 body = self.body()
                 current, new = body.get("currentPassword"), body.get("newPassword")
@@ -342,26 +377,48 @@ class Handler(BaseHTTPRequestHandler):
                     raise Problem(404, "API를 찾을 수 없습니다.")
             # Only acknowledge a change after the SQLite context has committed it.
             self.respond(200, result)
-        except Problem as error:
-            self.respond(error.status, {"error": error.message})
+        except (Problem, AntigravityError) as error:
+            self.reply_error(error.status, error.message)
         except (OSError, sqlite3.Error):
-            self.respond(503, {"error": "맥미니 저장소에 접근하지 못했습니다. 입력을 유지하고 다시 시도해 주세요."})
+            self.reply_error(503, "맥미니 저장소에 접근하지 못했습니다. 입력을 유지하고 다시 시도해 주세요.")
+
+    def reply_error(self, status, message):
+        try:
+            self.respond(status, {"error": message})
+        except OSError:
+            self.close_connection = True  # The browser already gave up waiting.
 
     do_GET = do_POST = do_PUT = do_DELETE = do_OPTIONS = handle_request
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("init", "serve", "password", "backup", "restore"), nargs="?", default="serve")
+    parser.add_argument("command", choices=("init", "serve", "password", "backup", "restore", "antigravity-config", "antigravity-test"), nargs="?", default="serve")
     parser.add_argument("username", nargs="?")
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA)
+    parser.add_argument("--allow-record-summaries", action="store_true")
+    parser.add_argument("--agy", type=Path, default=Path.home() / ".local/bin/agy")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--origin", action="append", default=[])
     parser.add_argument("--file", type=Path, help="관리자 복원용 JSON 파일")
     args = parser.parse_args()
     os.umask(0o077)
     store = Store(args.data_dir)
-    if args.command == "init":
+    if args.command in ("antigravity-config", "antigravity-test"):
+        binary = executable(str(args.agy.resolve()))
+        if binary is None:
+            parser.error("--agy로 실행 가능한 Antigravity CLI 경로를 지정해 주세요.")
+        provider = Antigravity(store.directory, binary)
+        try:
+            result = provider.generate("한국어로 솜하우스 연결 확인이라고 한 줄로 답해 주세요.", "none", None)
+        except AntigravityError as error:
+            parser.exit(1, f"{error.message}\n")
+        if args.command == "antigravity-config":
+            save_config(store.directory, binary, args.allow_record_summaries)
+            print(f"{CONFIG_NAME}에 저장했습니다. 솜하우스 서버를 다시 시작해 주세요.")
+        else:
+            print(result["answer"])
+    elif args.command == "init":
         with store.connect() as db:
             if db.execute("SELECT COUNT(*) FROM users").fetchone()[0]:
                 parser.exit(message="계정이 이미 있습니다. 기존 계정과 기록을 유지합니다.\n")

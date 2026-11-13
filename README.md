@@ -11,7 +11,7 @@
 - 로그인하지 않은 상태에서는 기록을 추가·수정·삭제할 수 없습니다.
 - JSON 내보내기·가져오기, 기기 원본 백업·이전, 서버 주소 설정은 사용자 화면에 제공하지 않습니다. 백업·복원은 관리자가 맥에서 수행합니다.
 
-홈의 빠른 기록·오늘 수유 요약, 육아 기록·일정·구매 목록의 검색과 필터를 제공합니다. 수유 용량은 단위가 명시된 기록만 합산합니다. 실제 AI는 아직 연결하지 않았습니다.
+홈의 빠른 기록·오늘 수유 요약, 육아 기록·일정·구매 목록의 검색과 필터를 제공합니다. 수유 용량은 단위가 명시된 기록만 합산합니다. Antigravity CLI를 연결하면 로그인한 가족이 **AI 대화** 탭에서 질문할 수 있습니다.
 
 ## 기존 기록 보존
 
@@ -84,6 +84,31 @@ CORS 허용 출처는 Pages와 지정된 로컬 주소이며, 별도 출처는 `
 
 ## 검증과 다음 단계
 
+### Antigravity CLI 연결
+
+맥미니의 솜하우스 LaunchAgent를 실행하는 macOS 계정에서 Antigravity CLI를 설치하고 빈 작업 폴더에서 `agy`를 실행해 Google 로그인을 마칩니다. 연동은 macOS용 Antigravity CLI 1.5.6의 세션별 설정과 표준 입출력 기능을 사용합니다. Google은 개인 요금제에서 다른 앱이 `agy`를 백엔드로 호출하는 사용을 지원하지 않는다고 안내합니다. [설치와 인증](https://antigravity.google/docs/cli/install), [Google 공식 FAQ](https://antigravity.google/docs/faq)
+
+먼저 개인정보가 없는 고정 질문으로 응답을 확인합니다. `agy` 설치 위치가 다르면 `--agy /절대경로/agy`를 붙입니다.
+
+```sh
+python3 server.py antigravity-test
+```
+
+응답이 확인되면 연결 설정을 저장하고 서비스를 재시작합니다. `antigravity-config`도 같은 연결 확인을 통과한 뒤에만 파일을 저장합니다.
+
+```sh
+python3 server.py antigravity-config
+launchctl kickstart -k "gui/$(id -u)/com.ssoomm.somhouse"
+```
+
+서버는 질문을 CLI의 표준 입력으로 전달합니다. 기본 모델은 `gemini-3.8-flash-medium`입니다. 각 질문은 별도 CLI 프로세스에서 처리합니다. 질문은 Google로 전송되며, Antigravity 계정에 대화 기록이 남을 수 있습니다. AI 도구 권한은 잠그고, CLI 프로세스가 앱 소스와 가족 데이터 폴더를 읽거나 쓰는 작업은 macOS에서 차단합니다. 응답 제한은 45초입니다. 답변을 받지 못하면 서버가 종료 코드와 CLI 오류 요약을 `service-error.log`에 남기며, 질문 내용은 기록하지 않습니다. 계정에서 지정한 모델을 쓸 수 없으면 별도 안내를 표시합니다.
+
+기본 설정은 질문만 전송합니다. 사용 중인 계정의 데이터 처리 조건이 허용할 경우, 관리자는 `python3 server.py antigravity-config --allow-record-summaries`로 가족 기록 집계를 활성화할 수 있습니다. 사용자가 질문마다 집계 하나를 선택하면 서버가 날짜와 숫자만 계산해 포함합니다. 원본 기록, 병원 정보, 메모, 제목과 링크는 집계에 포함되지 않습니다.
+
+`GET /api/ai`는 연결 설정을, `POST /api/ai`는 답변을 반환합니다. 두 경로 모두 가족 로그인이 필요합니다. 기록 변경은 앱의 기존 기록 화면에서 수행합니다.
+
+### 검증
+
 ```sh
 node --test tests/*.test.cjs
 python3 -m unittest discover -s tests -p 'test_*.py' -v
@@ -91,4 +116,6 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 
 JavaScript 검증은 자동 이전·원본 보존·추가/수정/삭제 자동 갱신·양식 유지·통신 실패·로그인 만료를 다룹니다. Python 검증은 임시 DB의 실제 HTTP API·인증·백업·관리자 복원·CORS와 실제 프론트 스크립트 두 세션의 자동 반영을 확인합니다. 이번 변경은 브라우저 제어 제한으로 실제 UI 자동 검증을 수행하지 못했습니다.
 
-서로 다른 기록은 항목별로 저장합니다. 같은 항목은 마지막 저장을 적용합니다. 사용자 요청에 따라 동시 수정 충돌 처리는 가장 마지막으로 미뤘습니다. 다음 큰 작업은 단일 AI 연동이며 공급자·모델·비용은 미정입니다. 자세한 방향은 [SERVICE_PLAN.md](docs/SERVICE_PLAN.md)를 참조하세요.
+Antigravity 연동 테스트는 임시 데이터베이스와 모의 CLI 프로세스로 실행합니다.
+
+서로 다른 기록은 항목별로 저장합니다. 같은 항목은 마지막 저장을 적용합니다. 동시 수정 충돌 처리 순서는 [SERVICE_PLAN.md](docs/SERVICE_PLAN.md)를 참조하세요.

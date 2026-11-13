@@ -13,6 +13,7 @@ function valid(d){
 // The old device key is read only, and is automatically merged after login.
 const shared=window.SomhouseShared?new window.SomhouseShared.Client():null;
 let mode=shared?.token?'shared':'login', sharedReady=false, busy=false, refreshing=false, refreshTask=null, migratedRaw, legacyWarning='', needsRender=false;
+let ai={config:null,checking:false,pending:false};
 function message(text){$('#connection-status').textContent=text;}
 function accountMessage(text){
  const status=$('#account-status');
@@ -26,9 +27,13 @@ function connectionView(){
  document.querySelectorAll('#connection button, #connection input').forEach(el=>el.disabled=busy);
  document.querySelectorAll('#password-form button, #password-form input').forEach(el=>el.disabled=busy);
  document.querySelectorAll('#content button[data-add], #content button[data-action]').forEach(el=>el.disabled=busy||!sharedReady);
+ $('#ai-fields').disabled=!connected||busy||!ai.config?.enabled||ai.checking||ai.pending;
 }
 function showLogin(text){
  shared.clear();mode='login';sharedReady=false;data=empty();migratedRaw=undefined;
+ ai={config:null,checking:false,pending:false};
+ $('#ai-form').reset();$('#ai-scope-field').hidden=true;$('#ai-result').hidden=true;
+ for(const selector of ['#ai-status','#ai-asked','#ai-answer'])$(selector).textContent='';
  for(const dialog of [$('#dialog'),$('#password-dialog')])if(dialog.open)dialog.close();
  accountMessage('');render();message(text);
 }
@@ -112,12 +117,60 @@ function homeView(){
 }
 function filterView(k){const f=filters[k];return `<form id="filter-form" class="filters" aria-label="목록 검색"><label>검색<input name="query" type="search" placeholder="메모, 병원, 품목 검색" value="${esc(f.query||'')}"></label>${k==='records'?`<label>기록 종류<select name="type"><option value="">전체</option><option value="feeding" ${f.type==='feeding'?'selected':''}>수유</option><option value="hospital" ${f.type==='hospital'?'selected':''}>병원</option></select></label>`:''}${k==='shopping'?`<label>구매 상태<select name="status"><option value="">전체</option><option value="pending" ${f.status==='pending'?'selected':''}>구매 예정</option><option value="done" ${f.status==='done'?'selected':''}>구매 완료</option></select></label>`:`<label>시작 날짜<input name="from" type="date" value="${esc(f.from||'')}"></label><label>마지막 날짜<input name="to" type="date" value="${esc(f.to||'')}"></label>`}<button type="submit" class="secondary">검색</button><button type="button" class="plain" data-reset="${k}">초기화</button></form>`}
 function listView(k){const names={records:'소중한 하루를 간단히 남겨보세요.',schedule:'병원 예약과 가족 일정을 관리해요.',shopping:'필요한 물품을 정리해요. 가격 검색과 구매는 아직 연결되지 않았어요.'};const items=Somhouse.filter(sorted(k),filters[k]);return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p><div class="heading"><h2>기록 ${items.length}개</h2><div class="quick">${k==='records'?'<button data-add="feeding">수유 추가</button><button class="secondary" data-add="hospital">병원 추가</button>':`<button data-add="${k}">추가하기</button>`}</div></div>${filterView(k)}${items.map(x=>item(x,k)).join('')||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}`}
+async function checkAI(){
+ const state=ai;
+ if(state.checking||state.pending)return;
+ state.checking=true;connectionView();
+ $('#ai-status').textContent='Antigravity CLI 설정을 확인하고 있어요…';
+ try{
+  const config=await shared.aiStatus();
+  if(ai!==state)return;
+  state.config=config;
+  $('#ai-scope-field').hidden=!config.recordSummaries;
+  if(!config.recordSummaries)$('#ai-scope').value='none';
+  $('#ai-status').textContent=config.enabled?'질문마다 새로 답해요.':'관리자가 맥미니에 Antigravity CLI를 연결하면 질문할 수 있어요.';
+ }catch(error){
+  if(ai!==state)return;
+  state.config=null;
+  if(error.status===401)showLogin(error.message);else $('#ai-status').textContent=error.message;
+ }finally{state.checking=false;connectionView();}
+}
+async function askAI(e){
+ e.preventDefault();
+ const state=ai;
+ if(busy||state.pending||state.checking||!state.config?.enabled||!shared.token)return;
+ const values=new FormData(e.target);
+ const question=values.get('question').trim(),scope=state.config.recordSummaries?values.get('scope'):'none';
+ if(!question){$('#ai-status').textContent='질문을 입력해 주세요.';return;}
+ state.pending=true;connectionView();
+ $('#ai-status').textContent='AI 답변을 기다리고 있어요…';
+ try{
+  const result=await shared.askAI(question,scope);
+  if(ai!==state)return;
+  if(typeof result.answer!=='string'||!result.answer.trim())throw Error('답변을 확인하지 못했어요. 다시 시도해 주세요.');
+  $('#ai-asked').textContent=question;
+  $('#ai-answer').textContent=result.answer;
+  $('#ai-result').hidden=false;
+  $('#ai-question').value='';
+  $('#ai-status').textContent=result.truncated?'답변이 길어 일부만 표시했어요.':'답변을 받았어요.';
+ }catch(error){
+  if(ai!==state)return;
+  if(error.status===401)showLogin(error.message);else $('#ai-status').textContent=error.message;
+ }finally{state.pending=false;connectionView();}
+}
 function render(){
  needsRender=false;
  document.querySelectorAll('nav button').forEach(b=>{const active=b.dataset.page===page;b.classList.toggle('active',active);if(active)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
  document.title=`${pageTitles[page]} · 솜하우스`;
- if(mode!=='shared'||!sharedReady){$('#content').innerHTML='';connectionView();return;}
- $('#content').innerHTML=page==='home'?homeView():page==='ai'?'<h1>AI 대화</h1><section class="card"><h2>AI 연결 준비 중</h2><p>실제 답변은 아직 받을 수 없어요. 단일 AI를 연결한 뒤 이곳에서 기록에 대해 질문할 수 있습니다.</p><textarea disabled placeholder="AI 연결 후 질문할 수 있어요" aria-label="질문 입력"></textarea><div class="actions"><button disabled>보내기</button></div></section>':listView(page);
+ const connected=mode==='shared'&&sharedReady,showAI=connected&&page==='ai';
+ const aiPanel=$('#ai-panel'),openingAI=aiPanel.hidden&&showAI;
+ aiPanel.hidden=!showAI;
+ if(!connected||showAI){
+  $('#content').innerHTML='';connectionView();
+  if(openingAI)checkAI();
+  return;
+ }
+ $('#content').innerHTML=page==='home'?homeView():listView(page);
  connectionView();
  const form=$('#filter-form');if(form)form.onsubmit=e=>{e.preventDefault();const next=Object.fromEntries(new FormData(form));if(next.from&&next.to&&next.from>next.to){alert('시작 날짜는 마지막 날짜보다 늦을 수 없어요.');return}filters[page]=next;render()};
 }
@@ -151,6 +204,7 @@ $('#form').onsubmit=async e=>{
 window.addEventListener('hashchange',route);
 route();
 if(shared){
+ $('#ai-form').onsubmit=askAI;
  $('#login-form').onsubmit=async e=>{
   e.preventDefault();if(busy||refreshing)return;
   const form=e.target,values=new FormData(form);busy=true;connectionView();message('로그인하고 있어요…');
