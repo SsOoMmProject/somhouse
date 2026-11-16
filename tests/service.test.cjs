@@ -43,3 +43,13 @@ test('recent feeding presets are distinct, newest first, and skip future or hosp
   {category:'분유',amount:'120ml'},{category:'모유',amount:'15분'},{category:'혼합',amount:'90ml'}]);
  assert.deepEqual(recentFeedings([],3,now),[]);
 });
+
+test('feeding amounts need a volume or duration unit to become presets',()=>{
+ const {hasFeedingUnit,recentFeedings}=require('../service.js');
+ for(const ok of ['120ml','120 ml','80cc','90 미리','15분','1.5시간'])assert.equal(hasFeedingUnit(ok),true,ok);
+ for(const bad of ['1','2','조금','분','120ml 정도'])assert.equal(hasFeedingUnit(bad),false,bad);
+ const records=[
+  {id:'a',type:'feeding',date:'2026-11-02T12:00',category:'모유',amount:'2'},
+  {id:'b',type:'feeding',date:'2026-11-02T11:00',category:'모유',amount:'15분'}];
+ assert.deepEqual(recentFeedings(records,3,now),[{category:'모유',amount:'15분'}]);
+});

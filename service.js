@@ -36,10 +36,14 @@
       return {date, count: entries.length, ...measuredVolume(entries)};
     });
   }
-  // Distinct recent feeding presets (category + amount), newest first. Future entries are ignored.
+  // A preset is only useful when its amount is unambiguous: a volume (ml, cc, ...) or a duration (분, 시간).
+  function hasFeedingUnit(amount) {
+    return feedingVolume(amount) !== null || /^\s*\d+(?:\.\d+)?\s*(?:분|시간)\s*$/.test(amount);
+  }
+  // Distinct recent feeding presets (category + amount), newest first. Future and unit-less entries are ignored.
   function recentFeedings(records, limit = 3, now = new Date()) {
     const current = localDateTime(now), seen = new Set(), result = [];
-    const feedings = records.filter(x => x.type === 'feeding' && x.date <= current && x.category && x.amount)
+    const feedings = records.filter(x => x.type === 'feeding' && x.date <= current && x.category && x.amount && hasFeedingUnit(x.amount))
       .sort((a, b) => b.date.localeCompare(a.date));
     for (const x of feedings) {
       const amount = x.amount.trim(), key = x.category + '\u0000' + amount;
@@ -58,7 +62,7 @@
       && (!options.to || (x.date || '').slice(0,10) <= options.to)
       && (!options.status || (x.done === 'yes' ? 'done' : 'pending') === options.status));
   }
-  const api = { localDateTime, summary, dailyFeeding, feedingVolume, recentFeedings, filter };
+  const api = { localDateTime, summary, dailyFeeding, feedingVolume, hasFeedingUnit, recentFeedings, filter };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Somhouse = api;
 })(typeof window !== 'undefined' ? window : this);

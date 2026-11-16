@@ -96,3 +96,22 @@ test('healthy Google status is one folded line and is not rewritten while unchan
  assert.match(status.innerHTML,/실패 2건/);
  assert.doesNotMatch(status.innerHTML,/<details/);
 });
+
+test('unit-less feedings show no preset and ask before saving',async()=>{
+ const server=family();
+ server.data.records.push({id:'t1',type:'feeding',date:'2026-01-01T09:00',category:'모유',amount:'2',memo:''});
+ const b=browser({server});await b.login();
+ b.eval("page='home';render()");
+ assert.doesNotMatch(b.get('#content').innerHTML,/data-repeat-category/);
+ const asked=[];b.context.confirm=text=>{asked.push(text);return false;};
+ b.eval("openForm('feeding')");
+ b.get('#form').values={date:'2026-01-02T09:00',category:'모유',amount:'3',memo:''};
+ const before=b.calls.length;
+ await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
+ assert.equal(asked.length,1);assert.match(asked[0],/단위가 없어요/);
+ assert.equal(b.calls.length,before);
+ b.get('#form').values.amount='60ml';
+ await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
+ assert.equal(asked.length,1);
+ assert.ok(b.server.data.records.some(x=>x.amount==='60ml'));
+});
