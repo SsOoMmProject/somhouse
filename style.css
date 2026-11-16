@@ -17,3 +17,5 @@
 .stats-table th:last-child, .stats-table td:last-child {width: 31%;}
 .stats-bar {height: .65rem; background: #efe6dc; border-radius: .4rem; overflow: hidden;}
 .stats-bar span {display: block; height: 100%; background: #815442; border-radius: inherit;}
+.repeat{align-items:center}.repeat .caption{margin:0 4px 0 0;font-weight:600}
+#google-status details{margin-top:6px}#google-status summary{cursor:pointer;min-height:40px;display:flex;align-items:center;color:#536158}

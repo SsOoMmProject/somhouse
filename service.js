@@ -36,6 +36,20 @@
       return {date, count: entries.length, ...measuredVolume(entries)};
     });
   }
+  // Distinct recent feeding presets (category + amount), newest first. Future entries are ignored.
+  function recentFeedings(records, limit = 3, now = new Date()) {
+    const current = localDateTime(now), seen = new Set(), result = [];
+    const feedings = records.filter(x => x.type === 'feeding' && x.date <= current && x.category && x.amount)
+      .sort((a, b) => b.date.localeCompare(a.date));
+    for (const x of feedings) {
+      const amount = x.amount.trim(), key = x.category + '\u0000' + amount;
+      if (!amount || seen.has(key)) continue;
+      seen.add(key);
+      result.push({category: x.category, amount});
+      if (result.length >= limit) break;
+    }
+    return result;
+  }
   function filter(items, options = {}) {
     const query = (options.query || '').trim().toLocaleLowerCase();
     return items.filter(x => (!query || Object.values(x).some(v => String(v).toLocaleLowerCase().includes(query)))
@@ -44,7 +58,7 @@
       && (!options.to || (x.date || '').slice(0,10) <= options.to)
       && (!options.status || (x.done === 'yes' ? 'done' : 'pending') === options.status));
   }
-  const api = { localDateTime, summary, dailyFeeding, feedingVolume, filter };
+  const api = { localDateTime, summary, dailyFeeding, feedingVolume, recentFeedings, filter };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Somhouse = api;
 })(typeof window !== 'undefined' ? window : this);

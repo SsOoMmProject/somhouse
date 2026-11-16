@@ -28,3 +28,18 @@ test('volume unit aliases agree in summaries and daily statistics',()=>{
  }
  for(const amount of ['15분','120','120mg'])assert.equal(feedingVolume(amount),null);
 });
+
+test('recent feeding presets are distinct, newest first, and skip future or hospital entries',()=>{
+ const {recentFeedings}=require('../service.js');
+ const records=[
+  {id:'a',type:'feeding',date:'2026-11-02T09:00',category:'분유',amount:'120ml'},
+  {id:'b',type:'feeding',date:'2026-11-02T12:00',category:'분유',amount:'120ml '},
+  {id:'c',type:'feeding',date:'2026-11-02T11:00',category:'모유',amount:'15분'},
+  {id:'d',type:'feeding',date:'2026-11-02T18:00',category:'분유',amount:'200ml'},
+  {id:'e',type:'hospital',date:'2026-11-02T13:00',hospital:'솜소아과',reason:'예방접종'},
+  {id:'f',type:'feeding',date:'2026-11-01T08:00',category:'혼합',amount:'90ml'},
+  {id:'g',type:'feeding',date:'2026-10-31T08:00',category:'분유',amount:'60ml'}];
+ assert.deepEqual(recentFeedings(records,3,now),[
+  {category:'분유',amount:'120ml'},{category:'모유',amount:'15분'},{category:'혼합',amount:'90ml'}]);
+ assert.deepEqual(recentFeedings([],3,now),[]);
+});
