@@ -6,4 +6,10 @@ __pycache__/
 initial-accounts.txt
 gemini-config.json
 antigravity-config.json
+keep-config.json
+google-records.json
+google-oauth-client.json
+client_secret*.json
+shopping-search.json
+.codex-attachments/
 .local-data/

@@ -8,16 +8,24 @@ import mimetypes
 import os
 from pathlib import Path
 import secrets
+import sys
 import sqlite3
+import subprocess
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
 from antigravity import (CONFIG_NAME, SCOPES, Antigravity, AntigravityError,
                          executable, parse_question, save_config, summarize_records)
+from google_records import GoogleRecords, SCHEMA as GOOGLE_SCHEMA, load_config as load_google_config
+from calendar_records import SCHEMA as CALENDAR_SCHEMA
+from shopping_records import SCHEMA as SHOPPING_SCHEMA
+from google_delivery import SCHEMA as DELIVERY_SCHEMA
+from keep_sync import (CONFIG_NAME as KEEP_CONFIG_NAME, SCHEMA as KEEP_SCHEMA,
+                       KeepSync, configured_email, queue as queue_keep)
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA = Path.home() / "Library/Application Support/Somhouse"
@@ -102,7 +110,22 @@ class Store:
                 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, username TEXT NOT NULL, expires REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS items(kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id));
                 CREATE TABLE IF NOT EXISTS imports(kind TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(kind,fingerprint));
-            """)
+            """ + KEEP_SCHEMA + GOOGLE_SCHEMA + CALENDAR_SCHEMA + SHOPPING_SCHEMA + DELIVERY_SCHEMA)
+            for table, column, definition in (
+                ("google_voice_receipts", "captured", "TEXT"),
+                ("google_calendar_inputs", "review", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if column not in {row[1] for row in db.execute(f"PRAGMA table_info({table})")}:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+                    if column == "captured":
+                        db.execute("""UPDATE google_voice_receipts SET captured=(
+                            SELECT MIN(captured) FROM google_record_events e
+                            WHERE e.binding=google_voice_receipts.binding AND e.voice_id=google_voice_receipts.voice_id)""")
+                    else:
+                        db.execute("""UPDATE google_calendar_inputs SET review=COALESCE((
+                            SELECT status LIKE '확인 필요%' OR status='웹 기록 유지' FROM google_record_events e
+                            WHERE e.binding=google_calendar_inputs.binding AND e.item_id=google_calendar_inputs.item_id
+                            AND e.source='calendar' ORDER BY seq DESC LIMIT 1),0)""")
         self.path.chmod(0o600)
 
     @contextmanager
@@ -120,16 +143,37 @@ class Store:
             data[kind].append(json.loads(body))
         return data
 
-    def snapshot(self, db):
+    def snapshot(self, db, *, automatic=True):
         folder = self.directory / "backups"
         folder.mkdir(exist_ok=True, mode=0o700)
-        path = folder / (time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(6) + ".json")
+        path = folder / (("auto-" if automatic else "") + time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(6) + ".json")
         with path.open("x", encoding="utf-8") as file:
             path.chmod(0o600)
             file.write(encode(self.state(db)))
             file.flush()
             os.fsync(file.fileno())
+        if automatic:
+            self.prune_snapshots(folder, path)
         return path
+
+    @staticmethod
+    def prune_snapshots(folder, newest):
+        # Explicit backups and legacy filenames are never removed automatically.
+        try:
+            files = sorted(folder.glob("auto-????????-??????-????????????.json"),
+                           key=lambda path: path.stat().st_mtime_ns, reverse=True)
+            keep = set(files[:100]) | {newest}
+            days = set()
+            cutoff = time.time() - 30 * 86400
+            for path in files:
+                day = path.name[5:13]
+                if path.stat().st_mtime >= cutoff and day not in days:
+                    keep.add(path)
+                    days.add(day)
+                if path not in keep:
+                    path.unlink()
+        except OSError:
+            print("자동 백업 정리 실패: 파일 접근 권한과 디스크를 확인해 주세요.", file=sys.stderr, flush=True)
 
     def password(self, username, password):
         with self.lock, self.connect() as db:
@@ -215,6 +259,19 @@ class FamilyServer(ThreadingHTTPServer):
                                        f"http://localhost:{port}", "http://127.0.0.1:8765", "http://localhost:8765"}
         self.failures = []
         self.login_lock = threading.Lock()
+        self.google = GoogleRecords.load(store)
+        self.keep = KeepSync.load(store) if self.google is None and not (store.directory / "google-records.json").exists() else None
+
+    def serve_forever(self, poll_interval=0.5):
+        sync = self.google or self.keep
+        if sync is not None:
+            threading.Thread(target=sync.run, daemon=True).start()
+        try:
+            super().serve_forever(poll_interval)
+        finally:
+            if sync is not None:
+                sync.stop.set()
+                sync.wake.set()
 
     @contextmanager
     def credential_attempt(self, failure_status):
@@ -354,8 +411,14 @@ class Handler(BaseHTTPRequestHandler):
                     result = {"ok": True}
                 elif path == "/api/data" and self.command == "GET":
                     result = {"data": store.state(db)}
+                    if self.server.google is not None:
+                        result["sources"] = self.server.google.sources()
+                        result["google_status"] = self.server.google.status(db)
                 elif path == "/api/merge" and self.command == "POST":
                     result = store.merge(db, self.body())
+                    if self.server.google is not None:
+                        result["sources"] = self.server.google.sources()
+                        result["google_status"] = self.server.google.status(db)
                 elif path.startswith("/api/items/"):
                     parts = path.split("/")
                     if len(parts) != 5 or parts[3] not in KINDS or self.command not in ("PUT", "DELETE"):
@@ -367,15 +430,31 @@ class Handler(BaseHTTPRequestHandler):
                         item = validate_item(kind, self.body())
                         if item["id"] != item_id:
                             raise Problem(400, "기록 ID가 일치하지 않습니다.")
+                        body = encode(item)
                         store.snapshot(db)
-                        db.execute("INSERT INTO items VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body", (kind, item_id, encode(item)))
+                        db.execute("INSERT INTO items VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body", (kind, item_id, body))
                     else:
+                        body = None
+                        item = None
+                        if self.server.google is not None:
+                            row = db.execute("SELECT body FROM items WHERE kind=? AND id=?", (kind, item_id)).fetchone()
+                            item = json.loads(row[0]) if row else None
                         store.snapshot(db)
                         db.execute("DELETE FROM items WHERE kind=? AND id=?", (kind, item_id))
+                    if self.server.google is not None:
+                        self.server.google.queue(db, kind, item_id, item, "save" if body is not None else "delete")
+                    elif self.server.keep is not None:
+                        queue_keep(db, self.server.keep.email, kind, item_id, body)
                     result = {"data": store.state(db)}
                 else:
                     raise Problem(404, "API를 찾을 수 없습니다.")
             # Only acknowledge a change after the SQLite context has committed it.
+            if (path in ("/api/data", "/api/merge") and self.server.google is None
+                    and (store.directory / "google-records.json").exists()):
+                result["google_status"] = {"auth_state": "configuration_error", "services": {}, "review": 0, "errors": []}
+            sync = self.server.google or self.server.keep
+            if sync is not None and path.startswith("/api/items/"):
+                sync.wake.set()
             self.respond(200, result)
         except (Problem, AntigravityError) as error:
             self.reply_error(error.status, error.message)
@@ -391,9 +470,49 @@ class Handler(BaseHTTPRequestHandler):
     do_GET = do_POST = do_PUT = do_DELETE = do_OPTIONS = handle_request
 
 
+def keep_status(directory):
+    email = configured_email(directory)
+    if email is None:
+        print("Google Keep: 비활성 (유효한 연결 설정 없음)")
+        return
+    path = directory / "somhouse.sqlite3"
+    if not path.is_file():
+        raise SystemExit("Google Keep 설정은 있지만 솜하우스 SQLite 파일을 찾지 못했습니다.")
+    with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+        exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='keep_pending'").fetchone()
+        pending = db.execute("SELECT COUNT(*) FROM keep_pending WHERE email=?", (email,)).fetchone()[0] if exists else 0
+    print(f"Google Keep: 연결 설정 있음 · 이 계정의 대기 작업 {pending}건")
+    print("설정은 서버 시작 시 적용됩니다. 실제 연결 확인은 keep-test를 사용하세요.")
+
+
+def google_status(directory):
+    config = load_google_config(directory)
+    if config is None:
+        print("Google Tasks·Sheets: 비활성 (유효한 연결 설정 없음)")
+        return
+    path = directory / "somhouse.sqlite3"
+    if not path.is_file():
+        raise SystemExit("Google 설정은 있지만 솜하우스 SQLite 파일을 찾지 못했습니다.")
+    store = Store(directory)
+    bridge = GoogleRecords(store, config)
+    with store.connect() as db:
+        status = bridge.status(db)
+    print("Google 인증: " + ("재연결 필요" if status["auth_state"] == "reconnect_required" else "연결 설정 있음"))
+    for name, state in status["services"].items():
+        print(f"{name}: 미전송 {state['pending']}건 · 재시도 {state['retrying']}건 · 실패 격리 {state['failed']}건 · 마지막 성공 {state['last_success'] or '없음'}")
+        if state["last_error"]:
+            print(f"  마지막 오류: {state['last_error']}")
+    print(f"음성 확인 필요: {status['review']}건 (Tasks + Calendar)")
+    for error in status["errors"]:
+        print(f"{error['target']}: {error['last_error']}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("init", "serve", "password", "backup", "restore", "antigravity-config", "antigravity-test"), nargs="?", default="serve")
+    parser.add_argument("command", choices=("init", "serve", "password", "backup", "restore",
+                        "antigravity-config", "antigravity-test", "keep-config", "keep-test", "keep-status",
+                        "google-status", "google-retry", "google-backfill"),
+                        nargs="?", default="serve")
     parser.add_argument("username", nargs="?")
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA)
     parser.add_argument("--allow-record-summaries", action="store_true")
@@ -403,8 +522,42 @@ def main():
     parser.add_argument("--file", type=Path, help="관리자 복원용 JSON 파일")
     args = parser.parse_args()
     os.umask(0o077)
+    if args.command == "keep-status":
+        keep_status(args.data_dir)
+        return
+    if args.command == "google-status":
+        google_status(args.data_dir)
+        return
+    if args.command in ("google-retry", "google-backfill"):
+        store = Store(args.data_dir)
+        bridge = GoogleRecords.load(store)
+        if bridge is None:
+            parser.error("먼저 Google 계정을 연결해 주세요.")
+        with store.lock, store.connect() as db:
+            if args.command == "google-retry":
+                count = db.execute("DELETE FROM google_delivery_retries WHERE binding=?", (bridge.binding,)).rowcount
+                db.execute("UPDATE google_service_state SET attempts=0,next_retry_at=0 WHERE binding=?", (bridge.binding,))
+                print(f"전송 {count}건을 재시도 대기열로 돌렸습니다. 재연결 필요 상태는 계정을 다시 연결해야 해제됩니다.")
+            else:
+                count = bridge.backfill(db)
+                print(f"기존 기록 {count}건을 전송 대기열에 추가했습니다. 서버 worker가 자동 전송합니다.")
+        return
     store = Store(args.data_dir)
-    if args.command in ("antigravity-config", "antigravity-test"):
+    if args.command in ("keep-config", "keep-test"):
+        try:
+            keep = KeepSync(store, args.username)
+        except ValueError:
+            parser.error("Google Keep 계정 이메일을 지정해 주세요.")
+        try:
+            if args.command == "keep-config":
+                keep.configure()
+                print(f"{KEEP_CONFIG_NAME}에 저장했습니다. 솜하우스 서버를 다시 시작해 주세요.")
+            else:
+                keep.probe()
+                print("Google Keep에서 분유 120ml 시험 메모를 다시 읽고 휴지통으로 보냈습니다.")
+        except (OSError, RuntimeError, sqlite3.Error, subprocess.SubprocessError):
+            parser.exit(1, "Google Keep 연결을 확인하지 못했습니다. 전용 Python 환경과 키체인 항목을 확인해 주세요.\n")
+    elif args.command in ("antigravity-config", "antigravity-test"):
         binary = executable(str(args.agy.resolve()))
         if binary is None:
             parser.error("--agy로 실행 가능한 Antigravity CLI 경로를 지정해 주세요.")
@@ -432,7 +585,7 @@ def main():
         print(f"가족 계정 두 개를 생성했습니다. 로그인 정보: {path}")
     elif args.command == "backup":
         with store.lock, store.connect() as db:
-            path = store.snapshot(db)
+            path = store.snapshot(db, automatic=False)
         print(f"관리자 백업 완료: {path}")
     elif args.command == "restore":
         if not args.file:

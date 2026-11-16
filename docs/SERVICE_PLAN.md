@@ -29,15 +29,21 @@
 
 AI가 기록을 추가·수정하는 기능을 확장할 때 사용자 확인을 포함한다.
 
-## 네스트 음성 기록 검토
+## 네스트 음성 기록과 원본 시트
 
-- 한국어로 사용하는 네스트 허브 2세대가 대상이다. Home Assistant 서버 설치 여부와 주소를 확인한다.
-- 네스트에서 추가한 기록도 기존 가족 저장소에 저장해 두 휴대폰에 자동으로 반영한다.
-- 먼저 네스트에서 한국어 음성으로 만든 할 일에 기록 종류와 수량이 남는지 확인한다. 문구가 보존되면 Google Tasks의 읽기 전용 권한으로 시험 항목을 가져와 해석한다.
-- Home Assistant에서는 Google에 노출한 기기·장면 제어와 자유 문장 전달을 별도로 검증한다. Google의 Conversational Actions는 종료됐다. [Google 음성 Tasks](https://support.google.com/googlehome/answer/16722329?hl=ko), [Home Assistant 연동](https://www.home-assistant.io/integrations/google_assistant/), [Conversational Actions 종료](https://developers.google.com/assistant/ca-sunset)
+네스트 허브의 음성 입력은 Google Tasks로 받고, 일반 Google 계정에 공식 데스크톱 OAuth로 Tasks와 Sheets를 연결한다. SQLite는 가족 웹 기록과 전송 이력을 보관한다.
+
+- 웹의 저장과 전송 대기 작업을 SQLite의 한 트랜잭션에 기록한다. Tasks에는 전용 목록에 해당 기록을 복사하고, Sheets에는 각 저장·삭제 이벤트의 원본 데이터를 남긴다.
+- 네스트가 쓰는 Tasks 목록에는 음성 인식 결과가 남는다. 정해진 접두어가 붙은 할 일만 가져와, 해석이 확실하면 웹의 수유·병원·일정·구매 화면에 반영한다. 시트에는 해석 전 제목과 Task 데이터를 남긴다.
+- Task ID로 음성 중복 등록을 막고, Google 장애가 나면 SQLite에 남긴 이벤트를 대상별로 재시도한다. 원본 시트의 각 행은 이벤트 ID에 대응한다.
+- 웹에서는 정리된 기록과 요약을 보여 주고, Google 권한이 있는 가족은 링크로 원본 시트나 Tasks를 열 수 있다.
+- 네스트에서 Calendar로 만든 일회성 수유 일정은 제목과 시작 시각으로 해석한다. 웹과 Tasks의 수유 기록은 앱이 만든 전용 수유 캘린더에 표시한다. 기본 캘린더의 원래 일정과 앱 복사본을 분리한다.
+- 장보기 음성으로 만든 Tasks는 구매 목록으로 가져오고 원래 Task에 가격 검색 링크를 덧붙인다. 상품과 규격을 지정하고 검색 키를 연결하면 확인 가능한 결과의 표시가를 비교한다.
+
+코드와 모의 검증이 준비됐다. 운영 적용 전 한국어 네스트 실기기가 제목을 보존하는지 확인하고, 운영 Google 계정의 OAuth 동의 후 가짜 수유 한 건을 네스트와 웹에서 각각 입력해 전송과 재조회를 검증한다. [연결 절차](../README.md#네스트-허브google-tasks원본-시트-연결)
 
 ## 마지막: 동시 수정 충돌 처리
 
 같은 기록의 동시 수정 감지, 충돌 안내와 사용자의 버전 선택을 추가한다.
 
-Google Calendar/Keep 및 기존 SsOoMm AI 확장은 별도로 검토한다.
+기존 SsOoMm AI 확장은 별도로 검토한다.

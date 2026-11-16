@@ -48,7 +48,7 @@ python3 server.py password family1
 
 ## 관리자 백업·복원
 
-서버는 기록 변경 전에 전용 폴더의 `backups/`에 JSON을 자동 보관합니다. 백업 생성에 실패하면 기록을 변경하지 않습니다. 백업 파일은 웹으로 제공하지 않습니다.
+서버는 기록 변경 전에 전용 폴더의 `backups/`에 JSON을 자동 보관합니다. 백업 생성에 실패하면 기록을 변경하지 않습니다. 백업 파일은 웹으로 제공하지 않습니다. 새 자동 백업은 최근 100개와 최근 30일의 날짜별 마지막 1개를 보관합니다. 관리자 `backup` 명령의 백업과 기존 이름의 백업은 자동 정리하지 않습니다.
 
 수동 백업:
 
@@ -84,6 +84,66 @@ CORS 허용 출처는 Pages와 지정된 로컬 주소이며, 별도 출처는 `
 
 ## 검증과 다음 단계
 
+### 네스트 허브·Google Tasks·원본 시트 연결
+
+웹은 SQLite에서 정리한 기록으로 검색과 요약을 보여 줍니다. 설정을 켜면 웹에서 새로 저장하거나 수정한 수유·병원·일정·구매 기록이 Google Tasks의 **솜하우스 웹 기록** 목록과 Google Sheets의 **솜하우스 원본 기록**에도 반영됩니다. Google 장애 시에도 가족 웹은 SQLite에 저장하고 대상별로 전송을 재시도합니다. 웹 삭제는 원본 시트에 삭제 이력을 남기고 해당 웹 복사본을 Tasks에서 삭제 표시 후 완료 처리합니다.
+
+네스트에서 만든 할 일은 Google Tasks의 음성 입력 목록(기본값은 기본 할 일 목록)으로 들어옵니다. 약 30초마다 제목이 **솜하우스**로 시작하거나 아래 장보기 형식에 맞는 할 일을 가져옵니다. 정상 해석된 기록은 SQLite에 추가되고, 인식된 제목과 원본 Task 데이터는 시트에 기록됩니다. 해석하기 어려운 문구는 시트에 **확인 필요**로 표시되고 웹 집계에는 포함되지 않습니다. 확인이 필요한 할 일의 제목을 수정하면 다시 해석합니다. 등록된 음성 기록을 웹에서 수정해도 원래 음성 Task의 제목은 보존됩니다. 최초 연결 시 지정한 목록의 기존 제목도 검사합니다.
+
+Google Home에서 네스트의 Voice Match와 개인 검색 결과를 켜고, 음성 입력에 쓰는 Google 계정을 확인하세요. **“헤이 구글, 할 일 만들어 줘”**라고 말하고 제목을 물으면 아래처럼 말해 보세요. 실기기의 한국어 인식 결과는 먼저 휴대폰 Tasks에서 확인해야 합니다. [Google Home의 할 일 안내](https://support.google.com/googlehome/answer/16722329?hl=ko)
+
+| Tasks에 남아야 할 제목 예시 | 저장되는 기록 |
+| --- | --- |
+| 솜하우스 수유 분유 120 밀리리터 | 분유 120ml |
+| 솜하우스 수유 모유 15 분 | 모유 15분 |
+| 솜하우스 병원 솜소아과 이유 예방접종 | 병원 방문 |
+| 솜하우스 일정 2026년 11월 20일 오후 2시 예방접종 | 지정 일시의 일정 |
+| 솜하우스 구매 물티슈 수량 2개 | 구매 항목 |
+
+수유와 병원 기록에는 처음 가져왔을 때의 Tasks 수정 시각을 서울 시각으로 저장합니다. Google이 시각을 제공하지 않으면 최초 수집 시각을 사용합니다. 확인이 필요한 제목을 나중에 고쳐도 이 기준 시각을 유지합니다. 수유는 `솜하우스 수유 분유 120cc 오후 3시`처럼 말한 시각도 받을 수 있습니다. `ml`, `밀리리터`, `미리`, `cc`, `씨씨`는 같은 용량 단위로 처리합니다. 실제 수유나 방문 시각과 다르면 웹에서 수정하세요. 일정은 제목에 날짜와 시간이 모두 있어야 합니다. Tasks API의 예정 날짜는 시각을 제공하지 않습니다. [Tasks 필드 명세](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks)
+
+관리자 연결은 다음 순서로 합니다.
+
+1. Google Cloud Console에서 프로젝트를 선택하고 **Google Tasks API**, **Google Sheets API**, **Google Calendar API**를 사용 설정합니다. [Tasks API 설정](https://developers.google.com/workspace/tasks/quickstart/python#set_up_your_environment) · [Sheets API 설정](https://developers.google.com/workspace/sheets/api/quickstart/python#set_up_your_environment) · [Calendar API 설정](https://developers.google.com/workspace/calendar/api/quickstart/python#set_up_your_environment)
+2. **Google Auth Platform → 잠재고객(Audience)**에서 개인 Gmail은 **외부(External)**를 선택하고, 테스트 사용자에 네스트와 같은 계정을 등록합니다. **클라이언트(Clients) → 클라이언트 만들기 → 데스크톱 앱**을 선택해 JSON을 맥에 다운로드합니다. [동의 화면](https://developers.google.com/workspace/guides/configure-oauth-consent) · [데스크톱 OAuth 사용자 인증 정보](https://developers.google.com/workspace/guides/create-credentials#desktop-app)
+3. 아래 명령을 실행하고 브라우저에서 네스트와 같은 계정으로 직접 로그인해 권한을 승인합니다. 솜하우스는 별도의 웹 기록 Tasks 목록과 원본 시트를 만들고, OAuth 갱신 토큰을 권한이 제한된 맥미니 데이터 폴더에 저장합니다. 같은 Google 계정으로 재연결하면 기존 목록, 시트, 대기 작업을 유지합니다.
+
+```sh
+python3 -m venv .local-data/google-venv
+.local-data/google-venv/bin/python -m pip install google-auth-oauthlib==1.4.1
+.local-data/google-venv/bin/python scripts/connect_google_records.py --client "$HOME/Downloads/google-oauth-client.json" --calendar
+launchctl kickstart -k "gui/$(id -u)/com.ssoomm.somhouse"
+python3 server.py google-status
+```
+
+명령의 JSON 경로는 실제 다운로드한 파일 이름으로 바꿉니다. 음성이 기본 목록이 아닌 다른 목록으로 들어가면 연결 스크립트의 `--list-inboxes`로 목록 ID를 확인한 뒤 `--inbox 목록_ID`를 붙여 다시 연결하세요. OAuth 앱이 **테스트 중**이면 Google이 갱신 토큰을 7일 뒤 만료시킵니다. [Google 토큰 만료 안내](https://developers.google.com/identity/protocols/oauth2#expiration)
+
+가족 웹에 로그인하면 **원본 시트**와 **Google Tasks** 링크, 대상별 미전송·재시도·실패 건수와 마지막 전송 시각이 표시됩니다. OAuth 갱신이 `invalid_grant`로 거절되면 **재연결 필요**를 표시하고 Google 요청을 중지합니다. 같은 설정으로 재시작해도 중지를 유지하며, 연결 명령으로 새 토큰을 받은 뒤 서버를 재시작해야 합니다. 가족과 원본을 공유하려면 담당자가 원본 시트를 해당 가족 Google 계정에 **뷰어**로 공유합니다. Tasks는 연결 계정의 목록입니다. 원본 탭에는 편집 경고 보호를 설정합니다. 행 충돌이나 응답 유실 후에는 이벤트 ID로 기존 행을 확인하고, 없는 이벤트만 원격 마지막 행과 로컬 예약 행 뒤에 배정합니다. 편집 경고는 동시 수정을 차단하지 않으므로 직접 정렬보다는 별도 복사본이나 필터 보기를 사용하세요. 병원 방문 사유와 메모도 원본에 포함됩니다.
+
+활성화 전에는 기존 웹 기록을 일괄 복사하지 않습니다. 기존 기록은 웹에서 다시 저장하거나 관리자가 `python3 server.py google-backfill`을 실행할 때 복사됩니다. backfill은 항목 ID와 내용 해시로 같은 내용을 반복 예약하지 않습니다. 각 전송은 30초부터 지수 백오프로 재시도하며, 5회 실패하면 격리하고 다음 기록을 계속 전송합니다. 원인 해결 후 `python3 server.py google-retry`로 실패·재시도 항목을 다시 대기열에 넣을 수 있습니다. 이 명령은 인증 만료를 해제하지 않습니다. `google-status`로 대상별 전송 대기와 음성 확인 필요 건수를 보고, `service-error.log`에서 동기화 오류를 확인할 수 있습니다. 연결을 끄려면 전용 데이터 폴더의 `google-records.json`을 비공개 위치로 옮기고 서버를 재시작하세요.
+
+### Calendar로 수유 기록 확인
+
+연결할 때 `--calendar`를 붙이면 **기본 캘린더를 읽을 권한**과 앱이 만드는 별도 캘린더 **솜하우스 수유**를 관리할 권한을 요청합니다. Tasks·Sheets가 이미 연결돼 있어도 같은 계정으로 이 명령을 다시 실행해 권한을 추가할 수 있습니다. [Google Calendar 권한 범위](https://developers.google.com/workspace/calendar/api/auth)
+
+- 네스트에 **“헤이 구글, 내 캘린더에 일정 추가해 줘”**라고 요청하고, 이름을 물으면 **“솜하우스 수유 분유 120 밀리리터”**라고 말하세요. 날짜와 시작 시간은 실제 수유 시각을 답합니다. 그 일정의 제목과 시작 시간이 SQLite 수유 기록과 Sheets 원본 이력에 들어갑니다. 여러 번 조회해도 같은 일정 ID는 같은 수유 기록입니다. 종일이거나 양을 알 수 없는 일회성 수유 일정, 미래 시각의 수유 일정은 시트에 **확인 필요**로 남기며 수유 집계에 넣지 않습니다. 미래 일정은 시간이 지나도 자동으로 실제 수유가 되지 않으며 제목·시각을 확인해 수정해야 합니다. [네스트에서 일정 추가](https://support.google.com/googlehome/answer/7029002?hl=ko)
+- 웹이나 Tasks에서 새로 저장한 수유는 **솜하우스 수유** 캘린더에 복사됩니다. 앱에서 만든 복사본은 웹 수정·삭제에 맞춰 갱신됩니다. 네스트가 기본 캘린더에 만든 일정은 그곳에서 그대로 볼 수 있습니다. 기본 캘린더의 수유 일정을 고치면 웹에 직접 수정한 내용이 없는 경우에만 그 기록을 갱신합니다. `솜하우스` 태그를 제거하거나 일정을 삭제하면 웹에서 수정하지 않은 자동 수집 기록을 철회합니다. 웹 수정본은 보존하고 확인 필요 건수에 포함합니다. 처음에는 지난 7일부터의 일정을 확인합니다.
+- 휴대폰 Google Calendar 앱의 **☰ 메뉴**에서 **기본 캘린더**와 **솜하우스 수유**를 모두 표시하세요. Android 홈 화면의 **Calendar 월간 보기** 위젯에서 지나간 날짜의 기록도 확인할 수 있습니다. **캘린더 일정** 위젯은 예정된 항목 중심입니다. [Android Calendar 위젯](https://support.google.com/calendar/answer/10249848?co=GENIE.Platform%3DAndroid&hl=ko) · [iPhone Calendar 위젯](https://support.google.com/calendar/answer/10249848?co=GENIE.Platform%3DiOS&hl=ko)
+
+### 음성 장보기와 가격 링크
+
+네스트에서 할 일을 만들고 제목으로 **“기저귀 구매”**라고 말하세요. Tasks에 **기저기 구매**라고 저장돼도 웹 구매 목록에는 **기저귀**로 정리합니다. 태그 없이 **구매** 또는 **구입** 표현으로 끝난 미완료 할 일은 관리자가 등록한 상품 별칭과 일치할 때만 가져옵니다. 등록되지 않은 상품은 **솜하우스 구매 …**로 명시해야 합니다. `보험 구매`, `선물 구입하기` 같은 태그 없는 개인 할 일은 가져오지 않습니다. 원래 Task 제목과 기존 메모는 보존하고, 같은 Task의 메모에 **가격비교** 링크를 덧붙입니다.
+
+상품, 단계, 포장 매수를 지정하면 설정한 SerpApi에서 검색해 규격과 일치하는 원화 상품 결과 중 가장 낮은 표시가와 링크를 넣습니다. 결과에는 조회 시각이 남습니다. 배송비·쿠폰·옵션은 표시가 비교에 포함되지 않으며, 조건이 모호하면 쇼핑 검색 링크와 상태를 남깁니다. 검색 연결 실패는 백오프로 재시도하고 반복 실패를 연동 상태에 표시합니다. 체중 범위와 `1팩` 표기는 허용하지만 다른 단계·매수와 추가 묶음 상품은 제외합니다. 숫자 가격은 `extracted_price`를 우선 쓰되 원화 표시도 확인합니다. 네이버의 기존 쇼핑 검색 API는 종료됐습니다. [SerpApi 상품 검색 명세](https://serpapi.com/shopping-results) · [네이버 종료 공지](https://developers.naver.com/notice/article/32564)
+
+**“기저귀 구매”**만으로 평소 상품을 찾으려면 아래 예시의 상품명을 실제 사용하는 제품으로 바꾸고 별칭을 등록하세요. SerpApi 키는 숨김 입력으로 등록하며, 검색에는 상품 검색어만 사용합니다. 서버를 재시작하면 새 장보기 Task에 적용됩니다.
+
+```sh
+python3 scripts/configure_shopping.py --set-key
+python3 scripts/configure_shopping.py --alias 기저귀 --product '예시브랜드 기저귀 4단계 40매'
+launchctl kickstart -k "gui/$(id -u)/com.ssoomm.somhouse"
+```
+
 ### Antigravity CLI 연결
 
 맥미니의 솜하우스 LaunchAgent를 실행하는 macOS 계정에서 Antigravity CLI를 설치하고 빈 작업 폴더에서 `agy`를 실행해 Google 로그인을 마칩니다. 연동은 macOS용 Antigravity CLI 1.5.6의 세션별 설정과 표준 입출력 기능을 사용합니다. Google은 개인 요금제에서 다른 앱이 `agy`를 백엔드로 호출하는 사용을 지원하지 않는다고 안내합니다. [설치와 인증](https://antigravity.google/docs/cli/install), [Google 공식 FAQ](https://antigravity.google/docs/faq)
@@ -116,6 +176,12 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 
 JavaScript 검증은 자동 이전·원본 보존·추가/수정/삭제 자동 갱신·양식 유지·통신 실패·로그인 만료를 다룹니다. Python 검증은 임시 DB의 실제 HTTP API·인증·백업·관리자 복원·CORS와 실제 프론트 스크립트 두 세션의 자동 반영을 확인합니다. 이번 변경은 브라우저 제어 제한으로 실제 UI 자동 검증을 수행하지 못했습니다.
 
-Antigravity 연동 테스트는 임시 데이터베이스와 모의 CLI 프로세스로 실행합니다.
+Antigravity 연동 테스트는 임시 데이터베이스와 모의 CLI 프로세스로 실행합니다. Google 기록 연동은 임시 SQLite, 실제 로컬 기록 API 및 모의 Tasks·Sheets·Calendar·가격 검색 응답으로 저장, 원문 보존, 재시도와 중복 방지를 검증합니다.
 
 서로 다른 기록은 항목별로 저장합니다. 같은 항목은 마지막 저장을 적용합니다. 동시 수정 충돌 처리 순서는 [SERVICE_PLAN.md](docs/SERVICE_PLAN.md)를 참조하세요.
+
+### 수유 통계와 리뷰 반영
+
+수유 통계 탭은 SQLite 가족 기록으로 최근 7일·30일의 일별 횟수와 용량을 보여 줍니다. PR #4의 계산과 표를 재사용했고, 별도 서비스 계정·전체 Sheets 권한·수동 동기화 API는 추가하지 않았습니다. 원본 이력을 보존하는 현재 OAuth worker를 계속 사용합니다.
+
+리뷰의 채택·수정·보류 판단과 검증 범위는 [REVIEW_RESPONSE.md](docs/REVIEW_RESPONSE.md)에 정리했습니다.

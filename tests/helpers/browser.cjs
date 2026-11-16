@@ -26,7 +26,7 @@ function browser({raw=JSON.stringify(blank()),session=null,local=new Map([['somh
    server.data[kind]=server.data[kind].filter(x=>x.id!==item.id);server.data[kind].push(clone(item));result={data:clone(server.data)};
   }else if(options.method==='DELETE'){
    const parts=url.split('/'),kind=parts.at(-2),id=decodeURIComponent(parts.at(-1));server.data[kind]=server.data[kind].filter(x=>x.id!==id);result={data:clone(server.data)};
-  }else result={data:clone(server.data)};
+  }else result={data:clone(server.data),sources:server.sources,google_status:server.googleStatus};
   if(url.endsWith('/api/data')&&server.readGate){const gate=server.readGate;server.readGate=null;await gate;}
   return {ok:true,json:async()=>result};
  }};

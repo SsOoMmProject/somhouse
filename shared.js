@@ -12,7 +12,7 @@
   }
   class Client {
     constructor() {
-      this.base = ''; this.token = ''; this.username = '';
+      this.base = ''; this.token = ''; this.username = ''; this.sources = null; this.googleStatus = null;
       try {this.base = serverURL(root.SOMHOUSE_API_URL);} catch {}
       if (['localhost', '127.0.0.1'].includes(location.hostname)) this.base = 'http://127.0.0.1:8787';
       try { this.base = serverURL(localStorage.getItem(SERVER)); } catch {}
@@ -47,7 +47,7 @@
     async login(base, username, password) {
       base = serverURL(base);
       const result = await this.request('/api/login', 'POST', {username, password}, base, '');
-      this.base = base; this.token = result.token; this.username = result.username;
+      this.base = base; this.token = result.token; this.username = result.username; this.sources = null; this.googleStatus = null;
       try {localStorage.setItem(SERVER, base);} catch {}
       this.remember();
     }
@@ -63,7 +63,7 @@
     }
     clear() {
       const token = this.token;
-      this.token = ''; this.username = '';
+      this.token = ''; this.username = ''; this.sources = null; this.googleStatus = null;
       for (const name of ['localStorage', 'sessionStorage']) {
         try {
           const storage = root[name];
@@ -90,10 +90,18 @@
     async askAI(question, scope) {
       return this.request('/api/ai', 'POST', {question, scope}, this.base, this.token, 50000);
     }
-    async load() {return (await this.request('/api/data')).data;}
+    async load() {
+      const token = this.token, result = await this.request('/api/data');
+      if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null;}
+      return result.data;
+    }
     async put(kind, item) {return (await this.request('/api/items/' + kind + '/' + encodeURIComponent(item.id), 'PUT', item)).data;}
     async remove(kind, id) {return (await this.request('/api/items/' + kind + '/' + encodeURIComponent(id), 'DELETE')).data;}
-    async merge(data) {return this.request('/api/merge', 'POST', data);}
+    async merge(data) {
+      const token = this.token, result = await this.request('/api/merge', 'POST', data);
+      if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null;}
+      return result;
+    }
   }
   const api = {Client, serverURL};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
