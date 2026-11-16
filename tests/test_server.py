@@ -13,11 +13,14 @@ import time
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
+from urllib.parse import unquote
 from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from server import FamilyServer, Store
 from antigravity import CONFIG_NAME, MODEL, Antigravity, save_config
+from google_records import GoogleAPI, GoogleError, GoogleRecords, TAB
+from keep_sync import KeepSync
 
 
 class FamilyAPI(unittest.TestCase):
@@ -41,7 +44,11 @@ class FamilyAPI(unittest.TestCase):
 
     def setUp(self):
         with self.store.connect() as db:
-            for table in ("items", "imports", "sessions"):
+            for table in ("items", "imports", "sessions", "keep_pending", "keep_notes", "google_record_events",
+                          "google_voice_receipts", "google_task_links", "google_inbox_checkpoint",
+                          "google_calendar_inputs", "google_calendar_checkpoint", "google_calendar_jobs",
+                          "google_calendar_links", "google_shopping_jobs", "google_delivery_retries",
+                          "google_service_state", "google_auth_state", "google_backfill_receipts", "google_sheet_state"):
                 db.execute(f"DELETE FROM {table}")
         self.server.failures.clear()
 
@@ -215,6 +222,267 @@ class FamilyAPI(unittest.TestCase):
         state = self.request("/api/data", token=second)[1]["data"]
         self.assertEqual(state["records"], [x for k, x in entries if k == "records"])
         self.assertEqual(state["schedule"], [entries[2][1]])
+
+    def test_google_records_use_one_web_copy_and_preserve_voice_original(self):
+        bridge = GoogleRecords(self.store, {"binding": "demo", "inbox": "@default", "task_list": "archive",
+                                           "spreadsheet": "test-sheet"})
+        input_tasks = [{"id": "voice", "title": "솜하우스 수유 분유 120 밀리리터",
+                        "updated": "2026-11-15T15:00:00.000Z"},
+                       {"id": "personal", "title": "개인 일정"},
+                       {"id": "ambiguous", "title": "솜하우스 수유 분유 조금"}]
+        copied, sheet = {}, {}
+        lose_response = True
+
+        def list_tasks(task_list, updated_min=None):
+            return iter(input_tasks if task_list == "@default" else copied.values())
+
+        def put_task(task_list, body, task_id=None):
+            nonlocal lose_response
+            self.assertEqual(task_list, "archive")
+            task_id = task_id or f"copy-{len(copied) + 1}"
+            copied[task_id] = dict(body, id=task_id)
+            if lose_response:
+                lose_response = False
+                raise GoogleError("응답 유실", "Tasks")
+            return copied[task_id]
+
+        with patch.object(self.server, "google", bridge), \
+                patch.object(bridge.api, "tasks", side_effect=list_tasks), \
+                patch.object(bridge.api, "put_task", side_effect=put_task), \
+                patch.object(bridge.api, "sheet_row", side_effect=lambda row, values: sheet.update({row: values})):
+            token = self.login()
+            path = "/api/items/shopping/a"
+            web_item = self.item()
+            self.assertEqual(self.request(path, "PUT", web_item, token)[0], 200)
+            bridge.pull()
+            bridge.pull()
+            state = self.request("/api/data", token=token)[1]
+            self.assertEqual(state["data"]["shopping"], [web_item])
+            [feeding] = state["data"]["records"]
+            self.assertEqual(feeding["amount"], "120ml")
+            self.assertEqual(feeding["date"], "2026-11-16T00:00")
+            self.assertEqual(state["sources"]["sheet"], "https://docs.google.com/spreadsheets/d/test-sheet/edit")
+            self.assertEqual(self.request("/api/data")[0], 401)
+
+            bridge.deliver("tasks")
+            with self.store.connect() as db:
+                self.assertEqual(db.execute("SELECT attempts FROM google_delivery_retries").fetchone()[0], 1)
+                db.execute("UPDATE google_delivery_retries SET next_retry_at=0")
+            bridge.deliver("sheets")
+            self.assertEqual([r[7] for r in sheet.values()], ["저장", "저장", "확인 필요"])
+            self.assertEqual(json.loads(sheet[3][9])["title"], input_tasks[0]["title"])
+            bridge.deliver("tasks")
+            self.assertEqual(list(copied), ["copy-1"])
+
+            self.assertEqual(self.request(path, "PUT", dict(web_item, done="yes"), token)[0], 200)
+            voice_path = "/api/items/records/" + feeding["id"]
+            self.assertEqual(self.request(voice_path, "PUT", dict(feeding, amount="125ml"), token)[0], 200)
+            bridge.deliver("tasks")
+            self.assertEqual(list(copied), ["copy-1"])
+            self.assertEqual(copied["copy-1"]["status"], "completed")
+            self.assertEqual(input_tasks[0]["title"], "솜하우스 수유 분유 120 밀리리터")
+
+            input_tasks[2]["title"] = "솜하우스 수유 분유 50ml"
+            bridge.pull()
+            self.assertEqual(len(self.request("/api/data", token=token)[1]["data"]["records"]), 2)
+            self.assertEqual(self.request(path, "DELETE", token=token)[0], 200)
+            bridge.deliver("sheets")
+            bridge.deliver("tasks")
+            self.assertTrue(copied["copy-1"]["title"].startswith("삭제 · "))
+            self.assertEqual(list(copied), ["copy-1"])
+            self.assertEqual(len(sheet), 7)
+            self.assertEqual(sheet[8][4], "shopping")
+            self.assertEqual(sheet[8][3], "delete")
+
+    def test_google_sheet_retries_same_row_and_rejects_another_events_cell(self):
+        api = GoogleAPI({"spreadsheet": "test-sheet"})
+        api.sheet_size = (0, 1000, 20)
+        values = ["same-event", '=IMPORTXML("not a formula")']
+        with patch.object(api, "sheet_cell", side_effect=[[], [["same-event"]], [["different-event"]]]), \
+                patch.object(api, "request", return_value={}) as request:
+            api.sheet_row(2, values)
+            api.sheet_row(2, values)
+            self.assertEqual(request.call_args_list[0], request.call_args_list[1])
+            url, method, body, _ = request.call_args.args
+            self.assertEqual(method, "PUT")
+            self.assertTrue(unquote(url).endswith(f"/'{TAB}'!A2?valueInputOption=RAW"))
+            self.assertEqual(body, {"values": [values]})
+            with self.assertRaises(GoogleError):
+                api.sheet_row(2, values)
+            self.assertEqual(request.call_count, 2)
+
+    def test_calendar_intake_uses_event_time_and_web_mirror_recovers_a_lost_reply(self):
+        bridge = GoogleRecords(self.store, {"binding": "calendar-demo", "inbox": "@default", "task_list": "archive",
+                                           "spreadsheet": "test-sheet", "calendar_inbox": "primary",
+                                           "calendar_outbox": "app-cal"})
+        calendar = bridge.calendar
+        event = {"id": "voice", "summary": "솜하우스 수유 분유 120 밀리리터",
+                 "start": {"dateTime": "2026-11-16T05:30:00Z"}}
+        remote = {}
+        lose_reply = True
+
+        def google(url, method="GET", body=None, service=None):
+            nonlocal lose_reply
+            self.assertIn("/app-cal/events", url)
+            if method == "POST":
+                key = body["id"]
+                self.assertNotIn(key, remote)
+                remote[key] = body.copy()
+                if lose_reply:
+                    lose_reply = False
+                    raise GoogleError("응답 유실", "Calendar")
+                return body
+            key = url.split("?")[0].rsplit("/", 1)[-1]
+            if method == "PATCH":
+                remote[key].update(body)
+            elif method == "DELETE":
+                del remote[key]
+            return {}
+
+        with patch.object(self.server, "google", bridge), patch.object(bridge.api, "request", side_effect=google):
+            token = self.login()
+            calendar.record(event)
+            calendar.record(event)
+            calendar.record(dict(event, id="recurring", recurrence=["RRULE:FREQ=DAILY"]))
+            calendar.record(dict(event, id="private", summary="개인 일정"))
+            source = self.request("/api/data", token=token)[1]
+            [voice] = source["data"]["records"]
+            self.assertEqual((voice["date"], voice["amount"]), ("2026-11-16T14:30", "120ml"))
+            self.assertEqual(source["sources"]["calendar"], "https://calendar.google.com/calendar/")
+            calendar.record(dict(event, summary="솜하우스 수유 분유 125ml"))
+            [voice] = self.request("/api/data", token=token)[1]["data"]["records"]
+            self.assertEqual(voice["amount"], "125ml")
+            self.assertEqual(self.request("/api/items/records/" + voice["id"], "PUT",
+                                          dict(voice, amount="130ml"), token)[0], 200)
+            calendar.record(dict(event, summary="솜하우스 수유 분유 140ml"))
+            self.assertEqual(self.request("/api/data", token=token)[1]["data"]["records"][0]["amount"], "130ml")
+            calendar.flush()
+            self.assertFalse(remote)
+
+            web = dict(voice, id="web", date="2026-11-16T16:10", amount="80ml")
+            self.assertEqual(self.request("/api/items/records/web", "PUT", web, token)[0], 200)
+            calendar.flush()
+            with self.store.connect() as db:
+                self.assertEqual(db.execute("SELECT attempts FROM google_delivery_retries").fetchone()[0], 1)
+                db.execute("UPDATE google_delivery_retries SET next_retry_at=0")
+            [event_id] = remote
+            calendar.flush()
+            self.assertEqual(list(remote), [event_id])
+            self.assertEqual(remote[event_id]["start"]["dateTime"], "2026-11-16T16:10:00+09:00")
+            self.assertEqual(self.request("/api/items/records/web", "PUT", dict(web, amount="90ml"), token)[0], 200)
+            calendar.flush()
+            self.assertIn("90ml", remote[event_id]["summary"])
+            self.assertEqual(self.request("/api/items/records/web", "DELETE", token=token)[0], 200)
+            calendar.flush()
+            self.assertFalse(remote)
+            self.assertEqual(len(self.request("/api/data", token=token)[1]["data"]["records"]), 1)
+
+    def test_purchase_task_notes_keep_user_text_and_compare_only_matching_current_prices(self):
+        bridge = GoogleRecords(self.store, {"binding": "shopping-demo", "inbox": "@default", "task_list": "archive",
+                                           "spreadsheet": "test-sheet"})
+        tasks = {"plain": {"id": "plain", "title": "솜하우스 구매 아기 기저기", "notes": "직접 쓴 메모"},
+                 "specific": {"id": "specific", "title": "솜하우스 구매 샘플브랜드 기저귀 4단계 40매",
+                              "notes": "원래 메모", "etag": "version"},
+                 "old": {"id": "old", "title": "개인 용품 구매하기", "status": "completed"}}
+        results = {"shopping_results": [
+            {"title": "샘플브랜드 기저귀 4단계 20매", "price": "6,000원", "product_link": "https://example.com/small"},
+            {"title": "샘플브랜드 기저귀 5단계 40매", "price": "7,000원", "product_link": "https://example.com/other"},
+            {"title": "샘플브랜드 기저귀 4단계 40매", "price": "$5", "product_link": "https://example.com/usd"},
+            {"title": "샘플브랜드 기저귀 4단계 40매", "price": "15,000원", "product_link": "https://example.com/high"},
+            {"title": "샘플브랜드 기저귀 4단계 40매", "price": "₩12,900", "product_link": "https://example.com/low"},
+        ]}
+        lost_patch = True
+
+        def patch_notes(task_list, body, task_id, *, etag):
+            nonlocal lost_patch
+            self.assertEqual(task_list, "@default")
+            self.assertEqual(set(body), {"notes"})
+            self.assertEqual(etag, tasks[task_id].get("etag"))
+            tasks[task_id].update(body)
+            if lost_patch:
+                lost_patch = False
+                raise GoogleError("응답 유실", "Tasks")
+            return tasks[task_id]
+
+        bridge.shopping.settings = {"serpapi_key": "fake"}
+        with patch.object(self.server, "google", bridge), \
+                patch.object(bridge.api, "get_task", side_effect=lambda _, task_id: tasks[task_id]), \
+                patch.object(bridge.api, "put_task", side_effect=patch_notes), \
+                patch("shopping_records.json_request", return_value=results) as search:
+            token = self.login()
+            for task in tasks.values():
+                bridge.record_voice(task)
+            bridge.shopping.flush()
+            with self.store.connect() as db:
+                self.assertEqual(db.execute("SELECT attempts FROM google_delivery_retries").fetchone()[0], 1)
+                db.execute("UPDATE google_delivery_retries SET next_retry_at=0")
+            bridge.shopping.flush()
+            bridge.record_voice(tasks["plain"])
+            bridge.shopping.flush()
+            self.assertEqual(tasks["plain"]["notes"].count("[솜하우스 가격비교]"), 1)
+            self.assertTrue(tasks["plain"]["notes"].startswith("직접 쓴 메모\n"))
+            self.assertIn("규격 확인 필요", tasks["plain"]["notes"])
+            self.assertIn("가격비교: https://www.google.com/search?", tasks["plain"]["notes"])
+            self.assertIn("최저 표시가: 12,900원", tasks["specific"]["notes"])
+            self.assertIn("https://example.com/low", tasks["specific"]["notes"])
+            self.assertEqual(search.call_count, 1)
+            items = self.request("/api/data", token=token)[1]["data"]["shopping"]
+            self.assertEqual(len(items), 2)
+            self.assertEqual(items[0]["title"], "아기 기저귀")
+            self.assertEqual(items[1]["url"], "https://example.com/low")
+
+    def test_keep_retries_a_web_save_after_restart_and_preserves_a_concurrent_edit(self):
+        keep = KeepSync(self.store, "test@example.com")
+        token = self.login()
+        path = "/api/items/records/feed"
+        first = {"id": "feed", "type": "feeding", "date": "2026-11-13T10:00",
+                 "category": "분유", "amount": "120ml", "memo": "시험 메모"}
+        latest = dict(first, amount="130ml")
+        with patch.object(self.server, "keep", keep):
+            self.assertEqual(self.request(path, "PUT", first, token)[0], 200)
+            with patch.object(keep, "send", side_effect=RuntimeError("network")):
+                with self.assertRaises(RuntimeError):
+                    keep.flush()
+            self.assertEqual(self.request("/api/data", token=token)[1]["data"]["records"], [first])
+            reopened = KeepSync(Store(self.temp.name), keep.email)
+
+            def concurrent_edit(entries):
+                self.assertEqual([(e["item"], e["note_ids"]) for e in entries], [(first, {})])
+                self.assertEqual(self.request(path, "PUT", latest, token)[0], 200)
+                return [{"1": "keep-note"}]
+
+            with patch.object(reopened, "send", side_effect=concurrent_edit):
+                self.assertTrue(reopened.flush())
+            with patch.object(reopened, "send", return_value=[{"1": "keep-note"}]) as send:
+                self.assertTrue(reopened.flush())
+                saved = send.call_args.args[0][0]
+                self.assertEqual((saved["item"], saved["note_ids"]), (latest, {"1": "keep-note"}))
+                send.reset_mock()
+                self.assertEqual(self.request(path, "DELETE", token=token)[0], 200)
+                self.assertTrue(reopened.flush())
+                send.assert_called_once_with([dict(saved, item=None)])
+                self.assertFalse(reopened.flush())
+
+    def test_keep_does_not_send_changes_to_a_replaced_account_or_replay_stale_records(self):
+        keep = KeepSync(self.store, "first@example.com")
+        other = KeepSync(self.store, "second@example.com")
+        token = self.login()
+        path = "/api/items/shopping/a"
+        with patch.object(self.server, "keep", keep):
+            self.assertEqual(self.request(path, "PUT", self.item(), token)[0], 200)
+        with patch.object(other, "send") as send:
+            self.assertFalse(other.flush())
+            send.assert_not_called()
+
+        with patch.object(self.server, "keep", other):
+            self.assertEqual(self.request(path, "PUT", self.item(title="새 품목"), token)[0], 200)
+        with patch.object(keep, "send") as send:
+            self.assertTrue(keep.flush())
+            self.assertFalse(keep.flush())
+            send.assert_not_called()
+        with patch.object(other, "send", return_value=[{"1": "new-account-note"}]) as send:
+            self.assertTrue(other.flush())
+            self.assertEqual(send.call_args.args[0][0]["item"]["title"], "새 품목")
 
     def test_cors_preflight_validation_and_private_files(self):
         token = self.login()

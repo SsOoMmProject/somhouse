@@ -1,0 +1,274 @@
+"""Import tagged feeding events and mirror local feedings to a widget calendar."""
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+import secrets
+import unicodedata
+from urllib.parse import quote, urlencode
+
+from google_records import GoogleError, PREFIX, SEOUL, encode, queue_event, voice_payload
+from google_delivery import eligible
+
+
+CALENDAR = "https://www.googleapis.com/calendar/v3/calendars"
+CALENDAR_WEB = "https://calendar.google.com/calendar/"
+CALENDAR_NAME = "솜하우스 수유"
+CALENDAR_SCOPES = ("https://www.googleapis.com/auth/calendar.events.owned.readonly",
+                   "https://www.googleapis.com/auth/calendar.app.created")
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS google_calendar_inputs (
+    binding TEXT NOT NULL, inbox TEXT NOT NULL, event_id TEXT NOT NULL, item_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL, applied TEXT, PRIMARY KEY (binding, inbox, event_id)
+);
+CREATE INDEX IF NOT EXISTS google_calendar_origin ON google_calendar_inputs(binding,item_id);
+CREATE TABLE IF NOT EXISTS google_calendar_checkpoint (
+    binding TEXT NOT NULL, inbox TEXT NOT NULL, updated_min TEXT NOT NULL, PRIMARY KEY (binding,inbox)
+);
+CREATE TABLE IF NOT EXISTS google_calendar_jobs (
+    binding TEXT NOT NULL, item_id TEXT NOT NULL, revision TEXT NOT NULL, body TEXT,
+    PRIMARY KEY (binding,item_id)
+);
+CREATE TABLE IF NOT EXISTS google_calendar_links (
+    binding TEXT NOT NULL, item_id TEXT NOT NULL, event_id TEXT NOT NULL, PRIMARY KEY (binding,item_id)
+);
+"""
+
+
+def calendar_url(calendar_id):
+    return f"{CALENDAR}/{quote(calendar_id, safe='')}/events"
+
+
+def event_pages(api, calendar_id, **params):
+    url = calendar_url(calendar_id)
+    while True:
+        response = api.request(url + "?" + urlencode(params), service="Calendar")
+        yield from response.get("items", [])
+        if not response.get("nextPageToken"):
+            break
+        params["pageToken"] = response["nextPageToken"]
+
+
+def parse_time(value):
+    if not isinstance(value, str) or ":" not in value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def calendar_feeding(event, item_id):
+    title = event.get("summary", "")
+    if not isinstance(title, str):
+        return False, None
+    text = " ".join(unicodedata.normalize("NFKC", title).split())
+    prefix = PREFIX.match(text)
+    if not prefix:
+        return False, None
+    command = reformat_feeding(text[prefix.end():].rstrip("."))
+    if not (command == "수유" or command.startswith(("수유 ", "분유 ", "모유 ", "혼합 ", "기타 "))):
+        return False, None
+    if not command.startswith("수유"):
+        command = "수유 " + command
+    start = event.get("start")
+    when = parse_time(start.get("dateTime")) if isinstance(start, dict) else None
+    if not when or when.tzinfo is None:
+        return True, None
+    _, parsed = voice_payload("솜하우스 " + command, when.astimezone(SEOUL), item_id)
+    if not parsed or parsed[0] != "records" or parsed[1]["type"] != "feeding":
+        return True, None
+    parsed[1]["date"] = when.astimezone(SEOUL).replace(tzinfo=None).isoformat(timespec="minutes")
+    return True, parsed[1]
+
+
+def reformat_feeding(command):
+    for separator in (" · ", ": ", "： "):
+        if command.startswith("수유" + separator):
+            return "수유 " + command.removeprefix("수유" + separator)
+    return command
+
+
+class CalendarRecords:
+    def __init__(self, records):
+        self.records, self.store = records, records.store
+        self.binding = records.binding
+        self.inbox, self.outbox = records.config["calendar_inbox"], records.config["calendar_outbox"]
+
+    @property
+    def api(self):
+        return self.records.api
+
+    def queue(self, db, kind, item_id, item, action="save"):
+        if kind != "records":
+            return
+        feeding = item.get("type") == "feeding"
+        if not feeding and not db.execute("""
+            SELECT 1 FROM google_calendar_links WHERE binding=? AND item_id=?
+            UNION ALL SELECT 1 FROM google_calendar_jobs WHERE binding=? AND item_id=? LIMIT 1
+        """, (self.binding, item_id, self.binding, item_id)).fetchone():
+            return
+        if db.execute("SELECT 1 FROM google_calendar_inputs WHERE binding=? AND item_id=?",
+                      (self.binding, item_id)).fetchone():
+            return
+        # Invalid legacy dates can still be saved by the web app. They have no Calendar projection.
+        body = encode(item) if feeding and action != "delete" and parse_time(item.get("date")) else None
+        db.execute("""
+            INSERT INTO google_calendar_jobs VALUES (?,?,?,?)
+            ON CONFLICT(binding,item_id) DO UPDATE SET revision=excluded.revision, body=excluded.body
+        """, (self.binding, item_id, secrets.token_hex(16), body))
+        db.execute("""DELETE FROM google_delivery_retries WHERE binding=? AND target='calendar'
+            AND job_id NOT IN (SELECT revision FROM google_calendar_jobs WHERE binding=?)""",
+                   (self.binding, self.binding))
+
+    def record(self, event):
+        if not isinstance(event, dict):
+            return
+        event_id = event.get("id")
+        extensions = event.get("extendedProperties") or {}
+        if ((extensions.get("private") or {}).get("somhouseProjection") == "1"
+                or not isinstance(event_id, str) or not event_id
+                or event.get("recurrence") or event.get("recurringEventId")):
+            return
+        cancelled = event.get("status") == "cancelled"
+        item_id = "cal-" + hashlib.sha256(encode([self.binding, self.inbox, event_id]).encode()).hexdigest()
+        tagged, item = calendar_feeding(event, item_id)
+        raw = {key: event[key] for key in ("id", "summary", "start", "end", "updated", "status", "htmlLink")
+               if key in event}
+        fingerprint = encode([cancelled, raw.get("summary"), raw.get("start")])
+        source_key = self.binding, self.inbox, event_id
+        with self.store.lock, self.store.connect() as db:
+            previous = db.execute("""
+                SELECT fingerprint,applied FROM google_calendar_inputs WHERE binding=? AND inbox=? AND event_id=?
+            """, source_key).fetchone()
+            if not tagged and not cancelled and not previous:
+                return
+            if (previous and previous[0] == fingerprint) or (cancelled and not previous):
+                return
+            applied = previous[1] if previous else None
+            current = db.execute("SELECT body FROM items WHERE kind='records' AND id=?", (item_id,)).fetchone()
+            current = current[0] if current else None
+            action, status, projected = "import", "확인 필요", None
+            future = bool(item and datetime.fromisoformat(item["date"]).replace(tzinfo=SEOUL) > datetime.now(SEOUL))
+            if cancelled or not tagged or future:
+                action = "delete" if not future or applied else "import"
+                if applied and current == applied:
+                    self.store.snapshot(db)
+                    db.execute("DELETE FROM items WHERE kind='records' AND id=?", (item_id,))
+                    projected, status = json.loads(applied), "저장"
+                    applied = None
+                else:
+                    status = "웹 기록 유지"
+            elif item and not future:
+                if current == applied:
+                    body = encode(item)
+                    if current != body:
+                        self.store.snapshot(db)
+                        db.execute("""
+                            INSERT INTO items VALUES ('records',?,?)
+                            ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body
+                        """, (item_id, body))
+                        projected = item
+                    applied, status = body, "저장"
+                else:
+                    status = "웹 기록 유지"
+            review = future or status in ("확인 필요", "웹 기록 유지")
+            if future:
+                status = "확인 필요 · 미래 수유 시각"
+            queue_event(db, self.binding, "records", item_id, {"event": raw, "record": projected or item},
+                        source="calendar", action=action, title=raw.get("summary", ""),
+                        status=status, skip_task=projected is None)
+            db.execute("INSERT OR REPLACE INTO google_calendar_inputs (binding,inbox,event_id,item_id,fingerprint,applied,review) VALUES (?,?,?,?,?,?,?)",
+                       (*source_key, item_id, fingerprint, applied, review))
+
+    def pull(self):
+        with self.store.connect() as db:
+            checkpoint = db.execute("""
+                SELECT updated_min FROM google_calendar_checkpoint WHERE binding=? AND inbox=?
+            """, (self.binding, self.inbox)).fetchone()
+        now = datetime.now(timezone.utc)
+        filters = ({"updatedMin": checkpoint[0]} if checkpoint
+                   else {"timeMin": (now - timedelta(days=7)).isoformat(timespec="seconds")})
+        for event in event_pages(self.api, self.inbox, maxResults=250, showDeleted="true", **filters):
+            if self.records.stop.is_set():
+                return
+            self.record(event)
+        with self.store.lock, self.store.connect() as db:
+            db.execute("INSERT OR REPLACE INTO google_calendar_checkpoint VALUES (?,?,?)",
+                       (self.binding, self.inbox, (now - timedelta(minutes=2)).isoformat(timespec="seconds")))
+
+    def flush(self):
+        with self.store.connect() as db:
+            jobs = db.execute(f"""
+                SELECT item_id,revision,body FROM google_calendar_jobs j WHERE binding=?
+                AND {eligible('j', 'calendar', 'j.revision')} ORDER BY rowid LIMIT 10
+            """, (self.binding,)).fetchall()
+        for item_id, revision, raw in jobs:
+            if self.records.stop.is_set():
+                return
+            self.records.job("calendar", revision, lambda: self.deliver(item_id, revision, raw))
+
+    def deliver(self, item_id, revision, raw):
+        with self.store.connect() as db:
+            if not db.execute("SELECT 1 FROM google_calendar_jobs WHERE binding=? AND item_id=? AND revision=?",
+                              (self.binding, item_id, revision)).fetchone():
+                return
+        with self.store.lock, self.store.connect() as db:
+            link = db.execute("SELECT event_id FROM google_calendar_links WHERE binding=? AND item_id=?",
+                              (self.binding, item_id)).fetchone()
+            if link is None and raw is not None:
+                event_id = secrets.token_hex(20)
+                db.execute("INSERT INTO google_calendar_links VALUES (?,?,?)", (self.binding, item_id, event_id))
+            else:
+                event_id = link[0] if link else None
+        if raw is None:
+            if event_id:
+                self.remove_event(event_id)
+        else:
+            self.write_event(event_id, json.loads(raw), new=link is None)
+        with self.store.lock, self.store.connect() as db:
+            if raw is None:
+                db.execute("DELETE FROM google_calendar_links WHERE binding=? AND item_id=?",
+                           (self.binding, item_id))
+            db.execute("DELETE FROM google_calendar_jobs WHERE binding=? AND item_id=? AND revision=?",
+                       (self.binding, item_id, revision))
+
+    def remove_event(self, event_id):
+        try:
+            self.api.request(f"{calendar_url(self.outbox)}/{event_id}?sendUpdates=none", "DELETE", service="Calendar")
+        except GoogleError as error:
+            if error.status not in (404, 410):
+                raise
+
+    def write_event(self, event_id, item, *, new):
+        start = parse_time(item["date"])
+        start = start.replace(tzinfo=SEOUL) if start.tzinfo is None else start.astimezone(SEOUL)
+        end = start + timedelta(minutes=5)
+        payload = {
+            "summary": ("솜하우스 수유 · " + item["category"] + " " + item["amount"])[:250],
+            "start": {"dateTime": start.isoformat(), "timeZone": "Asia/Seoul"},
+            "end": {"dateTime": end.isoformat(), "timeZone": "Asia/Seoul"},
+            "transparency": "transparent", "reminders": {"useDefault": False},
+            "extendedProperties": {"private": {"somhouseProjection": "1"}},
+        }
+        url = calendar_url(self.outbox)
+        if not new:
+            try:
+                self.api.request(f"{url}/{event_id}?sendUpdates=none", "PATCH", payload, "Calendar")
+                return
+            except GoogleError as error:
+                if error.status not in (404, 410):
+                    raise
+        try:
+            self.api.request(url + "?sendUpdates=none", "POST", {**payload, "id": event_id}, "Calendar")
+        except GoogleError as error:
+            if error.status != 409:
+                raise
+            try:
+                self.api.request(f"{url}/{event_id}?sendUpdates=none", "PATCH", payload, "Calendar")
+            except GoogleError as conflict:
+                if conflict.status in (404, 410):
+                    # A deleted Calendar event can keep reserving its ID. Persist a replacement for the next attempt.
+                    with self.store.lock, self.store.connect() as db:
+                        db.execute("UPDATE google_calendar_links SET event_id=? WHERE binding=? AND event_id=?",
+                                   (secrets.token_hex(20), self.binding, event_id))
+                raise
