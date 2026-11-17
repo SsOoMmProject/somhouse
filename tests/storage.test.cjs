@@ -309,3 +309,14 @@ test('Google links keep the connected account and reject other addresses',async(
  b.eval("page='home';render()");
  assert.match(b.get('#content').innerHTML,/<button class="secondary" data-add="feeding">수유 기록<\/button>/);
 });
+
+test('home puts recent feedings under their own heading and the voice help after the summaries',async()=>{
+ const server=family();server.sources={calendar:'https://calendar.google.com/calendar/r'};
+ server.data.records.push({id:'a',type:'feeding',date:'2026-01-01T09:00',category:'분유',amount:'100ml',memo:''});
+ const b=browser({server});await b.login();b.eval("page='home';render()");
+ const html=b.get('#content').innerHTML;
+ assert.match(html,/<section class="repeat" aria-labelledby="repeat-title"><h2 id="repeat-title">최근 수유 다시 기록<\/h2><div class="quick"><button class="secondary" data-repeat-category="분유"/);
+ assert.match(html,/<summary>ⓘ 음성·캘린더 입력 도움말 <span class="caption">기억한 말 관리<\/span><\/summary>/);
+ assert.ok(html.indexOf('summary-cards')<html.indexOf('voice-help'));
+ assert.ok(html.indexOf('repeat-title')<html.indexOf('summary-cards'));
+});
