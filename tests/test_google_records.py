@@ -291,30 +291,34 @@ class GoogleRegression(unittest.TestCase):
             self.assertTrue(tagged, summary)
             self.assertEqual((item['category'], item['amount'], item['date']),
                              (category, amount, '2026-11-17T07:12'), summary)
-        tagged, item = parse('수유 100mm')
-        self.assertEqual((item['amount'], item['memo']), ('100ml', '음성 원문: 수유 100mm'))
-        # Misheard or unexplained words are kept for review, never silently saved or dropped.
-        for summary in ('수육 기록 1 100mm', '수유 기록 1 100미리', '수유 100미리 120미리',
-                        '분유 모유 100미리', '수유 100미리 병원', '솜하우스 수유', '수유 0미리'):
+        # Common misrecognitions are corrected and saved; the memo keeps what Google wrote.
+        for summary in ('수유 100mm', '수육 기록 1 100mm', '수유 기록 1 100미리', '수육 100미리'):
+            tagged, item = parse(summary)
+            self.assertEqual((tagged, item['amount'], item['memo']), (True, '100ml', '음성 원문: ' + summary), summary)
+        self.assertEqual(parse('100미리 수유')[1]['memo'], '')
+        # Unknown words, two amounts or two kinds are kept for review, never silently saved or dropped.
+        for summary in ('수유 100미리 120미리', '분유 모유 100미리', '수유 100미리 병원', '솜하우스 수유', '수유 0미리'):
             self.assertEqual(parse(summary), (True, None), summary)
         # Ordinary personal events without a feeding amount stay out of the family records.
-        for summary in ('수육 맛집', '분유 사기 2통', '회의 10분', '수유실 위치', '2분유 구매', '솜하우스 병원 메모'):
+        for summary in ('수육 맛집', '수육 30분', '분유 사기 2통', '회의 10분', '수유실 위치', '2분유 구매', '솜하우스 병원 메모'):
             self.assertEqual(parse(summary), (False, None), summary)
         self.assertEqual(calendar_feeding({'summary': '100미리 수유', 'start': {'date': '2026-11-17'}}, 'x'),
                          (True, None))
 
-    def test_natural_calendar_feeding_is_imported_once_and_misheard_one_is_counted_for_review(self):
+    def test_natural_calendar_feeding_is_imported_once_and_unclear_one_is_counted_for_review(self):
         start = {'dateTime': '2026-01-01T07:12:00+09:00'}
         self.bridge.calendar.record({'id': 'n1', 'summary': '100미리 수유 캘린더에 업데이트', 'start': start})
         self.bridge.calendar.record({'id': 'n1', 'summary': '100미리 수유 캘린더에 업데이트', 'start': start})
         self.bridge.calendar.record({'id': 'n2', 'summary': '수육 기록 1 100mm', 'start': start})
         self.bridge.calendar.record({'id': 'n3', 'summary': '수육 맛집', 'start': start})
+        self.bridge.calendar.record({'id': 'n4', 'summary': '수유 100미리 병원', 'start': start})
         items = [json.loads(body) for (body,) in self.rows("SELECT body FROM items WHERE kind='records'")]
-        self.assertEqual([(x['date'], x['amount']) for x in items], [('2026-01-01T07:12', '100ml')])
+        self.assertEqual([(x['date'], x['amount'], x['memo']) for x in items],
+                         [('2026-01-01T07:12', '100ml', ''), ('2026-01-01T07:12', '100ml', '음성 원문: 수육 기록 1 100mm')])
         with self.store.connect() as db:
             self.assertEqual(self.bridge.status(db)['review'], 1)
         statuses = [row[0] for row in self.rows("SELECT status FROM google_record_events WHERE source='calendar' ORDER BY seq")]
-        self.assertEqual(statuses, ['저장', '확인 필요'])
+        self.assertEqual(statuses, ['저장', '저장', '확인 필요'])
 
     def test_backfill_is_explicit_and_idempotent_by_item_and_content(self):
         with self.store.connect() as db:

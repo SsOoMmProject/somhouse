@@ -59,7 +59,8 @@ def parse_time(value):
 
 
 # Natural Assistant phrasing such as "100미리 수유 캘린더에 업데이트" usually has no 솜하우스 tag,
-# and speech recognition may write 수유 as 수육 or 미리 as mm.
+# and speech recognition may write 수유 as 수육, 미리 as mm, or add a stray number.
+# Corrected titles are saved with the original text in the memo; the Sheets history keeps the raw event.
 NATURAL_AMOUNT = re.compile(r"(\d{1,4}(?:\.\d{1,2})?)\s*(ml|밀리\s*리터|밀리|미리|cc|씨씨|mm|분)(?![A-Za-z유])",
                             re.IGNORECASE)
 FEEDING_WORD = re.compile(r"수유|분유|모유|혼합")
@@ -71,21 +72,27 @@ PARTICLE = re.compile(r"(?:에서|으로|에|을|를|로|은|는)$")
 def natural_feeding(text, when, item_id, title):
     """Return (tagged, item). tagged=False ignores the event; item=None leaves it for review."""
     amounts = NATURAL_AMOUNT.findall(text)
-    if not amounts or not (FEEDING_WORD.search(text) or MISHEARD_WORD.search(text)):
+    feeding_word, misheard = FEEDING_WORD.search(text), MISHEARD_WORD.search(text)
+    if not amounts or not (feeding_word or misheard):
+        return False, None
+    # "수육" is only read as 수유 next to a volume; "수육 30분" is a cooking time, not a feeding.
+    if not feeding_word and all(unit == "분" for _, unit in amounts):
         return False, None
     rest = NATURAL_AMOUNT.sub(" ", text)
     categories = [word for word in ("분유", "모유", "혼합") if word in rest]
-    rest = FEEDING_WORD.sub(" ", rest)
-    leftover = [word for word in (PARTICLE.sub("", token) for token in rest.replace(".", " ").split())
-                if word and word not in FILLER]
+    rest = MISHEARD_WORD.sub(" ", FEEDING_WORD.sub(" ", rest))
+    tokens = [PARTICLE.sub("", token) for token in rest.replace(".", " ").split()]
+    # A lone number next to a unit-bearing amount is a recognition artefact ("수육 기록 1 100mm").
+    stray = [token for token in tokens if token.isdigit()]
+    leftover = [token for token in tokens if token and token not in FILLER and not token.isdigit()]
     value, unit = amounts[0]
-    # Anything unexplained (수육, a stray number, a second amount, two kinds) is kept for a person to check.
-    if (len(amounts) != 1 or leftover or len(categories) > 1 or MISHEARD_WORD.search(text)
-            or float(value) <= 0 or not when):
+    # Unknown words, a second amount or two kinds are kept for a person to check.
+    if len(amounts) != 1 or leftover or len(categories) > 1 or float(value) <= 0 or not when:
         return True, None
     unit = unit.lower()
     amount = value + ("분" if unit == "분" else "ml")
-    memo = f"음성 원문: {title}" if unit in ("mm", "밀리") else ""
+    corrected = bool(misheard or stray) or unit in ("mm", "밀리")
+    memo = f"음성 원문: {title}" if corrected else ""
     return True, {"id": item_id, "type": "feeding",
                   "date": when.astimezone(SEOUL).replace(tzinfo=None).isoformat(timespec="minutes"),
                   "category": categories[0] if categories else "기타", "amount": amount, "memo": memo}
