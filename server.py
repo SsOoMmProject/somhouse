@@ -24,6 +24,7 @@ from google_records import GoogleRecords, SCHEMA as GOOGLE_SCHEMA, load_config a
 from calendar_records import FEEDING_KINDS, SCHEMA as CALENDAR_SCHEMA, load_aliases, relearn
 from shopping_records import SCHEMA as SHOPPING_SCHEMA
 from google_delivery import SCHEMA as DELIVERY_SCHEMA
+from holidays import HolidayFeed, SCHEMA as HOLIDAY_SCHEMA, listing as holiday_listing
 from keep_sync import (CONFIG_NAME as KEEP_CONFIG_NAME, SCHEMA as KEEP_SCHEMA,
                        KeepSync, configured_email, queue as queue_keep)
 
@@ -110,7 +111,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, username TEXT NOT NULL, expires REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS items(kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id));
                 CREATE TABLE IF NOT EXISTS imports(kind TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(kind,fingerprint));
-            """ + KEEP_SCHEMA + GOOGLE_SCHEMA + CALENDAR_SCHEMA + SHOPPING_SCHEMA + DELIVERY_SCHEMA)
+            """ + KEEP_SCHEMA + GOOGLE_SCHEMA + CALENDAR_SCHEMA + SHOPPING_SCHEMA + DELIVERY_SCHEMA + HOLIDAY_SCHEMA)
             for table, column, definition in (
                 ("google_voice_receipts", "captured", "TEXT"),
                 ("google_calendar_inputs", "review", "INTEGER NOT NULL DEFAULT 0"),
@@ -245,8 +246,10 @@ class Store:
 class FamilyServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, store, origins=()):
+    def __init__(self, address, store, origins=(), *, holidays=False):
         super().__init__(address, Handler)
+        # Only the real service downloads the public holiday feed; tests and admin commands never do.
+        self.holiday_feed = holidays
         self.store = store
         self.antigravity = Antigravity.load(store.directory)
         # Keep valid legacy sessions and discard only sessions that already expired.
@@ -266,9 +269,14 @@ class FamilyServer(ThreadingHTTPServer):
         sync = self.google or self.keep
         if sync is not None:
             threading.Thread(target=sync.run, daemon=True).start()
+        holidays = HolidayFeed(self.store) if self.holiday_feed else None
+        if holidays is not None:
+            threading.Thread(target=holidays.run, daemon=True).start()
         try:
             super().serve_forever(poll_interval)
         finally:
+            if holidays is not None:
+                holidays.stop.set()
             if sync is not None:
                 sync.stop.set()
                 sync.wake.set()
@@ -410,7 +418,7 @@ class Handler(BaseHTTPRequestHandler):
                     db.execute("DELETE FROM sessions WHERE token=?", (hashlib.sha256(token.encode()).hexdigest(),))
                     result = {"ok": True}
                 elif path == "/api/data" and self.command == "GET":
-                    result = {"data": store.state(db), "aliases": load_aliases(db)}
+                    result = {"data": store.state(db), "aliases": load_aliases(db), "holidays": holiday_listing(db)}
                     if self.server.google is not None:
                         result["sources"] = self.server.google.sources()
                         result["google_status"] = self.server.google.status(db)
@@ -693,7 +701,7 @@ def main():
         with store.connect() as db:
             if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] != 2:
                 parser.error("먼저 python3 server.py init 명령으로 두 계정을 생성해 주세요.")
-        server = FamilyServer(("127.0.0.1", args.port), store, args.origin)
+        server = FamilyServer(("127.0.0.1", args.port), store, args.origin, holidays=True)
         print(f"솜하우스: http://127.0.0.1:{server.server_port}/", flush=True)
         try:
             server.serve_forever()
