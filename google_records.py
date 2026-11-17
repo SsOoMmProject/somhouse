@@ -350,6 +350,8 @@ def task_title(kind, item):
     if kind == "records":
         if item.get("type") == "feeding":
             return f"수유 · {item['category']} {item['amount']}"
+        if item.get("type") == "sleep":
+            return f"수면 · {item['category']} {item['date'][11:16]}" + (f"~{item['end'][11:16]}" if item.get("end") else "")
         return f"병원 · {item['hospital']}"
     return ("일정 · " if kind == "schedule" else "구매 · ") + item["title"]
 
@@ -444,7 +446,7 @@ class GoogleRecords:
 
     def review_items(self, db, limit=20):
         """Voice inputs that were not saved automatically, newest first, for correction on the web."""
-        from calendar_records import load_aliases, scan_feeding
+        from calendar_records import SLEEP_KINDS, SLEEP_WORDS, load_aliases, scan_feeding
 
         aliases = load_aliases(db)
 
@@ -454,6 +456,9 @@ class GoogleRecords:
             amount = found["amounts"][0] if found["amounts"] else None
             suggest = {"category": found["kinds"][0] if found["kinds"] else "기타",
                        "amount": (amount[0] + ("분" if amount[1] == "분" else "ml")) if amount else ""}
+            words = set(PREFIX.sub("", text).replace(".", " ").split())
+            if words & SLEEP_WORDS and not found["kinds"] and not found["generic"]:
+                suggest = {"type": "sleep", "category": next((k for k in SLEEP_KINDS if k in words), "")}
             return {"key": key, "source": source, "title": title or "", "when": when or "", "status": status,
                     "suggest": suggest}
 

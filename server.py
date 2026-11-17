@@ -21,7 +21,7 @@ from urllib.parse import unquote, urlsplit
 from antigravity import (CONFIG_NAME, SCOPES, Antigravity, AntigravityError,
                          executable, parse_question, save_config, summarize_records)
 from google_records import GoogleRecords, SCHEMA as GOOGLE_SCHEMA, load_config as load_google_config
-from calendar_records import FEEDING_KINDS, SCHEMA as CALENDAR_SCHEMA, load_aliases, relearn
+from calendar_records import FEEDING_KINDS, SLEEP_KINDS, SCHEMA as CALENDAR_SCHEMA, load_aliases, relearn
 from shopping_records import SCHEMA as SHOPPING_SCHEMA
 from google_delivery import SCHEMA as DELIVERY_SCHEMA
 from holidays import HolidayFeed, SCHEMA as HOLIDAY_SCHEMA, listing as holiday_listing
@@ -56,9 +56,13 @@ def validate_item(kind, item):
     required = {"records": ["id", "type", "date"], "schedule": ["id", "date", "title"],
                 "shopping": ["id", "title", "quantity"]}[kind]
     if kind == "records":
-        if item.get("type") not in ("feeding", "hospital"):
+        if item.get("type") not in ("feeding", "hospital", "sleep"):
             raise Problem(400, "지원하지 않는 기록 종류입니다.")
-        required += ["category", "amount"] if item["type"] == "feeding" else ["hospital", "reason"]
+        required += {"feeding": ["category", "amount"], "sleep": ["category"],
+                     "hospital": ["hospital", "reason"]}[item["type"]]
+        if item["type"] == "sleep" and (item["category"] not in SLEEP_KINDS
+                                        or (item.get("end") and item["end"] <= item["date"])):
+            raise Problem(400, "수면 종류와 깬 시각을 확인해 주세요.")
     if any(not item.get(key, "").strip() for key in required) or len(item.get("id", "")) > 200:
         raise Problem(400, "기록의 필수 항목을 확인해 주세요.")
     if kind == "shopping" and item.get("done", "no") not in ("yes", "no"):
@@ -436,9 +440,12 @@ class Handler(BaseHTTPRequestHandler):
                     if isinstance(forget, str) and 0 < len(forget) <= 20:
                         db.execute("DELETE FROM feeding_aliases WHERE word=?", (forget,))
                     elif (isinstance(item_id, str) and 0 < len(item_id) <= 200
-                            and category in (*FEEDING_KINDS, "기타")):
+                            and category in (*FEEDING_KINDS, "기타", *SLEEP_KINDS)):
                         row = db.execute("SELECT body FROM items WHERE kind='records' AND id=?", (item_id,)).fetchone()
                         item = json.loads(row[0]) if row else {}
+                        allowed = SLEEP_KINDS if item.get("type") == "sleep" else (*FEEDING_KINDS, "기타")
+                        if item.get("confirm") == "category" and category not in allowed:
+                            raise Problem(400, "이 기록에 맞는 종류를 골라 주세요.")
                         if item.get("confirm") != "category":
                             raise Problem(409, "이미 확인했거나 찾을 수 없는 기록이에요. 화면을 새로고침해 주세요.")
                         del item["confirm"]
