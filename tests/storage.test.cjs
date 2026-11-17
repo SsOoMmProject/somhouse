@@ -273,3 +273,22 @@ test('the family calendar sits above the menu and shows feedings, schedules, dat
  assert.equal(b.get('#dashboard').hidden,true);assert.equal(b.get('#dashboard').innerHTML,'');
  assert.deepEqual(JSON.parse(b.eval('JSON.stringify([shared.calendarEvents,shared.aliases])')),[[],{}]);
 });
+
+test('Google links keep the connected account and reject other addresses',async()=>{
+ const server=family();
+ server.sources={tasks:'https://tasks.google.com/?authuser=ssoomm.project@gmail.com',
+  sheet:'https://docs.google.com/spreadsheets/d/abc/edit?authuser=ssoomm.project@gmail.com',
+  calendar:'https://calendar.google.com/calendar/r?authuser=ssoomm.project@gmail.com'};
+ const b=browser({server});await b.login();
+ const html=b.get('#raw-sources').innerHTML;
+ assert.match(html,/href="https:\/\/calendar\.google\.com\/calendar\/r\?authuser=ssoomm\.project@gmail\.com"[^>]*>Google 캘린더/);
+ assert.match(html,/tasks\.google\.com\/\?authuser=ssoomm/);assert.match(html,/edit\?authuser=ssoomm/);
+ server.sources={calendar:'https://calendar.google.com/calendar/r?authuser=x@y.com&next=https://evil.example',tasks:'https://evil.example/',sheet:'https://docs.google.com/spreadsheets/d/abc/edit?x=1'};
+ await b.eval('refreshShared(true)');
+ assert.equal(b.get('#raw-sources').innerHTML,'');
+ server.calendarEvents=[{id:'g',date:'2026-11-17T21:30',end:'2026-11-17T22:30',allDay:false,title:'엄마약속',link:'javascript:alert(1)'}];
+ await b.eval('refreshShared(true)');b.eval("calendarDay='2026-11-17';calendarMonth='2026-11';render()");
+ assert.match(b.get('#dashboard').innerHTML,/21:30 · 엄마약속<\/p>/);
+ b.eval("page='home';render()");
+ assert.match(b.get('#content').innerHTML,/<button class="secondary" data-add="feeding">수유 기록<\/button>/);
+});

@@ -430,6 +430,27 @@ class GoogleRegression(unittest.TestCase):
         with self.store.connect() as db:
             self.assertEqual(calendar.view_events(db), [])
 
+    def test_links_open_the_connected_google_account(self):
+        bridge = GoogleRecords(self.store, dict(self.config, subject='me'))
+        self.assertEqual(bridge.sources()['calendar'], 'https://calendar.google.com/calendar/r')
+        replies = [{'sub': 'someone-else', 'email': 'x@gmail.com', 'email_verified': True},
+                   {'sub': 'me', 'email': 'ssoomm.project@gmail.com', 'email_verified': False},
+                   {'sub': 'me', 'email': 'a"b@gmail.com', 'email_verified': True},
+                   {'sub': 'me', 'email': 'ssoomm.project@gmail.com', 'email_verified': True}]
+        with patch.object(bridge.api, 'request', side_effect=replies):
+            for _ in range(3):
+                bridge.load_email()
+                self.assertEqual(getattr(bridge, 'email', ''), '')
+            bridge.load_email()
+        sources = bridge.sources()
+        self.assertEqual(sources['calendar'], 'https://calendar.google.com/calendar/r?authuser=ssoomm.project@gmail.com')
+        self.assertEqual(sources['tasks'], 'https://tasks.google.com/?authuser=ssoomm.project@gmail.com')
+        self.assertTrue(sources['sheet'].endswith('/edit?authuser=ssoomm.project@gmail.com'))
+        with self.store.connect() as db:
+            db.execute("INSERT INTO google_calendar_view VALUES ('test','e','2026-01-01T09:00','2026-01-01T10:00',0,'약속','https://www.google.com/calendar/event?eid=a')")
+            self.assertEqual(bridge.calendar.view_events(db)[0]['link'],
+                             'https://www.google.com/calendar/event?eid=a&authuser=ssoomm.project@gmail.com')
+
     def test_hand_typed_calendar_events_use_the_time_they_were_entered(self):
         from calendar_records import calendar_feeding
         def parse(start, created='2026-11-17T04:10:30.000Z', summary='수유 100ml'):
