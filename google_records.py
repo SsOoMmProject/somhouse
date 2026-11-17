@@ -431,13 +431,16 @@ class GoogleRecords:
 
     def review_items(self, db, limit=20):
         """Voice inputs that were not saved automatically, newest first, for correction on the web."""
-        from calendar_records import NATURAL_AMOUNT
+        from calendar_records import load_aliases, scan_feeding
+
+        aliases = load_aliases(db)
 
         def entry(key, source, title, when, status):
             text = " ".join(unicodedata.normalize("NFKC", title or "").split())
-            amount = NATURAL_AMOUNT.search(text)
-            suggest = {"category": next((w for w in ("분유", "모유", "혼합") if w in text), "기타"),
-                       "amount": (amount[1] + ("분" if amount[2] == "분" else "ml")) if amount else ""}
+            found = scan_feeding(PREFIX.sub("", text), aliases)
+            amount = found["amounts"][0] if found["amounts"] else None
+            suggest = {"category": found["kinds"][0] if found["kinds"] else "기타",
+                       "amount": (amount[0] + ("분" if amount[1] == "분" else "ml")) if amount else ""}
             return {"key": key, "source": source, "title": title or "", "when": when or "", "status": status,
                     "suggest": suggest}
 
@@ -496,8 +499,8 @@ class GoogleRecords:
                 title = db.execute("""SELECT title FROM google_record_events WHERE binding=? AND item_id=?
                     AND source IN ('tasks','calendar') ORDER BY seq DESC LIMIT 1""", (self.binding, item_id)).fetchone()
                 text = " ".join(unicodedata.normalize("NFKC", title[0] if title else "").split())
-                found = scan_feeding(PREFIX.sub("", text), load_aliases(db)) or {}
-                if len(found.get("heard", [])) == 1:
+                found = scan_feeding(PREFIX.sub("", text), load_aliases(db))
+                if len(found["heard"]) == 1:
                     item["heard"] = found["heard"][0]
                     learn_alias(db, item["heard"], item.get("category"))
             self.store.snapshot(db)

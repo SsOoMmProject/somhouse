@@ -63,7 +63,7 @@ function showGoogleStatus(connected){
  // Healthy: one line, details folded. Any problem keeps the full list visible.
  const headline=healthy?`<strong>Google 연동 정상</strong> · ${waiting?`전송 대기 ${esc(waiting)}건`:'모두 반영됨'}${latest?` · 마지막 전송 ${esc(latest.replace('T',' ').slice(0,16))}`:''}`:`<strong>${warning}</strong>`;
  const list=healthy?`<details><summary>자세히 보기</summary><ul>${rows}</ul></details>`:`<ul>${rows}</ul>`;
- const html=`${headline}${list}${status.errors?.length?'<p>일부 연동을 확인하지 못했어요. 잠시 후 다시 시도합니다.</p>':''}${status.review?`<p>음성 기록 ${esc(status.review)}건은 확인이 필요해요. 웹에서 바로 기록하거나 뺄 수 있어요.</p><button type="button" class="secondary" data-page="review">확인 필요 ${esc(status.review)}건 정리하기</button>`:''}<p class="caption">웹 기록은 맥미니에 저장됩니다. 음성으로 만든 원본 Task·일정은 웹에서 수정하거나 삭제해도 바뀌지 않아요. 수정 이력은 원본 시트에 남습니다.</p>`;
+ const html=`${headline}${list}${status.errors?.length?'<p>일부 연동을 확인하지 못했어요. 잠시 후 다시 시도합니다.</p>':''}${status.review?`<p>음성·캘린더 입력 ${esc(status.review)}건은 확인이 필요해요. 웹에서 바로 고쳐 저장하거나 뺄 수 있어요.</p><button type="button" class="secondary" data-page="review">확인 필요 ${esc(status.review)}건 정리하기</button>`:''}<p class="caption">웹 기록은 맥미니에 저장됩니다. 음성으로 만든 원본 Task·일정은 웹에서 수정하거나 삭제해도 바뀌지 않아요. 수정 이력은 원본 시트에 남습니다.</p>`;
  // Rewriting on every poll would close an opened <details>; the browser adds `open` to innerHTML, so compare our own copy.
  if(googleStatusHtml!==html){element.innerHTML=html;googleStatusHtml=html;}
 }
@@ -146,12 +146,18 @@ function sorted(k){return [...data[k]].sort((a,b)=>(b.date||b.id).localeCompare(
 const pageTitles={home:'홈',records:'육아 기록',stats:'수유 통계',schedule:'일정',shopping:'구매 목록',ai:'AI 대화',review:'확인 필요'};
 let reviewKey='';
 function reviewItems(){return Array.isArray(shared?.googleStatus?.review_items)?shared.googleStatus.review_items:[];}
-// Voice inputs that were not saved automatically. The Google Task or event itself is never changed here.
-function reviewView(){
- const items=reviewItems();
- const cards=items.map(x=>`<div class="item"><strong>${esc(x.title||'(제목 없음)')}</strong> <span class="badge">${esc(x.source)}</span><p>${esc((x.when||'').replace('T',' ')||'시각 정보 없음')} · ${esc(x.status)}</p><div class="actions"><button data-review-key="${esc(x.key)}" data-review-action="save">수유로 저장</button><button class="secondary" data-review-key="${esc(x.key)}" data-review-action="dismiss">기록하지 않음</button></div></div>`).join('');
- return `<h1>확인 필요</h1><p>음성으로 남겼지만 자동으로 저장하지 못한 입력이에요. 수유가 맞으면 양과 시각을 확인해 저장하고, 아니면 기록하지 않음을 눌러 주세요. Google의 원본 Task·일정은 바뀌지 않고, 처리 이력은 원본 시트에 남아요.</p>${cards||'<div class="card empty">확인할 음성 입력이 없어요.</div>'}<button class="plain" data-page="home">← 홈으로</button>`;
+// Inputs that were not saved automatically, or that differ from a web edit. The Google Task or event is never changed here.
+function reviewCard(x){
+ const conflict=x.status==='웹 기록 유지',guess=[x.suggest?.category&&x.suggest.category!=='기타'?x.suggest.category:'',x.suggest?.amount||''].filter(Boolean).join(' ');
+ const why=conflict?'웹에서 고친 기록과 캘린더 일정의 내용이 서로 달라요. 지금 기록은 웹에서 고친 그대로예요.':x.suggest?.amount?'내용을 확실히 알 수 없어 저장하지 않았어요.':'양이 없어서 저장하지 않았어요. 양을 입력해 주세요.';
+ const buttons=conflict?['캘린더 내용으로 고치기','지금 기록 그대로 두기']:['내용 확인하고 저장','기록하지 않음'];
+ return `<div class="item"><strong>${esc(x.title||'(제목 없음)')}</strong> <span class="badge">${esc(x.source)}</span><p>${esc((x.when||'').replace('T',' ')||'시각 정보 없음')}${guess?` · 추정 ${esc(guess)}`:''}<br>${why}</p><div class="actions"><button data-review-key="${esc(x.key)}" data-review-action="save">${buttons[0]}</button><button class="secondary" data-review-key="${esc(x.key)}" data-review-action="dismiss">${buttons[1]}</button></div></div>`;
 }
+function reviewView(){
+ const cards=reviewItems().map(reviewCard).join('');
+ return `<h1>확인 필요</h1><p>음성이나 캘린더로 남겼지만 그대로 저장하지 못한 입력이에요. 첫 번째 버튼을 누르면 종류·양·시각을 고칠 수 있는 입력창이 열려요. Google의 원본 Task·일정은 바뀌지 않고, 처리 이력은 원본 시트에 남아요.</p>${cards||'<div class="card empty">확인할 입력이 없어요.</div>'}<button class="plain" data-page="home">← 홈으로</button>`;
+}
+
 const filters={records:{},schedule:{},shopping:{}};
 function route(){const name=location.hash.slice(1);page=Object.hasOwn(pageTitles,name)?name:'home';render()}
 function quickButtons(){return '<div class="quick"><button data-add="feeding">＋ 수유 기록</button><button class="secondary" data-add="hospital">병원 방문</button><button class="secondary" data-add="schedule">일정</button><button class="secondary" data-add="shopping">구매 물품</button></div>'}
@@ -173,7 +179,7 @@ function aliasList(){
 // Shown only when the Google Calendar intake is connected. Static text, no user data.
 function voiceHelp(){
  if(shared?.sources?.calendar!=='https://calendar.google.com/calendar/')return '';
- return `<details class="voice-help"><summary>음성·캘린더로 수유 기록하는 방법</summary><ul><li><strong>말로:</strong> 네스트 허브·휴대폰·태블릿에서 “헤이 구글, 100미리 수유 캘린더에 업데이트”</li><li><strong>직접 입력:</strong> Google 캘린더 앱에서 새 일정 제목에 <strong>수유 100ml</strong>, <strong>분유 120미리</strong>, <strong>모유 15분</strong>처럼 적고 저장</li><li>제목에는 <strong>수유·분유·모유</strong>와 <strong>단위가 붙은 양</strong>(ml·미리·cc, 직수는 분)이 있어야 해요.</li><li>시각은 따로 고치지 않아도 돼요. 일정 시각이 입력한 때부터 2시간 안이거나 종일 일정이면 입력한 시각으로 저장해요. 지난 수유는 일정의 시작 시각을 실제 시각으로 맞춰 주세요.</li><li>같은 Google 계정의 기본 캘린더만 읽고, 약 30초 뒤 여기에 나타나요. 반복 일정과 2시간보다 먼 미래 일정은 저장하지 않아요.</li><li>‘수유 100ml’처럼 종류를 말하지 않았거나 ‘부유’처럼 비슷하게 들린 말은 일단 저장하고, 홈에서 분유·모유를 고르게 해요. 고른 말은 기억해서 다음부터 자동으로 구분해요.</li>${aliasList()}<li>알아듣기 어려운 입력은 위쪽 ‘확인 필요’에 모여요.</li></ul></details>`;
+ return `<details class="voice-help"><summary>음성·캘린더로 수유 기록하는 방법</summary><ul><li><strong>말로:</strong> 네스트 허브·휴대폰·태블릿에서 “헤이 구글, 100미리 수유 캘린더에 업데이트”</li><li><strong>직접 입력:</strong> Google 캘린더 앱에서 새 일정 제목에 <strong>수유 100ml</strong>, <strong>분유 120미리</strong>, <strong>모유 15분</strong>처럼 적고 저장</li><li>제목에는 <strong>수유·분유·모유</strong>와 <strong>단위가 붙은 양</strong>(ml·미리·cc, 직수는 분)이 있어야 해요.</li><li>시각은 따로 고치지 않아도 돼요. 일정 시각이 입력한 때부터 2시간 안이거나 종일 일정이면 입력한 시각으로 저장해요. 지난 수유는 일정의 시작 시각을 실제 시각으로 맞춰 주세요.</li><li>같은 Google 계정의 기본 캘린더만 읽고, 약 30초 뒤 여기에 나타나요. 반복 일정과 2시간보다 먼 미래 일정은 저장하지 않아요.</li><li>‘수유 100ml’처럼 종류를 말하지 않았거나 ‘부유’처럼 비슷하게 들린 말은 일단 저장하고, 홈에서 분유·모유를 고르게 해요. 고른 말은 기억해서 다음부터 자동으로 구분해요.</li>${aliasList()}<li>양을 빼고 ‘분유’만 적었거나 알아듣기 어려운 입력은 위쪽 ‘확인 필요’에 모여요. 거기서 양과 종류를 넣어 저장해요.</li></ul></details>`;
 }
 function repeatButtons(){
  const recent=Somhouse.recentFeedings(data.records);
@@ -281,7 +287,7 @@ document.addEventListener('click',async e=>{
  if(b.dataset.reviewKey){
   const entry=reviewItems().find(x=>x.key===b.dataset.reviewKey);if(!entry)return;
   if(b.dataset.reviewAction==='save'){openForm('feeding',null,{category:entry.suggest?.category||'기타',amount:entry.suggest?.amount||'',date:entry.when||'',memo:entry.title?'음성 원문: '+entry.title:''},entry.key);return;}
-  if(b.dataset.reviewAction==='dismiss'&&confirm('이 음성 입력을 기록하지 않고 목록에서 뺄까요?\nGoogle의 원본은 그대로 남아요.')){if(await sharedChange(()=>shared.resolveReview(entry.key,'dismiss')))render();}
+  if(b.dataset.reviewAction==='dismiss'&&confirm(entry.status==='웹 기록 유지'?'지금 기록을 그대로 두고 목록에서 뺄까요?':'이 입력을 기록하지 않고 목록에서 뺄까요?\nGoogle의 원본은 그대로 남아요.')){if(await sharedChange(()=>shared.resolveReview(entry.key,'dismiss')))render();}
   return;
  }
  if(b.dataset.action){

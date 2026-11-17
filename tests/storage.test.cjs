@@ -40,7 +40,7 @@ test('Google failures are visible after polling and cleared on logout',async()=>
  const b=browser({server});await b.login();
  assert.match(b.get('#google-status').innerHTML,/재연결이 필요/);
  assert.match(b.get('#google-status').innerHTML,/실패 1건/);
- assert.match(b.get('#google-status').innerHTML,/음성 기록 2건/);
+ assert.match(b.get('#google-status').innerHTML,/음성·캘린더 입력 2건/);
  server.googleStatus={auth_state:'ready',review:0,services:{}};
  await b.eval('refreshShared(true)');
  assert.doesNotMatch(b.get('#google-status').innerHTML,/재연결이 필요/);
@@ -140,7 +140,7 @@ test('review inputs can be saved from a prefilled form or dismissed on the web',
  b.get('#dialog').open=false;b.eval("reviewKey=''");
  await click({reviewKey:'tasks:b',reviewAction:'dismiss'});
  assert.deepEqual(server.reviews.at(-1),{key:'tasks:b',action:'dismiss'});
- assert.match(b.get('#content').innerHTML,/확인할 음성 입력이 없어요/);
+ assert.match(b.get('#content').innerHTML,/확인할 입력이 없어요/);
  // An ordinary add after a review still goes through the normal save path.
  b.eval("openForm('feeding')");
  b.get('#form').values={date:'2026-11-17T09:00',category:'분유',amount:'90ml',memo:''};
@@ -203,4 +203,25 @@ test('unclear feeding kinds are settled with one tap, learned, and can be forgot
  b.get('#form').values={date:'2026-11-17T11:00',category:'분유',amount:'70ml',memo:''};
  await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
  assert.doesNotMatch(b.get('#connection-status').textContent,/기억할게요/);
+});
+
+test('review cards explain why an input waits and name their buttons by situation',async()=>{
+ const server=family();
+ const entry=(key,title,status,suggest)=>({key,source:'Calendar',title,when:'2026-11-17T15:40',status,suggest});
+ server.googleStatus={auth_state:'ready',review:3,errors:[],services:{},review_items:[
+  entry('calendar:a','뷰유','확인 필요',{category:'분유',amount:''}),
+  entry('calendar:b','수유 100미리 병원','확인 필요',{category:'기타',amount:'100ml'}),
+  entry('calendar:c','뷰유 10미리','웹 기록 유지',{category:'분유',amount:'10ml'})]};
+ const b=browser({server});await b.login();b.eval("page='review';render()");
+ const html=b.get('#content').innerHTML;
+ assert.doesNotMatch(html,/수유로 저장/);
+ assert.match(html,/추정 분유<br>양이 없어서 저장하지 않았어요/);
+ assert.match(html,/추정 100ml<br>내용을 확실히 알 수 없어/);
+ assert.match(html,/data-review-key="calendar:a" data-review-action="save">내용 확인하고 저장/);
+ assert.match(html,/추정 분유 10ml<br>웹에서 고친 기록과 캘린더 일정의 내용이 서로 달라요/);
+ assert.match(html,/data-review-key="calendar:c" data-review-action="save">캘린더 내용으로 고치기/);
+ assert.match(html,/data-review-key="calendar:c" data-review-action="dismiss">지금 기록 그대로 두기/);
+ await b.events.get('click')({target:{closest:()=>({dataset:{reviewKey:'calendar:a',reviewAction:'save'}})}});
+ assert.match(b.get('#fields').innerHTML,/<option selected>분유<\/option>/);
+ assert.match(b.get('#fields').innerHTML,/name="amount" type="text" value=""/);
 });

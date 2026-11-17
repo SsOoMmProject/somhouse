@@ -99,8 +99,8 @@ def heard_word(item):
     if not memo.startswith("음성 원문: "):
         return None
     text = " ".join(unicodedata.normalize("NFKC", memo.removeprefix("음성 원문: ").split(" · ")[0]).split())
-    found = scan_feeding(PREFIX.sub("", text)) or {}
-    return found["heard"][0] if len(found.get("heard", [])) == 1 else None
+    found = scan_feeding(PREFIX.sub("", text))
+    return found["heard"][0] if len(found["heard"]) == 1 else None
 
 
 def relearn(db, item):
@@ -111,11 +111,9 @@ def relearn(db, item):
 
 
 def scan_feeding(text, aliases=None):
-    """Classify the words of a normalized title. Returns None when it has no unit-bearing amount."""
+    """Classify the words of a normalized title."""
     aliases = aliases or {}
     amounts = NATURAL_AMOUNT.findall(text)
-    if not amounts:
-        return None
     found = {"amounts": amounts, "kinds": [], "generic": False, "learned": [], "heard": [], "misheard": False,
              "stray": [], "leftover": []}
     for token in NATURAL_AMOUNT.sub(" ", text).replace(".", " ").split():
@@ -147,9 +145,12 @@ def scan_feeding(text, aliases=None):
 def natural_feeding(text, when, item_id, title, aliases=None):
     """Return (tagged, item). tagged=False ignores the event; item=None leaves it for review."""
     found = scan_feeding(text, aliases)
-    if not found:
-        return False, None
     known = bool(found["kinds"]) or found["generic"]
+    if not found["amounts"]:
+        # Only feeding words the family uses ("뷰유", "분유 수유"): surely a feeding, but the amount must
+        # be asked. Anything else without an amount is an ordinary event.
+        clean = not (found["heard"] or found["misheard"] or found["stray"] or found["leftover"])
+        return (True, None) if known and clean else (False, None)
     if not known and not found["heard"] and not found["misheard"]:
         return False, None
     # A look-alike is only read as a feeding next to a volume; "수육 30분" is a cooking time.
