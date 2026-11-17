@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from google_records import (GoogleAPI, GoogleError, HEADERS, SCOPES, SHEETS, TAB, TASKS,
                             load_config, read_config, save_config)
-from calendar_records import CALENDAR, CALENDAR_NAME, CALENDAR_SCOPES, CALENDAR_WEB, event_pages
+from calendar_records import CALENDAR, CALENDAR_NAME, CALENDAR_SCOPES, CALENDAR_WEB, WRITE_SCOPE, event_pages
 from server import DEFAULT_DATA
 
 
@@ -52,6 +52,10 @@ def configure(directory, client_file, inbox=None, calendar=False, *, open_browse
     if previous.get("subject") and previous["subject"] != subject:
         raise SystemExit("기존 연동과 같은 Google 계정으로 다시 로그인해 주세요.")
     config["subject"] = subject
+    if calendar:
+        # Writeback stays off unless Google actually granted the read/write Calendar scope.
+        granted = set(getattr(credentials, "granted_scopes", None) or credentials.scopes or ())
+        config["calendar_write"] = WRITE_SCOPE in granted
     if config["inbox"] == config.get("task_list"):
         raise SystemExit("음성 입력 목록과 웹 기록 목록은 서로 달라야 합니다.")
     next(iter(api.tasks(config["inbox"])), None)

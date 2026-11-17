@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import secrets
+import time
 import unicodedata
 from urllib.parse import quote, urlencode
 
@@ -14,8 +15,11 @@ from google_delivery import eligible
 CALENDAR = "https://www.googleapis.com/calendar/v3/calendars"
 CALENDAR_WEB = "https://calendar.google.com/calendar/"
 CALENDAR_NAME = "솜하우스 수유"
-CALENDAR_SCOPES = ("https://www.googleapis.com/auth/calendar.events.owned.readonly",
-                   "https://www.googleapis.com/auth/calendar.app.created")
+# Read/write on calendars the user owns: needed only to write a web correction back to the original
+# event, and only through the guarded writeback below (docs/CALENDAR_WRITEBACK_PLAN.md).
+WRITE_SCOPE = "https://www.googleapis.com/auth/calendar.events.owned"
+CALENDAR_SCOPES = (WRITE_SCOPE, "https://www.googleapis.com/auth/calendar.app.created")
+WRITE_LIMIT, WRITE_WINDOW = 3, 24 * 3600
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS google_calendar_inputs (
     binding TEXT NOT NULL, inbox TEXT NOT NULL, event_id TEXT NOT NULL, item_id TEXT NOT NULL,
@@ -33,6 +37,13 @@ CREATE TABLE IF NOT EXISTS google_calendar_links (
     binding TEXT NOT NULL, item_id TEXT NOT NULL, event_id TEXT NOT NULL, PRIMARY KEY (binding,item_id)
 );
 CREATE TABLE IF NOT EXISTS feeding_aliases (word TEXT PRIMARY KEY, category TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS google_calendar_writebacks (
+    binding TEXT NOT NULL, event_id TEXT NOT NULL, item_id TEXT NOT NULL, requested_at REAL NOT NULL,
+    PRIMARY KEY (binding,event_id)
+);
+CREATE TABLE IF NOT EXISTS google_calendar_writes (
+    binding TEXT NOT NULL, event_id TEXT NOT NULL, written_at REAL NOT NULL, fingerprint TEXT NOT NULL
+);
 """
 
 
@@ -241,6 +252,30 @@ def reformat_feeding(command):
     return command
 
 
+class WritebackRefused(ValueError):
+    """A writeback request that must not be queued; the message is shown to the family."""
+
+
+def content_fingerprint(summary, description, start):
+    """Safeguard 1: what Somhouse wrote. An event whose content still matches is our own echo."""
+    return hashlib.sha256(encode([summary or "", description or "", start or {}]).encode()).hexdigest()
+
+
+def writeback_title(item):
+    """A title the parser reads back to the same kind and amount (safeguard 2)."""
+    kind = item.get("category") if item.get("category") in FEEDING_KINDS else "수유"
+    return f"{kind} {item['amount']}"
+
+
+def with_original(description, title):
+    """Safeguard 6: keep what was said at the top of the description, once, and keep the user's text."""
+    description = description or ""
+    if description.startswith("음성 원문: "):
+        return description
+    line = f"음성 원문: {title}"
+    return line + ("\n" + description if description else "")
+
+
 MERGED_FIELDS = ("date", "amount", "category", "memo")
 
 
@@ -312,6 +347,16 @@ class CalendarRecords:
         with self.store.connect() as db:
             aliases = load_aliases(db)
         tagged, item = calendar_feeding(event, item_id, aliases)
+        written = (extensions.get("private") or {}).get("somhouseWrite")
+        if (not cancelled and written and item
+                and written == content_fingerprint(event.get("summary"), event.get("description"), event.get("start"))):
+            # Safeguard 1: our own writeback coming back. Remember it as the Calendar side, change nothing else.
+            with self.store.lock, self.store.connect() as db:
+                db.execute("""UPDATE google_calendar_inputs SET fingerprint=?, applied=?, etag=?, review=0
+                    WHERE binding=? AND inbox=? AND event_id=?""",
+                           (encode([False, event.get("summary"), event.get("start")]), encode(item),
+                            event.get("etag") or "", self.binding, self.inbox, event_id))
+            return
         raw = {key: event[key] for key in ("id", "summary", "start", "end", "updated", "status", "htmlLink")
                if key in event}
         fingerprint = encode([cancelled, raw.get("summary"), raw.get("start")])
@@ -323,6 +368,9 @@ class CalendarRecords:
             if not tagged and not cancelled and not previous:
                 return
             if (previous and previous[0] == fingerprint) or (cancelled and not previous):
+                if previous and event.get("etag"):
+                    db.execute("UPDATE google_calendar_inputs SET etag=? WHERE binding=? AND inbox=? AND event_id=?",
+                               (event["etag"], *source_key))
                 return
             applied = previous[1] if previous else None
             current = db.execute("SELECT body FROM items WHERE kind='records' AND id=?", (item_id,)).fetchone()
@@ -367,8 +415,8 @@ class CalendarRecords:
             queue_event(db, self.binding, "records", item_id, {"event": raw, "record": projected or item},
                         source="calendar", action=action, title=raw.get("summary", ""),
                         status=status, skip_task=projected is None)
-            db.execute("INSERT OR REPLACE INTO google_calendar_inputs (binding,inbox,event_id,item_id,fingerprint,applied,review) VALUES (?,?,?,?,?,?,?)",
-                       (*source_key, item_id, fingerprint, applied, review))
+            db.execute("INSERT OR REPLACE INTO google_calendar_inputs (binding,inbox,event_id,item_id,fingerprint,applied,review,etag) VALUES (?,?,?,?,?,?,?,?)",
+                       (*source_key, item_id, fingerprint, applied, review, event.get("etag") or ""))
 
     def pull(self):
         with self.store.connect() as db:
@@ -385,6 +433,112 @@ class CalendarRecords:
         with self.store.lock, self.store.connect() as db:
             db.execute("INSERT OR REPLACE INTO google_calendar_checkpoint VALUES (?,?,?)",
                        (self.binding, self.inbox, (now - timedelta(minutes=2)).isoformat(timespec="seconds")))
+
+    @property
+    def can_write(self):
+        return self.records.config.get("calendar_write") is True
+
+    def writeback_check(self, db, item_id):
+        """Everything that must hold before Somhouse may change the original event. Returns its details."""
+        if not self.can_write:
+            raise WritebackRefused("캘린더 쓰기 권한이 없어요. 관리자가 Google 계정을 다시 연결해야 해요.")
+        row = db.execute("SELECT event_id,fingerprint FROM google_calendar_inputs WHERE binding=? AND inbox=? AND item_id=?",
+                         (self.binding, self.inbox, item_id)).fetchone()
+        current = db.execute("SELECT body FROM items WHERE kind='records' AND id=?", (item_id,)).fetchone()
+        if row is None or current is None:
+            raise WritebackRefused("캘린더에서 들어온 기록만 캘린더에 반영할 수 있어요.")
+        item = json.loads(current[0])
+        if item.get("type") != "feeding" or not item.get("amount"):
+            raise WritebackRefused("수유 기록만 캘린더에 반영할 수 있어요.")
+        source = db.execute("""SELECT raw FROM google_record_events WHERE binding=? AND source='calendar'
+            AND item_id=? ORDER BY seq DESC LIMIT 1""", (self.binding, item_id)).fetchone()
+        event = (json.loads(source[0]).get("event") or {}) if source else {}
+        if not isinstance(event.get("start"), dict) or not event["start"].get("dateTime"):
+            raise WritebackRefused("종일 일정은 캘린더에 반영하지 않아요.")
+        title = writeback_title(item)
+        # Safeguard 2: the new title must read back to this record, and must change something.
+        probe = dict(event, summary=title, created=event.get("created"))
+        _, reread = calendar_feeding(probe, item_id, load_aliases(db))
+        if not reread or (reread["category"], reread["amount"]) != (
+                item["category"] if item["category"] in FEEDING_KINDS else "기타", item["amount"]):
+            raise WritebackRefused("이 기록은 캘린더 제목으로 정확히 옮길 수 없어요.")
+        # The title Calendar has now (kept on every read, including our own echo).
+        try:
+            seen_title = json.loads(row[1])[1]
+        except (TypeError, ValueError, IndexError):
+            seen_title = event.get("summary")
+        if seen_title == title:
+            raise WritebackRefused("캘린더 일정이 이미 같은 내용이에요.")
+        # Safeguard 5: a per-event limit stops any loop the other safeguards miss.
+        recent = db.execute("SELECT COUNT(*) FROM google_calendar_writes WHERE binding=? AND event_id=? AND written_at>?",
+                            (self.binding, row[0], time.time() - WRITE_WINDOW)).fetchone()[0]
+        if recent >= WRITE_LIMIT:
+            raise WritebackRefused("이 일정은 오늘 이미 여러 번 바꿨어요. 캘린더에서 직접 확인해 주세요.")
+        return row[0], item, title
+
+    def request_writeback(self, db, item_id):
+        """Safeguard 3: only an explicit tap queues a writeback, once."""
+        event_id, _, title = self.writeback_check(db, item_id)
+        db.execute("INSERT OR REPLACE INTO google_calendar_writebacks VALUES (?,?,?,?)",
+                   (self.binding, event_id, item_id, time.time()))
+        return title
+
+    def flush_writebacks(self):
+        with self.store.connect() as db:
+            queued = db.execute("SELECT event_id,item_id FROM google_calendar_writebacks WHERE binding=? ORDER BY requested_at LIMIT 5",
+                                (self.binding,)).fetchall()
+        for event_id, item_id in queued:
+            if self.records.stop.is_set():
+                return
+            self.writeback(event_id, item_id)
+
+    def writeback(self, event_id, item_id):
+        def finish(conflict=None):
+            with self.store.lock, self.store.connect() as db:
+                db.execute("DELETE FROM google_calendar_writebacks WHERE binding=? AND event_id=?", (self.binding, event_id))
+                if conflict:
+                    db.execute("UPDATE google_calendar_inputs SET review=1 WHERE binding=? AND inbox=? AND event_id=?",
+                               (self.binding, self.inbox, event_id))
+                    queue_event(db, self.binding, "records", item_id, {"event_id": event_id, "reason": conflict},
+                                action="calendar-writeback", status="캘린더 반영 안 함 · " + conflict, skip_task=True)
+
+        with self.store.connect() as db:
+            try:
+                _, item, title = self.writeback_check(db, item_id)
+            except WritebackRefused as refused:
+                finish(str(refused))
+                return
+            seen = db.execute("SELECT etag FROM google_calendar_inputs WHERE binding=? AND inbox=? AND event_id=?",
+                              (self.binding, self.inbox, event_id)).fetchone()
+        url = f"{calendar_url(self.inbox)}/{quote(event_id, safe='')}"
+        try:
+            remote = self.api.request(url, service="Calendar")
+            # Safeguard 4: Calendar changed after Somhouse last read it; never overwrite that.
+            if not seen or not seen[0] or remote.get("etag") != seen[0]:
+                finish("캘린더 일정이 먼저 바뀌었어요")
+                return
+            description = with_original(remote.get("description"), remote.get("summary", ""))
+            mark = content_fingerprint(title, description, remote.get("start"))
+            body = {"summary": title, "description": description,
+                    "extendedProperties": {"private": {"somhouseWrite": mark}}}
+            result = self.api.request(url + "?sendUpdates=none", "PATCH", body, service="Calendar", etag=seen[0])
+        except GoogleError as error:
+            if error.status == 412:
+                finish("캘린더 일정이 먼저 바뀌었어요")
+                return
+            if error.status in (403, 404, 410):
+                finish(f"캘린더가 거절했어요 ({error.status})")
+                return
+            raise
+        with self.store.lock, self.store.connect() as db:
+            db.execute("INSERT INTO google_calendar_writes VALUES (?,?,?,?)", (self.binding, event_id, time.time(), mark))
+            db.execute("DELETE FROM google_calendar_writebacks WHERE binding=? AND event_id=?", (self.binding, event_id))
+            db.execute("UPDATE google_calendar_inputs SET etag=? WHERE binding=? AND inbox=? AND event_id=?",
+                       (result.get("etag") or "", self.binding, self.inbox, event_id))
+            # Safeguard 6: the Sheets history records the change next to the original input.
+            queue_event(db, self.binding, "records", item_id,
+                        {"event_id": event_id, "from": remote.get("summary", ""), "to": title},
+                        action="calendar-writeback", title=title, status="캘린더 반영", skip_task=True)
 
     def flush(self):
         with self.store.connect() as db:

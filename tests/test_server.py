@@ -511,6 +511,42 @@ class FamilyAPI(unittest.TestCase):
             self.assertEqual(code, 200)
             self.assertEqual(self.request("/api/data", token=token)[1]["aliases"], {"머유": "모유"})
 
+    def test_calendar_writeback_endpoint_queues_only_allowed_requests(self):
+        config = {"binding": "wb-demo", "inbox": "@default", "task_list": "archive", "spreadsheet": "test-sheet",
+                  "calendar_inbox": "primary", "calendar_outbox": "app-cal"}
+        reader, writer = GoogleRecords(self.store, config), GoogleRecords(self.store, dict(config, calendar_write=True))
+        event = {"id": "w1", "summary": "분유 10ml", "etag": '"e1"', "start": {"dateTime": "2026-11-17T14:00:00+09:00"}}
+        writer.calendar.record(event)
+        token = self.login()
+        with patch.object(self.server, "google", reader):
+            [record] = self.request("/api/data", token=token)[1]["data"]["records"]
+            self.assertFalse(self.request("/api/data", token=token)[1]["google_status"]["calendar_write"])
+            code, body, _ = self.request("/api/calendar-writeback", "POST", {"id": record["id"]}, token)
+            self.assertEqual(code, 409)
+            self.assertIn("권한", body["error"])
+        with patch.object(self.server, "google", writer):
+            self.assertEqual(self.request("/api/calendar-writeback", "POST", {"id": record["id"]}, token)[0], 409)
+            self.assertEqual(self.request("/api/items/records/" + record["id"], "PUT",
+                                          dict(record, amount="20ml"), token)[0], 200)
+            code, body, _ = self.request("/api/calendar-writeback", "POST", {"id": record["id"]}, token)
+            self.assertEqual((code, body["title"], body["google_status"]["calendar_write"]), (200, "분유 20ml", True))
+            self.assertEqual(self.request("/api/calendar-writeback", "POST", {"id": ""}, token)[0], 400)
+            self.assertEqual(self.request("/api/calendar-writeback", "POST", {"id": record["id"]})[0], 401)
+        with self.store.connect() as db:
+            self.assertEqual(db.execute("SELECT event_id FROM google_calendar_writebacks").fetchall(), [("w1",)])
+
+    def test_existing_database_gains_the_calendar_etag_column(self):
+        import sqlite3
+        directory = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, directory)
+        with sqlite3.connect(directory / "somhouse.sqlite3") as db:
+            db.execute("""CREATE TABLE google_calendar_inputs (binding TEXT NOT NULL, inbox TEXT NOT NULL,
+                event_id TEXT NOT NULL, item_id TEXT NOT NULL, fingerprint TEXT NOT NULL, applied TEXT,
+                review INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (binding, inbox, event_id))""")
+            db.execute("INSERT INTO google_calendar_inputs VALUES ('b','primary','e','cal-x','[]',NULL,1)")
+        store = Store(directory)
+        with store.connect() as db:
+            self.assertEqual(db.execute("SELECT review,etag FROM google_calendar_inputs").fetchall(), [(1, "")])
+
     def test_purchase_task_notes_keep_user_text_and_compare_only_matching_current_prices(self):
         bridge = GoogleRecords(self.store, {"binding": "shopping-demo", "inbox": "@default", "task_list": "archive",
                                            "spreadsheet": "test-sheet"})

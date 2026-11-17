@@ -116,6 +116,12 @@
       }
       return result.data;
     }
+    // Ask the server to write a web correction back to the original Calendar event (button only).
+    async calendarWriteback(id) {
+      const token = this.token, result = await this.request('/api/calendar-writeback', 'POST', {id});
+      if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null; this.aliases = result.aliases || {};}
+      return result;
+    }
     async merge(data) {
       const token = this.token, result = await this.request('/api/merge', 'POST', data);
       if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null;}

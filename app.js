@@ -141,7 +141,7 @@ async function changeItem(k,x,remove=false){return sharedChange(()=>remove?share
 const schemas={feeding:[['date','날짜와 시간','datetime-local',1],['category','수유 종류','select',1],['amount','양 또는 시간','text',1],['memo','메모','textarea',0]],hospital:[['date','날짜와 시간','datetime-local',1],['hospital','병원','text',1],['reason','방문 이유','text',1],['memo','메모','textarea',0]],schedule:[['date','날짜와 시간','datetime-local',1],['title','일정 이름','text',1],['memo','메모','textarea',0]],shopping:[['title','품목','text',1],['quantity','수량','text',1],['memo','메모','textarea',0],['url','상품 링크 (선택)','url',0]]};
 function link(url){try{let u=new URL(url);return ['http:','https:'].includes(u.protocol)?`<a href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">상품 링크 ↗</a>`:''}catch{return ''}}
 function desc(x,k){if(k==='records')return x.type==='feeding'?`수유 · ${esc(x.category)} · ${esc(x.amount)}`:`병원 · ${esc(x.hospital)} · ${esc(x.reason)}`;return esc(x.title)+(k==='shopping'?` · ${esc(x.quantity)}`:'')}
-function item(x,k,compact=false){return `<div class="item"><strong>${desc(x,k)}</strong> ${k==='shopping'?`<span class="badge">${x.done==='yes'?'구매 완료':'구매 예정'}</span>`:''}${x.confirm==='category'?'<span class="badge warn">종류 확인 필요</span>':''}<p>${esc((x.date||'').replace('T',' '))}${x.memo?'<br>'+esc(x.memo):''}</p>${x.url?link(x.url):''}${compact?'':`<div class="actions">${k==='shopping'?`<button class="secondary" data-action="toggle" data-key="${k}" data-id="${esc(x.id)}">${x.done==='yes'?'다시 예정으로':'완료로 변경'}</button>`:''}<button class="secondary" data-action="edit" data-key="${k}" data-id="${esc(x.id)}">수정</button><button class="secondary" data-action="delete" data-key="${k}" data-id="${esc(x.id)}">삭제</button></div>`}</div>`}
+function item(x,k,compact=false){return `<div class="item"><strong>${desc(x,k)}</strong> ${k==='shopping'?`<span class="badge">${x.done==='yes'?'구매 완료':'구매 예정'}</span>`:''}${x.confirm==='category'?'<span class="badge warn">종류 확인 필요</span>':''}<p>${esc((x.date||'').replace('T',' '))}${x.memo?'<br>'+esc(x.memo):''}</p>${x.url?link(x.url):''}${compact?'':`<div class="actions">${k==='shopping'?`<button class="secondary" data-action="toggle" data-key="${k}" data-id="${esc(x.id)}">${x.done==='yes'?'다시 예정으로':'완료로 변경'}</button>`:''}<button class="secondary" data-action="edit" data-key="${k}" data-id="${esc(x.id)}">수정</button>${k==='records'&&x.type==='feeding'&&String(x.id).startsWith('cal-')&&shared?.googleStatus?.calendar_write?`<button class="secondary" data-writeback="${esc(x.id)}">캘린더에도 반영</button>`:''}<button class="secondary" data-action="delete" data-key="${k}" data-id="${esc(x.id)}">삭제</button></div>`}</div>`}
 function sorted(k){return [...data[k]].sort((a,b)=>(b.date||b.id).localeCompare(a.date||a.id))}
 const pageTitles={home:'홈',records:'육아 기록',stats:'수유 통계',schedule:'일정',shopping:'구매 목록',ai:'AI 대화',review:'확인 필요'};
 let reviewKey='';
@@ -278,6 +278,14 @@ document.addEventListener('click',async e=>{
    if(entry.heard&&kind!=='기타'&&shared.aliases?.[entry.heard]===kind)message(`저장했어요. 앞으로 ‘${entry.heard}’는 ${kind}로 기억할게요.`);
    render();
   }
+  return;
+ }
+ if(b.dataset.writeback){
+  const entry=data.records.find(x=>x.id===b.dataset.writeback);if(!entry)return;
+  const kind=['분유','모유','혼합'].includes(entry.category)?entry.category:'수유';
+  if(!confirm(`기본 캘린더의 원래 일정 제목을 ‘${kind} ${entry.amount}’로 바꿀까요?\n원래 제목은 일정 설명에 남고, 시각은 바꾸지 않아요.`))return;
+  let next;
+  if(await sharedChange(async()=>{next=await shared.calendarWriteback(entry.id);return next.data;})){message(`캘린더 반영을 요청했어요. 잠시 뒤 ‘${next.title}’로 바뀌어요.`);render();}
   return;
  }
  if(b.dataset.forget){

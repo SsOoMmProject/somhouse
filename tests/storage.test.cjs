@@ -225,3 +225,20 @@ test('review cards explain why an input waits and name their buttons by situatio
  assert.match(b.get('#fields').innerHTML,/<option selected>분유<\/option>/);
  assert.match(b.get('#fields').innerHTML,/name="amount" type="text" value=""/);
 });
+
+test('calendar writeback button appears only with write permission and asks before sending',async()=>{
+ const server=family();
+ server.data.records.push({id:'cal-1',type:'feeding',date:'2026-11-17T14:00',category:'분유',amount:'10ml',memo:''},
+                          {id:'web-1',type:'feeding',date:'2026-11-17T15:00',category:'분유',amount:'20ml',memo:''});
+ server.googleStatus={auth_state:'ready',review:0,errors:[],services:{},calendar_write:false};
+ const b=browser({server});await b.login();b.eval("page='records';render()");
+ assert.doesNotMatch(b.get('#content').innerHTML,/data-writeback/);
+ server.googleStatus={...server.googleStatus,calendar_write:true};
+ await b.eval('refreshShared(true)');b.eval("page='records';render()");
+ const html=b.get('#content').innerHTML;
+ assert.match(html,/data-writeback="cal-1">캘린더에도 반영/);assert.doesNotMatch(html,/data-writeback="web-1"/);
+ const asked=[];b.context.confirm=text=>{asked.push(text);return false;};
+ await b.events.get('click')({target:{closest:()=>({dataset:{writeback:'cal-1'}})}});
+ assert.match(asked[0],/‘분유 10ml’로 바꿀까요/);
+ assert.equal(b.calls.filter(x=>x.url.endsWith('/api/calendar-writeback')).length,0);
+});
