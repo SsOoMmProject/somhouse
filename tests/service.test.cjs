@@ -75,3 +75,15 @@ test('period summaries cover today, yesterday, this week and last week (Sunday s
  const feb=monthGrid([],2027,2,now);assert.equal(feb.filter(Boolean).length,28);assert.equal(feb.slice(0,1)[0],null);
  assert.equal(rangeSummary(records,'2026-12-01','2026-12-31',now).count,0);
 });
+
+test('month grid counts schedules and only pending dated shopping per day',()=>{
+ const {monthGrid}=require('../service.js');
+ const now=new Date(2026,10,17,15,0);
+ const schedule=[{id:'1',date:'2026-11-20T19:00',title:'약속',who:'아빠'},{id:'2',date:'2026-11-20T08:00',title:'병원'},{id:'3',date:'2026-12-01T08:00',title:'다음달'}];
+ const shopping=[{id:'a',title:'기저귀',quantity:'1',date:'2026-11-20',done:'no'},{id:'b',title:'분유',quantity:'1',date:'2026-11-20',done:'yes'},{id:'c',title:'물티슈',quantity:'1',done:'no'}];
+ const grid=monthGrid([],2026,11,now,schedule,shopping);
+ const day20=grid.find(c=>c&&c.day===20);
+ assert.deepEqual([day20.schedule,day20.shopping,day20.count,day20.future],[2,1,0,true]);
+ assert.equal(grid.filter(Boolean).reduce((n,c)=>n+c.schedule+c.shopping,0),3);
+ assert.equal(monthGrid([],2026,11,now).find(c=>c&&c.day===20).schedule,0);
+});
