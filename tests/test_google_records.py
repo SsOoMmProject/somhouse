@@ -337,6 +337,46 @@ class GoogleRegression(unittest.TestCase):
         self.assertEqual([learnable(w) for w in ('부유', '머유', '수육', '수유', '분유', '부', '부유물')],
                          [True, True, False, False, False, False, False])
 
+    def test_calendar_edit_and_web_edit_of_different_fields_are_both_kept(self):
+        event = {'id': 'm1', 'summary': '뷰유 10미리', 'created': '2026-01-01T05:01:00Z',
+                 'start': {'dateTime': '2026-01-01T14:00:00+09:00'}}
+        calendar = self.bridge.calendar
+        calendar.record(event)
+        def record():
+            return json.loads(self.rows("SELECT body FROM items WHERE kind='records'")[0][0])
+        def web(**changes):
+            body = dict(record(), **changes)
+            body.pop('confirm', None)
+            with self.store.connect() as db:
+                db.execute("UPDATE items SET body=? WHERE kind='records'", (encode(body),))
+        self.assertEqual((record()['category'], record()['confirm']), ('기타', 'category'))
+        # The kind is picked on the web; later the time is fixed in Calendar: both survive.
+        web(category='분유')
+        calendar.record(dict(event, start={'dateTime': '2026-01-01T13:30:00+09:00'}))
+        self.assertEqual((record()['date'], record()['category'], 'confirm' in record()), ('2026-01-01T13:30', '분유', False))
+        # The amount is fixed in Calendar as well.
+        calendar.record(dict(event, summary='뷰유 30미리', start={'dateTime': '2026-01-01T13:30:00+09:00'}))
+        self.assertEqual((record()['amount'], record()['category'], record()['date']), ('30ml', '분유', '2026-01-01T13:30'))
+        with self.store.connect() as db:
+            self.assertEqual(self.bridge.status(db)['review'], 0)
+        # Both sides changing the same field differently is a real conflict: the web value stays, review is raised.
+        web(amount='45ml')
+        calendar.record(dict(event, summary='뷰유 60미리', start={'dateTime': '2026-01-01T13:30:00+09:00'}))
+        self.assertEqual(record()['amount'], '45ml')
+        with self.store.connect() as db:
+            status = self.bridge.status(db)
+        self.assertEqual((status['review'], status['review_items'][0]['status']), (1, '웹 기록 유지'))
+        # Once Calendar agrees with the web value the conflict clears itself.
+        calendar.record(dict(event, summary='뷰유 45미리', start={'dateTime': '2026-01-01T13:30:00+09:00'}))
+        self.assertEqual(record()['amount'], '45ml')
+        with self.store.connect() as db:
+            self.assertEqual(self.bridge.status(db)['review'], 0)
+        # A record deleted on the web is not brought back by a Calendar edit.
+        with self.store.connect() as db:
+            db.execute("DELETE FROM items")
+        calendar.record(dict(event, summary='뷰유 50미리', start={'dateTime': '2026-01-01T13:30:00+09:00'}))
+        self.assertFalse(self.rows("SELECT * FROM items"))
+
     def test_hand_typed_calendar_events_use_the_time_they_were_entered(self):
         from calendar_records import calendar_feeding
         def parse(start, created='2026-11-17T04:10:30.000Z', summary='수유 100ml'):
