@@ -377,6 +377,26 @@ class GoogleRegression(unittest.TestCase):
         calendar.record(dict(event, summary='뷰유 50미리', start={'dateTime': '2026-01-01T13:30:00+09:00'}))
         self.assertFalse(self.rows("SELECT * FROM items"))
 
+    def test_feeding_words_without_an_amount_wait_for_the_amount_instead_of_vanishing(self):
+        from calendar_records import calendar_feeding
+        start = {'dateTime': '2026-11-17T15:40:00+09:00'}
+        def parse(summary, aliases=None):
+            return calendar_feeding({'summary': summary, 'start': start}, 'cal-x', aliases)
+        for summary in ('수유', '분유', '모유 수유', '분유 기록'):
+            self.assertEqual(parse(summary), (True, None), summary)
+        self.assertEqual(parse('뷰유', {'뷰유': '분유'}), (True, None))
+        # A word nobody taught, or a feeding word inside an ordinary event, is still not ours.
+        for summary in ('뷰유', '수육', '교육', '분유 사기', '수유실 위치', '모유 수유 교육', '분유 2통'):
+            self.assertEqual(parse(summary), (False, None), summary)
+        with self.store.connect() as db:
+            db.execute("INSERT INTO feeding_aliases VALUES ('뷰유','분유')")
+        self.bridge.calendar.record({'id': 'w1', 'summary': '뷰유', 'start': start})
+        with self.store.connect() as db:
+            status = self.bridge.status(db)
+        self.assertEqual(status['review'], 1)
+        self.assertEqual(status['review_items'][0]['suggest'], {'category': '분유', 'amount': ''})
+        self.assertFalse(self.rows("SELECT * FROM items"))
+
     def test_hand_typed_calendar_events_use_the_time_they_were_entered(self):
         from calendar_records import calendar_feeding
         def parse(start, created='2026-11-17T04:10:30.000Z', summary='수유 100ml'):
