@@ -21,6 +21,15 @@ function browser({raw=JSON.stringify(blank()),session=null,local=new Map([['somh
    const original=JSON.parse(options.body);
    for(const k of Object.keys(original))for(const item of original[k]){const key=k+':'+item.id;if(!server.imported.has(key)&&!server.data[k].some(x=>x.id===item.id))server.data[k].push(clone(item));server.imported.add(key);}
    result={data:clone(server.data)};
+  }else if(url.endsWith('/api/confirm')){
+   const request=JSON.parse(options.body);(server.confirms||=[]).push(request);server.aliases||={};
+   if(request.forget)delete server.aliases[request.forget];
+   else{
+    const item=server.data.records.find(x=>x.id===request.id);
+    if(item.heard&&request.category!=='기타')server.aliases[item.heard]=request.category;
+    item.category=request.category;delete item.confirm;delete item.heard;
+   }
+   result={data:clone(server.data),aliases:clone(server.aliases)};
   }else if(url.endsWith('/api/review')){
    const request=JSON.parse(options.body);(server.reviews||=[]).push(request);
    if(request.action==='save')server.data[request.kind].push(clone({...request.item,id:'review-'+request.key}));
@@ -32,7 +41,7 @@ function browser({raw=JSON.stringify(blank()),session=null,local=new Map([['somh
    server.data[kind]=server.data[kind].filter(x=>x.id!==item.id);server.data[kind].push(clone(item));result={data:clone(server.data)};
   }else if(options.method==='DELETE'){
    const parts=url.split('/'),kind=parts.at(-2),id=decodeURIComponent(parts.at(-1));server.data[kind]=server.data[kind].filter(x=>x.id!==id);result={data:clone(server.data)};
-  }else result={data:clone(server.data),sources:server.sources,google_status:server.googleStatus};
+  }else result={data:clone(server.data),sources:server.sources,google_status:server.googleStatus,aliases:server.aliases};
   if(url.endsWith('/api/data')&&server.readGate){const gate=server.readGate;server.readGate=null;await gate;}
   return {ok:true,json:async()=>result};
  }};

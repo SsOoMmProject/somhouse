@@ -141,7 +141,7 @@ async function changeItem(k,x,remove=false){return sharedChange(()=>remove?share
 const schemas={feeding:[['date','날짜와 시간','datetime-local',1],['category','수유 종류','select',1],['amount','양 또는 시간','text',1],['memo','메모','textarea',0]],hospital:[['date','날짜와 시간','datetime-local',1],['hospital','병원','text',1],['reason','방문 이유','text',1],['memo','메모','textarea',0]],schedule:[['date','날짜와 시간','datetime-local',1],['title','일정 이름','text',1],['memo','메모','textarea',0]],shopping:[['title','품목','text',1],['quantity','수량','text',1],['memo','메모','textarea',0],['url','상품 링크 (선택)','url',0]]};
 function link(url){try{let u=new URL(url);return ['http:','https:'].includes(u.protocol)?`<a href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">상품 링크 ↗</a>`:''}catch{return ''}}
 function desc(x,k){if(k==='records')return x.type==='feeding'?`수유 · ${esc(x.category)} · ${esc(x.amount)}`:`병원 · ${esc(x.hospital)} · ${esc(x.reason)}`;return esc(x.title)+(k==='shopping'?` · ${esc(x.quantity)}`:'')}
-function item(x,k,compact=false){return `<div class="item"><strong>${desc(x,k)}</strong> ${k==='shopping'?`<span class="badge">${x.done==='yes'?'구매 완료':'구매 예정'}</span>`:''}<p>${esc((x.date||'').replace('T',' '))}${x.memo?'<br>'+esc(x.memo):''}</p>${x.url?link(x.url):''}${compact?'':`<div class="actions">${k==='shopping'?`<button class="secondary" data-action="toggle" data-key="${k}" data-id="${esc(x.id)}">${x.done==='yes'?'다시 예정으로':'완료로 변경'}</button>`:''}<button class="secondary" data-action="edit" data-key="${k}" data-id="${esc(x.id)}">수정</button><button class="secondary" data-action="delete" data-key="${k}" data-id="${esc(x.id)}">삭제</button></div>`}</div>`}
+function item(x,k,compact=false){return `<div class="item"><strong>${desc(x,k)}</strong> ${k==='shopping'?`<span class="badge">${x.done==='yes'?'구매 완료':'구매 예정'}</span>`:''}${x.confirm==='category'?'<span class="badge warn">종류 확인 필요</span>':''}<p>${esc((x.date||'').replace('T',' '))}${x.memo?'<br>'+esc(x.memo):''}</p>${x.url?link(x.url):''}${compact?'':`<div class="actions">${k==='shopping'?`<button class="secondary" data-action="toggle" data-key="${k}" data-id="${esc(x.id)}">${x.done==='yes'?'다시 예정으로':'완료로 변경'}</button>`:''}<button class="secondary" data-action="edit" data-key="${k}" data-id="${esc(x.id)}">수정</button><button class="secondary" data-action="delete" data-key="${k}" data-id="${esc(x.id)}">삭제</button></div>`}</div>`}
 function sorted(k){return [...data[k]].sort((a,b)=>(b.date||b.id).localeCompare(a.date||a.id))}
 const pageTitles={home:'홈',records:'육아 기록',stats:'수유 통계',schedule:'일정',shopping:'구매 목록',ai:'AI 대화',review:'확인 필요'};
 let reviewKey='';
@@ -156,10 +156,24 @@ const filters={records:{},schedule:{},shopping:{}};
 function route(){const name=location.hash.slice(1);page=Object.hasOwn(pageTitles,name)?name:'home';render()}
 function quickButtons(){return '<div class="quick"><button data-add="feeding">＋ 수유 기록</button><button class="secondary" data-add="hospital">병원 방문</button><button class="secondary" data-add="schedule">일정</button><button class="secondary" data-add="shopping">구매 물품</button></div>'}
 // Opens a prefilled form only; nothing is saved until the family member taps 저장하기.
+const feedingKinds=['분유','모유','혼합','기타'];
+function unconfirmed(){return data.records.filter(x=>x.type==='feeding'&&x.confirm==='category').sort((a,b)=>b.date.localeCompare(a.date));}
+// Feedings saved from an unclear voice or Calendar input: one tap settles the kind.
+function confirmBox(){
+ const items=unconfirmed();
+ if(!items.length)return '';
+ const rows=items.slice(0,5).map(x=>`<div class="confirm-row"><p><strong>${esc(x.date.replace('T',' '))} · ${esc(x.amount)}</strong>${x.heard?` · 들린 말 ‘${esc(x.heard)}’`:''}${x.memo?`<br><span class="caption">${esc(x.memo)}</span>`:''}</p><div class="quick">${feedingKinds.map(kind=>`<button class="${kind==='기타'?'plain':'secondary'}" data-confirm-id="${esc(x.id)}" data-confirm-category="${kind}">${kind==='기타'?'기타로 두기':kind}</button>`).join('')}</div></div>`).join('');
+ return `<section class="card confirm-box" aria-label="수유 종류 확인"><h2>수유 종류를 골라 주세요 · ${items.length}건</h2><p class="caption">음성이나 캘린더 입력에서 분유·모유를 구분하지 못한 기록이에요. 이미 저장돼 있고, 종류만 눌러 주시면 돼요.</p>${rows}${items.length>5?`<p class="caption">나머지 ${items.length-5}건은 위 기록을 고르면 이어서 보여요.</p>`:''}</section>`;
+}
+function aliasList(){
+ const entries=Object.entries(shared?.aliases||{});
+ if(!entries.length)return '';
+ return `<li><strong>기억한 말:</strong> ${entries.map(([word,kind])=>`‘${esc(word)}’→${esc(kind)} <button class="plain" data-forget="${esc(word)}">잊기</button>`).join(' ')}</li>`;
+}
 // Shown only when the Google Calendar intake is connected. Static text, no user data.
 function voiceHelp(){
  if(shared?.sources?.calendar!=='https://calendar.google.com/calendar/')return '';
- return `<details class="voice-help"><summary>음성·캘린더로 수유 기록하는 방법</summary><ul><li><strong>말로:</strong> 네스트 허브·휴대폰·태블릿에서 “헤이 구글, 100미리 수유 캘린더에 업데이트”</li><li><strong>직접 입력:</strong> Google 캘린더 앱에서 새 일정 제목에 <strong>수유 100ml</strong>, <strong>분유 120미리</strong>, <strong>모유 15분</strong>처럼 적고 저장</li><li>제목에는 <strong>수유·분유·모유</strong>와 <strong>단위가 붙은 양</strong>(ml·미리·cc, 직수는 분)이 있어야 해요.</li><li>시각은 따로 고치지 않아도 돼요. 일정 시각이 입력한 때부터 2시간 안이거나 종일 일정이면 입력한 시각으로 저장해요. 지난 수유는 일정의 시작 시각을 실제 시각으로 맞춰 주세요.</li><li>같은 Google 계정의 기본 캘린더만 읽고, 약 30초 뒤 여기에 나타나요. 반복 일정과 2시간보다 먼 미래 일정은 저장하지 않아요.</li><li>알아듣기 어려운 입력은 위쪽 ‘확인 필요’에 모여요.</li></ul></details>`;
+ return `<details class="voice-help"><summary>음성·캘린더로 수유 기록하는 방법</summary><ul><li><strong>말로:</strong> 네스트 허브·휴대폰·태블릿에서 “헤이 구글, 100미리 수유 캘린더에 업데이트”</li><li><strong>직접 입력:</strong> Google 캘린더 앱에서 새 일정 제목에 <strong>수유 100ml</strong>, <strong>분유 120미리</strong>, <strong>모유 15분</strong>처럼 적고 저장</li><li>제목에는 <strong>수유·분유·모유</strong>와 <strong>단위가 붙은 양</strong>(ml·미리·cc, 직수는 분)이 있어야 해요.</li><li>시각은 따로 고치지 않아도 돼요. 일정 시각이 입력한 때부터 2시간 안이거나 종일 일정이면 입력한 시각으로 저장해요. 지난 수유는 일정의 시작 시각을 실제 시각으로 맞춰 주세요.</li><li>같은 Google 계정의 기본 캘린더만 읽고, 약 30초 뒤 여기에 나타나요. 반복 일정과 2시간보다 먼 미래 일정은 저장하지 않아요.</li><li>‘수유 100ml’처럼 종류를 말하지 않았거나 ‘부유’처럼 비슷하게 들린 말은 일단 저장하고, 홈에서 분유·모유를 고르게 해요. 고른 말은 기억해서 다음부터 자동으로 구분해요.</li>${aliasList()}<li>알아듣기 어려운 입력은 위쪽 ‘확인 필요’에 모여요.</li></ul></details>`;
 }
 function repeatButtons(){
  const recent=Somhouse.recentFeedings(data.records);
@@ -169,7 +183,7 @@ function repeatButtons(){
 function homeView(){
   const now=Somhouse.localDateTime();const stats=Somhouse.summary(data.records);
   const upcoming=[...data.schedule].filter(x=>x.date>=now).sort((a,b)=>a.date.localeCompare(b.date));
-  return `<h1>우리 가족의 오늘</h1><p class="intro">${esc(now.slice(0,10))} · 작은 순간을 차곡차곡 남겨요.</p>${quickButtons()}${repeatButtons()}${voiceHelp()}
+  return `<h1>우리 가족의 오늘</h1><p class="intro">${esc(now.slice(0,10))} · 작은 순간을 차곡차곡 남겨요.</p>${quickButtons()}${repeatButtons()}${voiceHelp()}${confirmBox()}
     <section class="card daily" aria-label="오늘의 수유 요약"><h2>오늘의 수유</h2><div class="summary-grid"><div><strong>${stats.count}회</strong><p>오늘 기록한 수유</p></div><div><strong>${stats.volume}ml</strong><p>용량이 명시된 기록 합계</p></div><div><strong>${stats.latest?esc(stats.latest.replace('T',' ')):'아직 없어요'}</strong><p>가장 최근 수유</p></div></div><p class="caption">용량 합계는 오늘 기록 중 ‘80ml’처럼 단위를 명시한 ${stats.measuredCount}건만 계산합니다. 직수 시간과 단위 없는 값은 합산하지 않습니다.</p></section>
     <div class="grid">${[['최근 육아 기록',sorted('records').slice(0,3),'records','첫 수유나 병원 방문을 기록해보세요.'],['다가오는 일정',upcoming.slice(0,3),'schedule','예정된 일정이 없어요.'],['구매 예정',data.shopping.filter(x=>x.done!=='yes').slice(0,3),'shopping','필요한 물품을 추가해보세요.']].map(([title,items,k,msg])=>`<section class="card"><h2>${title}</h2>${items.length?items.map(x=>item(x,k,true)).join(''):`<p class="empty">${msg}</p>`}<button class="plain" data-page="${k}">전체 보기 →</button></section>`).join('')}</div>`;
 }
@@ -252,6 +266,18 @@ document.addEventListener('click',async e=>{
  if(['7','30'].includes(b.dataset.statsDays)){statsDays=Number(b.dataset.statsDays);render();return;}
  if(b.dataset.add){if(mode==='shared'&&!sharedReady)return;openForm(b.dataset.add);}
  if(b.dataset.repeatCategory&&b.dataset.repeatAmount){openForm('feeding',null,{category:b.dataset.repeatCategory,amount:b.dataset.repeatAmount});return;}
+ if(b.dataset.confirmId&&feedingKinds.includes(b.dataset.confirmCategory)){
+  const entry=data.records.find(x=>x.id===b.dataset.confirmId),kind=b.dataset.confirmCategory;if(!entry)return;
+  if(await sharedChange(()=>shared.confirm({id:entry.id,category:kind}))){
+   if(entry.heard&&kind!=='기타'&&shared.aliases?.[entry.heard]===kind)message(`저장했어요. 앞으로 ‘${entry.heard}’는 ${kind}로 기억할게요.`);
+   render();
+  }
+  return;
+ }
+ if(b.dataset.forget){
+  if(confirm(`‘${b.dataset.forget}’를 기억에서 지울까요? 이미 저장한 기록은 바뀌지 않아요.`)&&await sharedChange(()=>shared.confirm({forget:b.dataset.forget})))render();
+  return;
+ }
  if(b.dataset.reviewKey){
   const entry=reviewItems().find(x=>x.key===b.dataset.reviewKey);if(!entry)return;
   if(b.dataset.reviewAction==='save'){openForm('feeding',null,{category:entry.suggest?.category||'기타',amount:entry.suggest?.amount||'',date:entry.when||'',memo:entry.title?'음성 원문: '+entry.title:''},entry.key);return;}
@@ -271,7 +297,7 @@ $('#form').onsubmit=async e=>{
  e.preventDefault();if(busy)return;
  const k=['feeding','hospital'].includes(kind)?'records':kind;
  const x={...(editing||{}),...Object.fromEntries(new FormData(e.target)),id:editing?.id||draftId};
- if(k==='records')x.type=kind;if(k==='shopping'&&!x.done)x.done='no';
+ if(k==='records'){x.type=kind;delete x.confirm;delete x.heard;}if(k==='shopping'&&!x.done)x.done='no';
  for(const field of schemas[kind])x[field[0]]=String(x[field[0]]||'').trim();
  if(schemas[kind].some(([name,,,required])=>required&&!x[name])){alert('필수 항목을 입력해 주세요.');return;}
  if(x.url&&!link(x.url)){alert('http 또는 https 상품 링크를 입력해 주세요.');return;}

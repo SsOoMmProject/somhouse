@@ -439,6 +439,57 @@ class FamilyAPI(unittest.TestCase):
                     WHERE binding='review-demo' AND source='web' ORDER BY seq""").fetchall()
             self.assertEqual(history, [("web", "save", "저장"), ("web", "save", "저장"), ("web", "dismiss", "확인 필요 무시")])
 
+    def test_feeding_kind_is_confirmed_with_one_tap_and_new_words_are_learned(self):
+        bridge = GoogleRecords(self.store, {"binding": "kind-demo", "inbox": "@default", "task_list": "archive",
+                                           "spreadsheet": "test-sheet", "calendar_inbox": "primary",
+                                           "calendar_outbox": "app-cal"})
+        start = {"dateTime": "2026-11-16T22:12:00Z"}
+        with patch.object(self.server, "google", bridge):
+            token = self.login()
+            bridge.calendar.record({"id": "e1", "summary": "부유 100ml", "start": start})
+            bridge.calendar.record({"id": "e2", "summary": "수유 80ml", "start": start})
+            _, body, _ = self.request("/api/data", token=token)
+            self.assertEqual(body["aliases"], {})
+            flagged = {x["amount"]: x for x in body["data"]["records"]}
+            self.assertEqual((flagged["100ml"]["confirm"], flagged["100ml"]["heard"]), ("category", "부유"))
+            self.assertEqual(flagged["80ml"]["confirm"], "category")
+
+            code, body, _ = self.request("/api/confirm", "POST",
+                                         {"id": flagged["100ml"]["id"], "category": "분유"}, token)
+            self.assertEqual(code, 200)
+            self.assertEqual(body["aliases"], {"부유": "분유"})
+            saved = {x["amount"]: x for x in body["data"]["records"]}["100ml"]
+            self.assertEqual((saved["category"], "confirm" in saved, "heard" in saved), ("분유", False, False))
+            self.assertEqual(self.request("/api/confirm", "POST",
+                                          {"id": saved["id"], "category": "모유"}, token)[0], 409)
+            # The learned word is recognised from now on; a kind-less 수유 teaches nothing.
+            bridge.calendar.record({"id": "e3", "summary": "부유 60ml", "start": start})
+            code, body, _ = self.request("/api/confirm", "POST",
+                                         {"id": flagged["80ml"]["id"], "category": "기타"}, token)
+            self.assertEqual((code, body["aliases"]), (200, {"부유": "분유"}))
+            records = {x["amount"]: x for x in body["data"]["records"]}
+            self.assertEqual((records["60ml"]["category"], "confirm" in records["60ml"]), ("분유", False))
+            self.assertNotIn("confirm", records["80ml"])
+
+            code, body, _ = self.request("/api/confirm", "POST", {"forget": "부유"}, token)
+            self.assertEqual((code, body["aliases"]), (200, {}))
+            bridge.calendar.record({"id": "e4", "summary": "부유 40ml", "start": start})
+            again = {x["amount"]: x for x in self.request("/api/data", token=token)[1]["data"]["records"]}["40ml"]
+            self.assertEqual((again["category"], again["confirm"]), ("기타", "category"))
+
+            for bad in ({"id": again["id"], "category": "주스"}, {"id": "", "category": "분유"}, {}):
+                self.assertEqual(self.request("/api/confirm", "POST", bad, token)[0], 400)
+            self.assertEqual(self.request("/api/confirm", "POST", {"id": "none", "category": "분유"}, token)[0], 409)
+            self.assertEqual(self.request("/api/confirm", "POST", {"id": again["id"], "category": "분유"})[0], 401)
+
+            # Correcting an unclear input on the review page teaches its new word too.
+            bridge.calendar.record({"id": "e5", "summary": "머유 50ml 병원", "start": start})
+            item = {"type": "feeding", "date": "2026-11-17T07:12", "category": "모유", "amount": "50ml", "memo": ""}
+            code, body, _ = self.request("/api/review", "POST",
+                                         {"key": "calendar:e5", "action": "save", "kind": "records", "item": item}, token)
+            self.assertEqual(code, 200)
+            self.assertEqual(self.request("/api/data", token=token)[1]["aliases"], {"머유": "모유"})
+
     def test_purchase_task_notes_keep_user_text_and_compare_only_matching_current_prices(self):
         bridge = GoogleRecords(self.store, {"binding": "shopping-demo", "inbox": "@default", "task_list": "archive",
                                            "spreadsheet": "test-sheet"})

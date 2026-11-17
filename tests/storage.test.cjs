@@ -156,3 +156,37 @@ test('voice and calendar help appears only when the Calendar intake is connected
  assert.match(b.get('#content').innerHTML,/<details class="voice-help">/);
  assert.match(b.get('#content').innerHTML,/수유 100ml/);
 });
+
+test('unclear feeding kinds are settled with one tap, learned, and can be forgotten',async()=>{
+ const server=family();server.sources={calendar:'https://calendar.google.com/calendar/'};
+ server.data.records.push(
+  {id:'a',type:'feeding',date:'2026-11-17T07:12',category:'기타',amount:'100ml',memo:'음성 원문: 부유 100ml',confirm:'category',heard:'부유'},
+  {id:'b',type:'feeding',date:'2026-11-17T09:00',category:'기타',amount:'80ml',memo:'',confirm:'category'},
+  {id:'c',type:'feeding',date:'2026-11-17T10:00',category:'분유',amount:'120ml',memo:''});
+ const b=browser({server});await b.login();b.eval("page='home';render()");
+ let html=b.get('#content').innerHTML;
+ assert.match(html,/수유 종류를 골라 주세요 · 2건/);assert.match(html,/들린 말 ‘부유’/);
+ assert.match(html,/data-confirm-id="a" data-confirm-category="분유"/);
+ assert.doesNotMatch(html,/data-confirm-id="c"/);
+ const click=dataset=>b.events.get('click')({target:{closest:()=>({dataset})}});
+ await click({confirmId:'a',confirmCategory:'분유'});
+ assert.deepEqual(server.confirms,[{id:'a',category:'분유'}]);
+ assert.match(b.get('#connection-status').textContent,/‘부유’는 분유로 기억/);
+ html=b.get('#content').innerHTML;
+ assert.match(html,/수유 종류를 골라 주세요 · 1건/);assert.match(html,/‘부유’→분유 <button class="plain" data-forget="부유">잊기/);
+ await click({confirmId:'b',confirmCategory:'주스'});
+ assert.equal(server.confirms.length,1);
+ await click({confirmId:'b',confirmCategory:'기타'});
+ assert.doesNotMatch(b.get('#content').innerHTML,/수유 종류를 골라 주세요/);
+ await click({forget:'부유'});
+ assert.deepEqual(server.confirms.at(-1),{forget:'부유'});
+ assert.doesNotMatch(b.get('#content').innerHTML,/data-forget/);
+ // Editing a flagged feeding in the form also counts as checked.
+ server.data.records.push({id:'d',type:'feeding',date:'2026-11-17T11:00',category:'기타',amount:'60ml',memo:'',confirm:'category',heard:'머유'});
+ await b.eval('refreshShared(true)');
+ b.eval("openForm('feeding',data.records.find(x=>x.id==='d'))");
+ b.get('#form').values={date:'2026-11-17T11:00',category:'모유',amount:'60ml',memo:''};
+ await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
+ const saved=server.data.records.find(x=>x.id==='d');
+ assert.equal(saved.category,'모유');assert.equal('confirm' in saved,false);assert.equal('heard' in saved,false);
+});

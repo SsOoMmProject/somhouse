@@ -305,6 +305,38 @@ class GoogleRegression(unittest.TestCase):
         self.assertEqual(calendar_feeding({'summary': '100미리 수유', 'start': {'date': '2026-11-17'}}, 'x'),
                          (True, None))
 
+    def test_lookalike_feeding_words_are_saved_and_flagged_until_the_kind_is_known(self):
+        from calendar_records import calendar_feeding, learnable
+        start = {'dateTime': '2026-11-17T07:12:00+09:00'}
+        def parse(summary, aliases=None):
+            return calendar_feeding({'summary': summary, 'start': start}, 'cal-x', aliases)
+        # A spoken kind is final.
+        for summary, kind in (('분유 120ml', '분유'), ('모유 수유 15분', '모유'), ('혼합 80미리', '혼합')):
+            item = parse(summary)[1]
+            self.assertEqual((item['category'], 'confirm' in item), (kind, False), summary)
+        # No kind, or 수유 misheard: saved now, kind asked later, nothing to learn.
+        for summary in ('수유 100ml', '100미리 수유 캘린더에 업데이트', '수육 100ml', '수육 기록 1 100mm'):
+            item = parse(summary)[1]
+            self.assertEqual((item['category'], item.get('confirm'), 'heard' in item), ('기타', 'category', False), summary)
+        # A new look-alike of a kind word is saved, flagged, and offered for learning.
+        for summary, word in (('부유 100ml', '부유'), ('머유 100미리', '머유'), ('부유 수유 100ml', '부유')):
+            item = parse(summary)[1]
+            self.assertEqual((item['category'], item['confirm'], item['heard'], item['amount']),
+                             ('기타', 'category', word, '100ml'), summary)
+            self.assertEqual(item['memo'], '음성 원문: ' + summary)
+        # Once learned it is saved with its kind and no question; the memo still shows what was heard.
+        item = parse('부유 100ml', {'부유': '분유'})[1]
+        self.assertEqual((item['category'], 'confirm' in item, item['memo']), ('분유', False, '음성 원문: 부유 100ml'))
+        # Two new words or two kinds stay in review; look-alikes without a volume are not feedings.
+        for summary in ('부유 머유 100ml', '분유 모유 100ml'):
+            self.assertEqual(parse(summary), (True, None), summary)
+        self.assertEqual(parse('부유 100ml', {'부유': '분유', '머유': '모유'})[1]['category'], '분유')
+        self.assertEqual(parse('부유 머유 100ml', {'부유': '분유', '머유': '모유'}), (True, None))
+        for summary in ('수육 30분', '부유 30분', '교육 2시', '석유 가격'):
+            self.assertEqual(parse(summary), (False, None), summary)
+        self.assertEqual([learnable(w) for w in ('부유', '머유', '수육', '수유', '분유', '부', '부유물')],
+                         [True, True, False, False, False, False, False])
+
     def test_hand_typed_calendar_events_use_the_time_they_were_entered(self):
         from calendar_records import calendar_feeding
         def parse(start, created='2026-11-17T04:10:30.000Z', summary='수유 100ml'):
