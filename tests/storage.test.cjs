@@ -147,3 +147,12 @@ test('review inputs can be saved from a prefilled form or dismissed on the web',
  await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
  assert.equal(b.calls.filter(x=>x.options?.method==='PUT').length,1);
 });
+
+test('voice and calendar help appears only when the Calendar intake is connected',async()=>{
+ const plain=browser();await plain.login();plain.eval("page='home';render()");
+ assert.doesNotMatch(plain.get('#content').innerHTML,/voice-help/);
+ const server=family();server.sources={calendar:'https://calendar.google.com/calendar/'};
+ const b=browser({server});await b.login();b.eval("page='home';render()");
+ assert.match(b.get('#content').innerHTML,/<details class="voice-help">/);
+ assert.match(b.get('#content').innerHTML,/수유 100ml/);
+});
