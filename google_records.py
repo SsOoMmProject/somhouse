@@ -391,12 +391,25 @@ class GoogleRecords:
             print("Google 기록 연동 비활성: 유효한 연결 설정이 없습니다. Keep으로 자동 전환하지 않습니다.", file=sys.stderr, flush=True)
         return cls(store, config) if config else None
 
-    def sources(self):
-        from calendar_records import CALENDAR_WEB
+    def account_query(self):
+        """?authuser=… so a phone signed in to several Google accounts opens the connected one."""
+        email = getattr(self, "email", "")
+        return "?authuser=" + quote(email, safe="@") if email else ""
 
-        sources = {"tasks": TASKS_WEB, "sheet": f"https://docs.google.com/spreadsheets/d/{self.config['spreadsheet']}/edit"}
+    def load_email(self):
+        """The connected account's address, read once from Google (openid + email scopes)."""
+        identity = self.api.request("https://openidconnect.googleapis.com/v1/userinfo", service="Google 계정")
+        email = identity.get("email")
+        if identity.get("sub") == self.config.get("subject") and identity.get("email_verified") is True \
+                and isinstance(email, str) and re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+", email):
+            self.email = email
+
+    def sources(self):
+        query = self.account_query()
+        sources = {"tasks": TASKS_WEB + query,
+                   "sheet": f"https://docs.google.com/spreadsheets/d/{self.config['spreadsheet']}/edit{query}"}
         if self.calendar:
-            sources["calendar"] = CALENDAR_WEB
+            sources["calendar"] = "https://calendar.google.com/calendar/r" + query
         return sources
 
     def status(self, db):
@@ -746,6 +759,8 @@ class GoogleRecords:
             self.wake.clear()
             if not protected:
                 protected = self.attempt("source_protection", self.protect_source)
+            if not getattr(self, "email", ""):
+                self.attempt("Google 계정 확인", self.load_email)
             if time.monotonic() >= next_poll:
                 next_poll = time.monotonic() + 30
                 self.attempt("Tasks 음성 가져오기", self.pull)
