@@ -451,6 +451,28 @@ class GoogleRegression(unittest.TestCase):
             self.assertEqual(bridge.calendar.view_events(db)[0]['link'],
                              'https://www.google.com/calendar/event?eid=a&authuser=ssoomm.project@gmail.com')
 
+    def test_public_holidays_keep_only_official_days_and_mark_substitutes(self):
+        from holidays import parse_ics, save, listing
+        from datetime import date
+        sample = ("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20260301\r\nSUMMARY:삼일절\r\n"
+                  "DESCRIPTION:공휴일\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20260302\r\n"
+                  "SUMMARY:쉬는 날 삼일\r\n 절\r\nDESCRIPTION:공휴일\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\n"
+                  "DTSTART;VALUE=DATE:20260508\r\nSUMMARY:어버이날\r\nDESCRIPTION:기념일\\n기념일을 숨기려면\r\n"
+                  "END:VEVENT\r\nBEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20260230\r\nSUMMARY:없는 날\r\n"
+                  "DESCRIPTION:공휴일\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20260603\r\n"
+                  "SUMMARY:지방선거일\r\nDESCRIPTION:공휴일\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+        rows = parse_ics(sample)
+        self.assertEqual(rows, [('2026-03-01', '삼일절', 0), ('2026-03-02', '삼일절', 1), ('2026-06-03', '지방선거일', 0)])
+        with self.store.connect() as db:
+            self.assertTrue(save(db, rows))
+            # A failed or empty download never wipes the saved list.
+            self.assertFalse(save(db, parse_ics("not a calendar")))
+            self.assertEqual(listing(db, date(2026, 11, 17)), [
+                {'date': '2026-03-01', 'name': '삼일절', 'substitute': False},
+                {'date': '2026-03-02', 'name': '삼일절', 'substitute': True},
+                {'date': '2026-06-03', 'name': '지방선거일', 'substitute': False}])
+            self.assertEqual(listing(db, date(2030, 1, 1)), [])
+
     def test_hand_typed_calendar_events_use_the_time_they_were_entered(self):
         from calendar_records import calendar_feeding
         def parse(start, created='2026-11-17T04:10:30.000Z', summary='수유 100ml'):

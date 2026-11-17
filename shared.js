@@ -12,7 +12,7 @@
   }
   class Client {
     constructor() {
-      this.base = ''; this.token = ''; this.username = ''; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = [];
+      this.base = ''; this.token = ''; this.username = ''; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = [];
       try {this.base = serverURL(root.SOMHOUSE_API_URL);} catch {}
       if (['localhost', '127.0.0.1'].includes(location.hostname)) this.base = 'http://127.0.0.1:8787';
       try { this.base = serverURL(localStorage.getItem(SERVER)); } catch {}
@@ -63,7 +63,7 @@
     }
     clear() {
       const token = this.token;
-      this.token = ''; this.username = ''; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = [];
+      this.token = ''; this.username = ''; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = [];
       for (const name of ['localStorage', 'sessionStorage']) {
         try {
           const storage = root[name];
@@ -92,7 +92,7 @@
     }
     async load() {
       const token = this.token, result = await this.request('/api/data');
-      if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null; this.aliases = result.aliases || {}; this.calendarEvents = Array.isArray(result.calendar_events) ? result.calendar_events : [];}
+      if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null; this.aliases = result.aliases || {}; this.calendarEvents = Array.isArray(result.calendar_events) ? result.calendar_events : []; this.holidays = Array.isArray(result.holidays) ? result.holidays : [];}
       return result.data;
     }
     async put(kind, item) {
