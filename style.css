@@ -20,3 +20,4 @@
 .repeat{align-items:center}.repeat .caption{margin:0 4px 0 0;font-weight:600}
 #google-status details{margin-top:6px}#google-status summary{cursor:pointer;min-height:40px;display:flex;align-items:center;color:#536158}
 .voice-help{margin:0 0 14px;font-size:14px;color:#536158}.voice-help summary{cursor:pointer;min-height:40px;display:flex;align-items:center;font-weight:600}.voice-help ul{margin:4px 0 0;padding-left:20px;line-height:1.7}
+.badge.warn{color:#8a5a2b;background:#fdf1e2}.confirm-box{margin:0 0 20px;min-height:0;background:#fff8ee;border-color:#ecd9bd}.confirm-row{border-top:1px solid #ecd9bd;padding:10px 0}.confirm-row p{margin:0 0 8px}.confirm-row .quick{margin:0}

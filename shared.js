@@ -12,7 +12,7 @@
   }
   class Client {
     constructor() {
-      this.base = ''; this.token = ''; this.username = ''; this.sources = null; this.googleStatus = null;
+      this.base = ''; this.token = ''; this.username = ''; this.sources = null; this.googleStatus = null; this.aliases = {}; this.aliases = {};
       try {this.base = serverURL(root.SOMHOUSE_API_URL);} catch {}
       if (['localhost', '127.0.0.1'].includes(location.hostname)) this.base = 'http://127.0.0.1:8787';
       try { this.base = serverURL(localStorage.getItem(SERVER)); } catch {}
@@ -92,7 +92,7 @@
     }
     async load() {
       const token = this.token, result = await this.request('/api/data');
-      if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null;}
+      if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null; this.aliases = result.aliases || {};}
       return result.data;
     }
     async put(kind, item) {return (await this.request('/api/items/' + kind + '/' + encodeURIComponent(item.id), 'PUT', item)).data;}
@@ -101,6 +101,15 @@
     async resolveReview(key, action, kind, item) {
       const token = this.token, result = await this.request('/api/review', 'POST', {key, action, kind, item});
       if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null;}
+      return result.data;
+    }
+    // Settle the kind of a feeding saved with confirm="category", or forget a remembered look-alike word.
+    async confirm(body) {
+      const token = this.token, result = await this.request('/api/confirm', 'POST', body);
+      if (token === this.token) {
+        this.aliases = result.aliases || {};
+        if ('google_status' in result) {this.sources = result.sources || null; this.googleStatus = result.google_status || null;}
+      }
       return result.data;
     }
     async merge(data) {

@@ -21,7 +21,7 @@ from urllib.parse import unquote, urlsplit
 from antigravity import (CONFIG_NAME, SCOPES, Antigravity, AntigravityError,
                          executable, parse_question, save_config, summarize_records)
 from google_records import GoogleRecords, SCHEMA as GOOGLE_SCHEMA, load_config as load_google_config
-from calendar_records import SCHEMA as CALENDAR_SCHEMA
+from calendar_records import FEEDING_KINDS, SCHEMA as CALENDAR_SCHEMA, learn_alias, load_aliases
 from shopping_records import SCHEMA as SHOPPING_SCHEMA
 from google_delivery import SCHEMA as DELIVERY_SCHEMA
 from keep_sync import (CONFIG_NAME as KEEP_CONFIG_NAME, SCHEMA as KEEP_SCHEMA,
@@ -410,12 +410,38 @@ class Handler(BaseHTTPRequestHandler):
                     db.execute("DELETE FROM sessions WHERE token=?", (hashlib.sha256(token.encode()).hexdigest(),))
                     result = {"ok": True}
                 elif path == "/api/data" and self.command == "GET":
-                    result = {"data": store.state(db)}
+                    result = {"data": store.state(db), "aliases": load_aliases(db)}
                     if self.server.google is not None:
                         result["sources"] = self.server.google.sources()
                         result["google_status"] = self.server.google.status(db)
                 elif path == "/api/merge" and self.command == "POST":
                     result = store.merge(db, self.body())
+                    if self.server.google is not None:
+                        result["sources"] = self.server.google.sources()
+                        result["google_status"] = self.server.google.status(db)
+                elif path == "/api/confirm" and self.command == "POST":
+                    # One tap settles the kind of a feeding saved from an unclear voice or Calendar input.
+                    body = self.body()
+                    forget, item_id, category = body.get("forget"), body.get("id"), body.get("category")
+                    if isinstance(forget, str) and 0 < len(forget) <= 20:
+                        db.execute("DELETE FROM feeding_aliases WHERE word=?", (forget,))
+                    elif (isinstance(item_id, str) and 0 < len(item_id) <= 200
+                            and category in (*FEEDING_KINDS, "기타")):
+                        row = db.execute("SELECT body FROM items WHERE kind='records' AND id=?", (item_id,)).fetchone()
+                        item = json.loads(row[0]) if row else {}
+                        if item.get("confirm") != "category":
+                            raise Problem(409, "이미 확인했거나 찾을 수 없는 기록이에요. 화면을 새로고침해 주세요.")
+                        del item["confirm"]
+                        heard = item.pop("heard", "")
+                        item["category"] = category
+                        learn_alias(db, heard, category)
+                        store.snapshot(db)
+                        db.execute("UPDATE items SET body=? WHERE kind='records' AND id=?", (encode(item), item_id))
+                        if self.server.google is not None:
+                            self.server.google.queue(db, "records", item_id, item, "save")
+                    else:
+                        raise Problem(400, "확인할 기록과 종류를 다시 선택해 주세요.")
+                    result = {"data": store.state(db), "aliases": load_aliases(db)}
                     if self.server.google is not None:
                         result["sources"] = self.server.google.sources()
                         result["google_status"] = self.server.google.status(db)
@@ -472,7 +498,7 @@ class Handler(BaseHTTPRequestHandler):
                     and (store.directory / "google-records.json").exists()):
                 result["google_status"] = {"auth_state": "configuration_error", "services": {}, "review": 0, "errors": []}
             sync = self.server.google or self.server.keep
-            if sync is not None and (path.startswith("/api/items/") or path == "/api/review"):
+            if sync is not None and (path.startswith("/api/items/") or path in ("/api/review", "/api/confirm")):
                 sync.wake.set()
             self.respond(200, result)
         except (Problem, AntigravityError) as error:

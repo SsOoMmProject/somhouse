@@ -490,6 +490,15 @@ class GoogleRecords:
             raise LookupError(key)
         if action == "save":
             item = dict(item, id=item_id)
+            if kind == "records" and item.get("type") == "feeding":
+                # A correction teaches the new word it was said with (부유 -> 분유).
+                from calendar_records import learn_alias, load_aliases, scan_feeding
+                title = db.execute("""SELECT title FROM google_record_events WHERE binding=? AND item_id=?
+                    AND source IN ('tasks','calendar') ORDER BY seq DESC LIMIT 1""", (self.binding, item_id)).fetchone()
+                text = " ".join(unicodedata.normalize("NFKC", title[0] if title else "").split())
+                found = scan_feeding(PREFIX.sub("", text), load_aliases(db)) or {}
+                if len(found.get("heard", [])) == 1:
+                    learn_alias(db, found["heard"][0], item.get("category"))
             self.store.snapshot(db)
             db.execute("""INSERT INTO items VALUES (?,?,?)
                 ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body""", (kind, item_id, encode(item)))
