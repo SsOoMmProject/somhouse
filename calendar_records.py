@@ -91,6 +91,25 @@ def learn_alias(db, word, category):
     return False
 
 
+def heard_word(item):
+    """The new look-alike word a feeding was said with: its heard field, else the memo's 음성 원문."""
+    if learnable(item.get("heard")):
+        return item["heard"]
+    memo = item.get("memo", "")
+    if not memo.startswith("음성 원문: "):
+        return None
+    text = " ".join(unicodedata.normalize("NFKC", memo.removeprefix("음성 원문: ").split(" · ")[0]).split())
+    found = scan_feeding(PREFIX.sub("", text)) or {}
+    return found["heard"][0] if len(found.get("heard", [])) == 1 else None
+
+
+def relearn(db, item):
+    """Saving a feeding with a kind teaches the word it was said with, so a later edit corrects a wrong pick."""
+    if item.get("type") != "feeding" or item.get("category") not in FEEDING_KINDS:
+        return False
+    return learn_alias(db, heard_word(item), item["category"])
+
+
 def scan_feeding(text, aliases=None):
     """Classify the words of a normalized title. Returns None when it has no unit-bearing amount."""
     aliases = aliases or {}
@@ -150,8 +169,8 @@ def natural_feeding(text, when, item_id, title, aliases=None):
             "memo": f"음성 원문: {title}" if corrected else ""}
     if not found["kinds"]:
         item["confirm"] = "category"
-        if found["heard"]:
-            item["heard"] = found["heard"][0]
+    if found["heard"] or found["learned"]:
+        item["heard"] = (found["heard"] or found["learned"])[0]
     return True, item
 
 

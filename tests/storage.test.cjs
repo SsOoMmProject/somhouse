@@ -188,5 +188,19 @@ test('unclear feeding kinds are settled with one tap, learned, and can be forgot
  b.get('#form').values={date:'2026-11-17T11:00',category:'모유',amount:'60ml',memo:''};
  await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
  const saved=server.data.records.find(x=>x.id==='d');
- assert.equal(saved.category,'모유');assert.equal('confirm' in saved,false);assert.equal('heard' in saved,false);
+ assert.equal(saved.category,'모유');assert.equal('confirm' in saved,false);assert.equal(saved.heard,'머유');
+ assert.match(b.get('#connection-status').textContent,/‘머유’는 모유로 기억/);
+ // A wrong pick is fixed by editing again: the remembered word follows the record.
+ b.get('#dialog').open=false;
+ b.eval("openForm('feeding',data.records.find(x=>x.id==='d'))");
+ b.get('#form').values={date:'2026-11-17T11:00',category:'분유',amount:'60ml',memo:''};
+ await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
+ assert.equal(b.eval('shared.aliases["머유"]'),'분유');
+ assert.match(b.get('#connection-status').textContent,/‘머유’는 분유로 기억/);
+ // Saving again without changing the kind does not repeat the notice.
+ b.get('#dialog').open=false;
+ b.eval("openForm('feeding',data.records.find(x=>x.id==='d'))");
+ b.get('#form').values={date:'2026-11-17T11:00',category:'분유',amount:'70ml',memo:''};
+ await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
+ assert.doesNotMatch(b.get('#connection-status').textContent,/기억할게요/);
 });
