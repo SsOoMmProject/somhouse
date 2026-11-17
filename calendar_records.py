@@ -240,6 +240,31 @@ def reformat_feeding(command):
     return command
 
 
+MERGED_FIELDS = ("date", "amount", "category", "memo")
+
+
+def merge_edit(applied, current, item):
+    """Combine a Calendar edit with web edits of the same record, field by field.
+
+    applied is what Calendar last wrote, current is the record now (possibly edited on the web), item is
+    the new Calendar reading. A field changed on one side only is taken from that side, so picking the
+    kind on the web does not block a later time or amount fix in Calendar. Returns None when the record
+    was deleted on the web, was never written by Calendar, or both sides changed one field differently.
+    """
+    if not applied or not current:
+        return None
+    old, web = json.loads(applied), json.loads(current)
+    merged = dict(web)
+    for key in MERGED_FIELDS:
+        new = item.get(key, "")
+        if new == old.get(key, ""):
+            continue
+        if web.get(key, "") not in (old.get(key, ""), new):
+            return None
+        merged[key] = new
+    return merged
+
+
 class CalendarRecords:
     def __init__(self, records):
         self.records, self.store = records, records.store
@@ -324,7 +349,17 @@ class CalendarRecords:
                         projected = item
                     applied, status = body, "저장"
                 else:
-                    status = "웹 기록 유지"
+                    merged = merge_edit(applied, current, item)
+                    if merged is None:
+                        status = "웹 기록 유지"
+                    else:
+                        body = encode(merged)
+                        if current != body:
+                            self.store.snapshot(db)
+                            db.execute("UPDATE items SET body=? WHERE kind='records' AND id=?", (body, item_id))
+                            projected = merged
+                        # applied keeps the Calendar side, so the next edit is again compared field by field.
+                        applied, status = encode(item), "저장"
             review = future or status in ("확인 필요", "웹 기록 유지")
             if future:
                 status = "확인 필요 · 미래 수유 시각"
