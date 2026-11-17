@@ -63,7 +63,7 @@ function showGoogleStatus(connected){
  // Healthy: one line, details folded. Any problem keeps the full list visible.
  const headline=healthy?`<strong>Google 연동 정상</strong> · ${waiting?`전송 대기 ${esc(waiting)}건`:'모두 반영됨'}${latest?` · 마지막 전송 ${esc(latest.replace('T',' ').slice(0,16))}`:''}`:`<strong>${warning}</strong>`;
  const list=healthy?`<details><summary>자세히 보기</summary><ul>${rows}</ul></details>`:`<ul>${rows}</ul>`;
- const html=`${headline}${list}${status.errors?.length?'<p>일부 연동을 확인하지 못했어요. 잠시 후 다시 시도합니다.</p>':''}${status.review?`<p>음성 기록 ${esc(status.review)}건은 확인이 필요해요. 원본 시트의 ‘확인 필요’를 보고 Tasks 제목이나 Calendar 제목·시각을 고쳐 주세요.</p>`:''}<p class="caption">웹 기록은 맥미니에 저장됩니다. 음성으로 만든 원본 Task·일정은 웹에서 수정하거나 삭제해도 바뀌지 않아요. 수정 이력은 원본 시트에 남습니다.</p>`;
+ const html=`${headline}${list}${status.errors?.length?'<p>일부 연동을 확인하지 못했어요. 잠시 후 다시 시도합니다.</p>':''}${status.review?`<p>음성 기록 ${esc(status.review)}건은 확인이 필요해요. 웹에서 바로 기록하거나 뺄 수 있어요.</p><button type="button" class="secondary" data-page="review">확인 필요 ${esc(status.review)}건 정리하기</button>`:''}<p class="caption">웹 기록은 맥미니에 저장됩니다. 음성으로 만든 원본 Task·일정은 웹에서 수정하거나 삭제해도 바뀌지 않아요. 수정 이력은 원본 시트에 남습니다.</p>`;
  // Rewriting on every poll would close an opened <details>; the browser adds `open` to innerHTML, so compare our own copy.
  if(googleStatusHtml!==html){element.innerHTML=html;googleStatusHtml=html;}
 }
@@ -102,10 +102,11 @@ function refreshShared(force=false){
  refreshing=true;
  refreshTask=(async()=>{
   try{
+   const reviewBefore=JSON.stringify(reviewItems());
    const next=await loadFamilyData();
    if(shared.token!==token)return;
    if(!valid(next))throw Error('기록을 확인하지 못했어요. 다시 연결하고 있습니다.');
-   const changed=JSON.stringify(next)!==JSON.stringify(data),wasReady=sharedReady;
+   const changed=JSON.stringify(next)!==JSON.stringify(data)||(page==='review'&&JSON.stringify(reviewItems())!==reviewBefore),wasReady=sharedReady;
    data=next;sharedReady=true;if(changed)needsRender=true;
    message('기록은 자동으로 저장되고 가족과 함께 업데이트돼요.'+legacyWarning);
    if((needsRender||!wasReady)&&(!editingScreen()||!wasReady))render();else connectionView();
@@ -142,7 +143,15 @@ function link(url){try{let u=new URL(url);return ['http:','https:'].includes(u.p
 function desc(x,k){if(k==='records')return x.type==='feeding'?`수유 · ${esc(x.category)} · ${esc(x.amount)}`:`병원 · ${esc(x.hospital)} · ${esc(x.reason)}`;return esc(x.title)+(k==='shopping'?` · ${esc(x.quantity)}`:'')}
 function item(x,k,compact=false){return `<div class="item"><strong>${desc(x,k)}</strong> ${k==='shopping'?`<span class="badge">${x.done==='yes'?'구매 완료':'구매 예정'}</span>`:''}<p>${esc((x.date||'').replace('T',' '))}${x.memo?'<br>'+esc(x.memo):''}</p>${x.url?link(x.url):''}${compact?'':`<div class="actions">${k==='shopping'?`<button class="secondary" data-action="toggle" data-key="${k}" data-id="${esc(x.id)}">${x.done==='yes'?'다시 예정으로':'완료로 변경'}</button>`:''}<button class="secondary" data-action="edit" data-key="${k}" data-id="${esc(x.id)}">수정</button><button class="secondary" data-action="delete" data-key="${k}" data-id="${esc(x.id)}">삭제</button></div>`}</div>`}
 function sorted(k){return [...data[k]].sort((a,b)=>(b.date||b.id).localeCompare(a.date||a.id))}
-const pageTitles={home:'홈',records:'육아 기록',stats:'수유 통계',schedule:'일정',shopping:'구매 목록',ai:'AI 대화'};
+const pageTitles={home:'홈',records:'육아 기록',stats:'수유 통계',schedule:'일정',shopping:'구매 목록',ai:'AI 대화',review:'확인 필요'};
+let reviewKey='';
+function reviewItems(){return Array.isArray(shared?.googleStatus?.review_items)?shared.googleStatus.review_items:[];}
+// Voice inputs that were not saved automatically. The Google Task or event itself is never changed here.
+function reviewView(){
+ const items=reviewItems();
+ const cards=items.map(x=>`<div class="item"><strong>${esc(x.title||'(제목 없음)')}</strong> <span class="badge">${esc(x.source)}</span><p>${esc((x.when||'').replace('T',' ')||'시각 정보 없음')} · ${esc(x.status)}</p><div class="actions"><button data-review-key="${esc(x.key)}" data-review-action="save">수유로 저장</button><button class="secondary" data-review-key="${esc(x.key)}" data-review-action="dismiss">기록하지 않음</button></div></div>`).join('');
+ return `<h1>확인 필요</h1><p>음성으로 남겼지만 자동으로 저장하지 못한 입력이에요. 수유가 맞으면 양과 시각을 확인해 저장하고, 아니면 기록하지 않음을 눌러 주세요. Google의 원본 Task·일정은 바뀌지 않고, 처리 이력은 원본 시트에 남아요.</p>${cards||'<div class="card empty">확인할 음성 입력이 없어요.</div>'}<button class="plain" data-page="home">← 홈으로</button>`;
+}
 const filters={records:{},schedule:{},shopping:{}};
 function route(){const name=location.hash.slice(1);page=Object.hasOwn(pageTitles,name)?name:'home';render()}
 function quickButtons(){return '<div class="quick"><button data-add="feeding">＋ 수유 기록</button><button class="secondary" data-add="hospital">병원 방문</button><button class="secondary" data-add="schedule">일정</button><button class="secondary" data-add="shopping">구매 물품</button></div>'}
@@ -225,11 +234,11 @@ function render(){
   if(openingAI)checkAI();
   return;
  }
- $('#content').innerHTML=page==='home'?homeView():page==='stats'?statsView():listView(page);
+ $('#content').innerHTML=page==='home'?homeView():page==='stats'?statsView():page==='review'?reviewView():listView(page);
  connectionView();
  const form=$('#filter-form');if(form)form.onsubmit=e=>{e.preventDefault();const next=Object.fromEntries(new FormData(form));if(next.from&&next.to&&next.from>next.to){alert('시작 날짜는 마지막 날짜보다 늦을 수 없어요.');return}filters[page]=next;render()};
 }
-function openForm(type,x,preset={}){kind=type;editing=x||null;draftId=x?.id||(typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():Date.now().toString()+'-'+Math.random().toString(36).slice(2));const values=x||{...preset,date:Somhouse.localDateTime()};$('#formtitle').textContent=(x?'수정 · ':'추가 · ')+({feeding:'수유 기록',hospital:'병원 방문',schedule:'일정',shopping:'구매 목록'}[type]);$('#fields').innerHTML=schemas[type].map(([name,label,t,required])=>`<label class="field">${label}${required?' *':''}${t==='select'?`<select name="${name}" required>${['모유','분유','혼합','기타'].map(v=>`<option ${values[name]===v?'selected':''}>${v}</option>`).join('')}</select>`:t==='textarea'?`<textarea name="${name}">${esc(values[name]||'')}</textarea>`:`<input name="${name}" type="${t}" value="${esc(values[name]||'')}" ${required?'required':''}${name==='amount'?' placeholder="예: 120ml 또는 15분"':''}>`}</label>`).join('');$('#dialog').showModal()}
+function openForm(type,x,preset={},review=''){reviewKey=review;kind=type;editing=x||null;draftId=x?.id||(typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():Date.now().toString()+'-'+Math.random().toString(36).slice(2));const values=x||{...preset,date:preset.date||Somhouse.localDateTime()};$('#formtitle').textContent=(review?'확인 필요 정정 · ':x?'수정 · ':'추가 · ')+({feeding:'수유 기록',hospital:'병원 방문',schedule:'일정',shopping:'구매 목록'}[type]);$('#fields').innerHTML=schemas[type].map(([name,label,t,required])=>`<label class="field">${label}${required?' *':''}${t==='select'?`<select name="${name}" required>${['모유','분유','혼합','기타'].map(v=>`<option ${values[name]===v?'selected':''}>${v}</option>`).join('')}</select>`:t==='textarea'?`<textarea name="${name}">${esc(values[name]||'')}</textarea>`:`<input name="${name}" type="${t}" value="${esc(values[name]||'')}" ${required?'required':''}${name==='amount'?' placeholder="예: 120ml 또는 15분"':''}>`}</label>`).join('');$('#dialog').showModal()}
 document.addEventListener('click',async e=>{
  const b=e.target.closest('button');if(!b)return;
  if(b.dataset.page){location.hash=b.dataset.page;if(page===b.dataset.page)render();}
@@ -238,6 +247,12 @@ document.addEventListener('click',async e=>{
  if(['7','30'].includes(b.dataset.statsDays)){statsDays=Number(b.dataset.statsDays);render();return;}
  if(b.dataset.add){if(mode==='shared'&&!sharedReady)return;openForm(b.dataset.add);}
  if(b.dataset.repeatCategory&&b.dataset.repeatAmount){openForm('feeding',null,{category:b.dataset.repeatCategory,amount:b.dataset.repeatAmount});return;}
+ if(b.dataset.reviewKey){
+  const entry=reviewItems().find(x=>x.key===b.dataset.reviewKey);if(!entry)return;
+  if(b.dataset.reviewAction==='save'){openForm('feeding',null,{category:entry.suggest?.category||'기타',amount:entry.suggest?.amount||'',date:entry.when||'',memo:entry.title?'음성 원문: '+entry.title:''},entry.key);return;}
+  if(b.dataset.reviewAction==='dismiss'&&confirm('이 음성 입력을 기록하지 않고 목록에서 뺄까요?\nGoogle의 원본은 그대로 남아요.')){if(await sharedChange(()=>shared.resolveReview(entry.key,'dismiss')))render();}
+  return;
+ }
  if(b.dataset.action){
   const {action,key,id}=b.dataset,x=data[key].find(i=>i.id===id);if(!x)return;
   if(action==='edit')openForm(key==='records'?x.type:key,x);
@@ -257,7 +272,8 @@ $('#form').onsubmit=async e=>{
  if(x.url&&!link(x.url)){alert('http 또는 https 상품 링크를 입력해 주세요.');return;}
  if(kind==='feeding'&&!Somhouse.hasFeedingUnit(x.amount)&&!confirm('양에 단위가 없어요. 120ml이나 15분처럼 단위를 붙이면 통계와 빠른 기록에 쓰여요.\n이대로 저장할까요?'))return;
  const submit=$('#form button[type="submit"]');submit.disabled=true;
- try{if(await changeItem(k,x)){$('#dialog').close();render();}}finally{submit.disabled=false;}
+ const review=reviewKey;
+ try{if(await (review?sharedChange(()=>shared.resolveReview(review,'save',k,x)):changeItem(k,x))){$('#dialog').close();render();}}finally{submit.disabled=false;}
 };
 window.addEventListener('hashchange',route);
 route();
@@ -327,7 +343,7 @@ if(shared){
   else if(e.key===KEY||e.key===null)refreshShared();
  });
  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshShared();});
- $('#dialog').addEventListener('close',()=>refreshShared());
+ $('#dialog').addEventListener('close',()=>{reviewKey='';refreshShared();});
  setInterval(()=>{if(!document.hidden)refreshShared();},2000);
  if(mode==='shared'){message('가족의 기록을 불러오고 있어요…');refreshShared(true);}
 }else message('화면을 불러오지 못했어요. 잠시 후 다시 열어주세요.');

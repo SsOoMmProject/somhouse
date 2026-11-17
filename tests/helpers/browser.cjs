@@ -21,6 +21,12 @@ function browser({raw=JSON.stringify(blank()),session=null,local=new Map([['somh
    const original=JSON.parse(options.body);
    for(const k of Object.keys(original))for(const item of original[k]){const key=k+':'+item.id;if(!server.imported.has(key)&&!server.data[k].some(x=>x.id===item.id))server.data[k].push(clone(item));server.imported.add(key);}
    result={data:clone(server.data)};
+  }else if(url.endsWith('/api/review')){
+   const request=JSON.parse(options.body);(server.reviews||=[]).push(request);
+   if(request.action==='save')server.data[request.kind].push(clone({...request.item,id:'review-'+request.key}));
+   const items=(server.googleStatus?.review_items||[]).filter(x=>x.key!==request.key);
+   server.googleStatus={...server.googleStatus,review:items.length,review_items:items};
+   result={data:clone(server.data),sources:server.sources,google_status:server.googleStatus};
   }else if(options.method==='PUT'){
    const item=JSON.parse(options.body),kind=url.split('/').at(-2);
    server.data[kind]=server.data[kind].filter(x=>x.id!==item.id);server.data[kind].push(clone(item));result={data:clone(server.data)};

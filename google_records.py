@@ -424,7 +424,81 @@ class GoogleRecords:
         imports = [dict(target=target, last_error=error) for target, error in db.execute(
             "SELECT target,last_error FROM google_service_state WHERE binding=? AND last_error<>''",
             (self.binding,))]
-        return {"auth_state": self.auth_state, "services": pending, "review": review, "errors": imports}
+        result = {"auth_state": self.auth_state, "services": pending, "review": review, "errors": imports}
+        if review:
+            result["review_items"] = self.review_items(db)
+        return result
+
+    def review_items(self, db, limit=20):
+        """Voice inputs that were not saved automatically, newest first, for correction on the web."""
+        from calendar_records import NATURAL_AMOUNT
+
+        def entry(key, source, title, when, status):
+            text = " ".join(unicodedata.normalize("NFKC", title or "").split())
+            amount = NATURAL_AMOUNT.search(text)
+            suggest = {"category": next((w for w in ("분유", "모유", "혼합") if w in text), "기타"),
+                       "amount": (amount[1] + ("분" if amount[2] == "분" else "ml")) if amount else ""}
+            return {"key": key, "source": source, "title": title or "", "when": when or "", "status": status,
+                    "suggest": suggest}
+
+        items = []
+        for voice_id, captured in db.execute("""SELECT voice_id,captured FROM google_voice_receipts
+                WHERE binding=? AND accepted=0 ORDER BY rowid DESC LIMIT ?""", (self.binding, limit)).fetchall():
+            row = db.execute("""SELECT title,status FROM google_record_events WHERE binding=? AND source='tasks'
+                AND voice_id=? ORDER BY seq DESC LIMIT 1""", (self.binding, voice_id)).fetchone()
+            items.append(entry("tasks:" + voice_id, "Tasks", row[0] if row else "", (captured or "")[:16],
+                               row[1] if row else "확인 필요"))
+        for event_id, item_id in db.execute("""SELECT event_id,item_id FROM google_calendar_inputs
+                WHERE binding=? AND review=1 ORDER BY rowid DESC LIMIT ?""", (self.binding, limit)).fetchall():
+            row = db.execute("""SELECT title,status,raw FROM google_record_events WHERE binding=? AND source='calendar'
+                AND item_id=? ORDER BY seq DESC LIMIT 1""", (self.binding, item_id)).fetchone()
+            when = ""
+            try:
+                start = json.loads(row[2])["event"]["start"]["dateTime"]
+                when = datetime.fromisoformat(start).astimezone(SEOUL).isoformat(timespec="minutes")[:16]
+            except (TypeError, KeyError, ValueError):
+                pass
+            items.append(entry("calendar:" + event_id, "Calendar", row[0] if row else "", when,
+                               row[1] if row else "확인 필요"))
+        return items
+
+    def resolve_review(self, db, key, action, kind=None, item=None):
+        """Save a corrected record for an unresolved voice input, or dismiss it. The Google source is untouched.
+
+        The record ID is the one automatic import would have used, so a repeated or late resolution
+        updates the same record instead of creating a duplicate.
+        """
+        source, _, identifier = key.partition(":")
+        if source == "tasks":
+            if not db.execute("SELECT 1 FROM google_voice_receipts WHERE binding=? AND voice_id=? AND accepted=0",
+                              (self.binding, identifier)).fetchone():
+                raise LookupError(key)
+            item_id = "task-" + hashlib.sha256(encode([self.binding, identifier]).encode()).hexdigest()
+            done = ("UPDATE google_voice_receipts SET accepted=1 WHERE binding=? AND voice_id=?",
+                    (self.binding, identifier))
+        elif source == "calendar" and self.calendar:
+            row = db.execute("""SELECT item_id FROM google_calendar_inputs
+                WHERE binding=? AND inbox=? AND event_id=? AND review=1""",
+                             (self.binding, self.calendar.inbox, identifier)).fetchone()
+            if not row:
+                raise LookupError(key)
+            item_id = row[0]
+            # applied is left as it was, so a later Calendar edit keeps this web correction ("웹 기록 유지").
+            done = ("UPDATE google_calendar_inputs SET review=0 WHERE binding=? AND inbox=? AND event_id=?",
+                    (self.binding, self.calendar.inbox, identifier))
+        else:
+            raise LookupError(key)
+        if action == "save":
+            item = dict(item, id=item_id)
+            self.store.snapshot(db)
+            db.execute("""INSERT INTO items VALUES (?,?,?)
+                ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body""", (kind, item_id, encode(item)))
+            self.queue(db, kind, item_id, item, "save")
+        else:
+            queue_event(db, self.binding, "", item_id, {"review": key}, action="dismiss",
+                        status="확인 필요 무시", skip_task=True)
+        db.execute(*done)
+        return item_id
 
     def require_reconnect(self):
         self.auth_state = "reconnect_required"

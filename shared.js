@@ -97,6 +97,12 @@
     }
     async put(kind, item) {return (await this.request('/api/items/' + kind + '/' + encodeURIComponent(item.id), 'PUT', item)).data;}
     async remove(kind, id) {return (await this.request('/api/items/' + kind + '/' + encodeURIComponent(id), 'DELETE')).data;}
+    // Resolve one voice input that was not saved automatically: action 'save' (with kind/item) or 'dismiss'.
+    async resolveReview(key, action, kind, item) {
+      const token = this.token, result = await this.request('/api/review', 'POST', {key, action, kind, item});
+      if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null;}
+      return result.data;
+    }
     async merge(data) {
       const token = this.token, result = await this.request('/api/merge', 'POST', data);
       if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null;}

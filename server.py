@@ -419,6 +419,25 @@ class Handler(BaseHTTPRequestHandler):
                     if self.server.google is not None:
                         result["sources"] = self.server.google.sources()
                         result["google_status"] = self.server.google.status(db)
+                elif path == "/api/review" and self.command == "POST":
+                    google = self.server.google
+                    if google is None:
+                        raise Problem(404, "Google 음성 입력 연결이 없어요.")
+                    body = self.body()
+                    key, action, kind = body.get("key"), body.get("action"), body.get("kind")
+                    if not isinstance(key, str) or not 0 < len(key) <= 300 or action not in ("save", "dismiss"):
+                        raise Problem(400, "확인할 항목을 다시 선택해 주세요.")
+                    item = None
+                    if action == "save":
+                        if kind not in KINDS or not isinstance(body.get("item"), dict):
+                            raise Problem(400, "올바른 기록이 아닙니다.")
+                        # The server assigns the ID that automatic import would have used.
+                        item = validate_item(kind, {**body["item"], "id": "review"})
+                    try:
+                        google.resolve_review(db, key, action, kind, item)
+                    except LookupError:
+                        raise Problem(409, "이미 처리됐거나 찾을 수 없는 항목이에요. 화면을 새로고침해 주세요.") from None
+                    result = {"data": store.state(db), "sources": google.sources(), "google_status": google.status(db)}
                 elif path.startswith("/api/items/"):
                     parts = path.split("/")
                     if len(parts) != 5 or parts[3] not in KINDS or self.command not in ("PUT", "DELETE"):
@@ -453,7 +472,7 @@ class Handler(BaseHTTPRequestHandler):
                     and (store.directory / "google-records.json").exists()):
                 result["google_status"] = {"auth_state": "configuration_error", "services": {}, "review": 0, "errors": []}
             sync = self.server.google or self.server.keep
-            if sync is not None and path.startswith("/api/items/"):
+            if sync is not None and (path.startswith("/api/items/") or path == "/api/review"):
                 sync.wake.set()
             self.respond(200, result)
         except (Problem, AntigravityError) as error:
