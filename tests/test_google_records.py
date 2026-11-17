@@ -354,6 +354,39 @@ class GoogleRegression(unittest.TestCase):
         self.assertIn('재연결 필요', command('google-status'))
         self.assertFalse(self.rows('SELECT * FROM google_delivery_retries'))
 
+    def test_admin_delete_record_backs_up_first_and_only_notifies_google_when_sent(self):
+        config = dict(self.config, ready=True, client_id='fake-client', client_secret='fake-secret', subject='fake-user')
+        save_config(Path(self.temp.name), config)
+        with self.store.connect() as db:
+            for item_id in ('local', 'sent'):
+                db.execute("INSERT INTO items VALUES ('records',?,?)", (item_id, encode(self.feeding(item_id))))
+            self.bridge.queue(db, 'records', 'sent', self.feeding('sent'), 'save')
+
+        def delete(item_id):
+            return subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / 'server.py'),
+                                   'delete-record', '--kind', 'records', '--item-id', item_id,
+                                   '--data-dir', self.temp.name], capture_output=True, text=True, timeout=10)
+
+        before = self.rows('SELECT COUNT(*) FROM google_record_events')[0][0]
+        result = delete('local')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('외부에 남는 흔적은 없습니다', result.stdout)
+        self.assertNotIn('fake-secret', result.stdout)
+        backup = Path(result.stdout.split('삭제 전 관리자 백업: ')[1].split()[0])
+        self.assertEqual({x['id'] for x in json.loads(backup.read_text())['records']}, {'local', 'sent'})
+        self.assertFalse(backup.name.startswith('auto-'))
+        self.assertEqual(self.rows('SELECT COUNT(*) FROM google_record_events')[0][0], before)
+
+        result = delete('sent')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Google 사본에도 삭제', result.stdout)
+        self.assertEqual(self.rows("SELECT action FROM google_record_events WHERE item_id='sent' ORDER BY seq"),
+                         [('save',), ('delete',)])
+        self.assertFalse(self.rows("SELECT * FROM items"))
+        missing = delete('sent')
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn('해당 기록이 없습니다', missing.stderr)
+
     def test_backup_retention_preserves_manual_and_legacy_files(self):
         with self.store.connect() as db:
             manual = self.store.snapshot(db, automatic=False)
