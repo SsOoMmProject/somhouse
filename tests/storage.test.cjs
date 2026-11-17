@@ -115,3 +115,35 @@ test('unit-less feedings show no preset and ask before saving',async()=>{
  assert.equal(asked.length,1);
  assert.ok(b.server.data.records.some(x=>x.amount==='60ml'));
 });
+
+test('review inputs can be saved from a prefilled form or dismissed on the web',async()=>{
+ const server=family();
+ const entry=(key,title)=>({key,source:'Calendar',title,when:'2026-11-17T07:12',status:'확인 필요',suggest:{category:'기타',amount:'100ml'}});
+ server.googleStatus={auth_state:'ready',review:2,errors:[],services:{},review_items:[entry('calendar:a','수유 100미리 병원'),entry('tasks:b','솜하우스 수유 조금')]};
+ const b=browser({server});await b.login();
+ assert.match(b.get('#google-status').innerHTML,/data-page="review">확인 필요 2건 정리하기/);
+ b.eval("page='review';render()");
+ const html=b.get('#content').innerHTML;
+ assert.match(html,/수유 100미리 병원/);assert.match(html,/data-review-key="tasks:b" data-review-action="dismiss"/);
+ const click=dataset=>b.events.get('click')({target:{closest:()=>({dataset})}});
+ await click({reviewKey:'calendar:a',reviewAction:'save'});
+ assert.equal(b.get('#dialog').open,true);
+ assert.match(b.get('#formtitle').textContent,/확인 필요 정정/);
+ assert.match(b.get('#fields').innerHTML,/name="date" type="datetime-local" value="2026-11-17T07:12"/);
+ assert.match(b.get('#fields').innerHTML,/name="amount" type="text" value="100ml"/);
+ assert.match(b.get('#fields').innerHTML,/음성 원문: 수유 100미리 병원/);
+ b.get('#form').values={date:'2026-11-17T07:12',category:'분유',amount:'100ml',memo:''};
+ await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
+ assert.deepEqual(server.reviews.map(x=>[x.key,x.action,x.kind,x.item?.amount]),[['calendar:a','save','records','100ml']]);
+ assert.equal(b.eval('data.records.length'),1);
+ assert.equal(b.calls.filter(x=>x.options?.method==='PUT').length,0);
+ b.get('#dialog').open=false;b.eval("reviewKey=''");
+ await click({reviewKey:'tasks:b',reviewAction:'dismiss'});
+ assert.deepEqual(server.reviews.at(-1),{key:'tasks:b',action:'dismiss'});
+ assert.match(b.get('#content').innerHTML,/확인할 음성 입력이 없어요/);
+ // An ordinary add after a review still goes through the normal save path.
+ b.eval("openForm('feeding')");
+ b.get('#form').values={date:'2026-11-17T09:00',category:'분유',amount:'90ml',memo:''};
+ await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
+ assert.equal(b.calls.filter(x=>x.options?.method==='PUT').length,1);
+});

@@ -377,6 +377,68 @@ class FamilyAPI(unittest.TestCase):
             self.assertFalse(remote)
             self.assertEqual(len(self.request("/api/data", token=token)[1]["data"]["records"]), 1)
 
+    def test_review_inputs_are_corrected_or_dismissed_on_the_web_without_duplicates(self):
+        bridge = GoogleRecords(self.store, {"binding": "review-demo", "inbox": "@default", "task_list": "archive",
+                                           "spreadsheet": "test-sheet", "calendar_inbox": "primary",
+                                           "calendar_outbox": "app-cal"})
+        start = {"dateTime": "2026-11-16T22:12:00Z"}
+        unclear = {"id": "ev1", "summary": "수유 100미리 병원", "start": start}
+        with patch.object(self.server, "google", bridge):
+            token = self.login()
+            bridge.calendar.record(unclear)
+            bridge.record_voice({"id": "t1", "title": "솜하우스 수유 조금", "updated": "2026-11-16T22:00:00Z"})
+            bridge.record_voice({"id": "t2", "title": "솜하우스 수유 많이", "updated": "2026-11-16T22:05:00Z"})
+            status = self.request("/api/data", token=token)[1]["google_status"]
+            self.assertEqual(status["review"], 3)
+            entries = {x["key"]: x for x in status["review_items"]}
+            self.assertEqual(entries["calendar:ev1"]["when"], "2026-11-17T07:12")
+            self.assertEqual(entries["calendar:ev1"]["suggest"], {"category": "기타", "amount": "100ml"})
+            self.assertEqual(entries["tasks:t1"]["title"], "솜하우스 수유 조금")
+
+            item = {"type": "feeding", "date": "2026-11-17T07:12", "category": "분유", "amount": "100ml", "memo": ""}
+            code, body, _ = self.request("/api/review", "POST",
+                                      {"key": "calendar:ev1", "action": "save", "kind": "records", "item": item}, token)
+            self.assertEqual(code, 200)
+            [saved] = body["data"]["records"]
+            self.assertTrue(saved["id"].startswith("cal-"))
+            self.assertEqual(body["google_status"]["review"], 2)
+            # A second tap (another phone, a retry) cannot create a duplicate.
+            code, _, _ = self.request("/api/review", "POST",
+                                   {"key": "calendar:ev1", "action": "save", "kind": "records", "item": item}, token)
+            self.assertEqual(code, 409)
+            # A later edit of the Calendar event keeps the web correction.
+            bridge.calendar.record(dict(unclear, summary="수유 120미리"))
+            [kept] = self.request("/api/data", token=token)[1]["data"]["records"]
+            self.assertEqual(kept["category"], "분유")
+
+            code, body, _ = self.request("/api/review", "POST",
+                                      {"key": "tasks:t1", "action": "save", "kind": "records",
+                                       "item": dict(item, amount="60ml")}, token)
+            self.assertEqual(code, 200)
+            self.assertEqual(len(body["data"]["records"]), 2)
+            # The resolved Task is not imported again when its title changes later.
+            bridge.record_voice({"id": "t1", "title": "솜하우스 수유 분유 60ml", "updated": "2026-11-16T23:00:00Z"})
+            self.assertEqual(len(self.request("/api/data", token=token)[1]["data"]["records"]), 2)
+
+            code, body, _ = self.request("/api/review", "POST", {"key": "tasks:t2", "action": "dismiss"}, token)
+            self.assertEqual(code, 200)
+            self.assertEqual(len(body["data"]["records"]), 2)
+            remaining = body["google_status"]
+            self.assertEqual(remaining["review"], 1)  # the edited Calendar event now differs from the web record
+            self.assertEqual([x["status"] for x in remaining["review_items"]], ["웹 기록 유지"])
+
+            for bad in ({"key": "tasks:none", "action": "dismiss"}, {"key": "other:x", "action": "dismiss"}):
+                self.assertEqual(self.request("/api/review", "POST", bad, token)[0], 409)
+            self.assertEqual(self.request("/api/review", "POST", {"key": "tasks:t2", "action": "erase"}, token)[0], 400)
+            self.assertEqual(self.request("/api/review", "POST",
+                                          {"key": "calendar:ev1", "action": "save", "kind": "records",
+                                           "item": {"type": "feeding"}}, token)[0], 400)
+            self.assertEqual(self.request("/api/review", "POST", {"key": "tasks:t2", "action": "dismiss"})[0], 401)
+            with self.store.connect() as db:
+                history = db.execute("""SELECT source,action,status FROM google_record_events
+                    WHERE binding='review-demo' AND source='web' ORDER BY seq""").fetchall()
+            self.assertEqual(history, [("web", "save", "저장"), ("web", "save", "저장"), ("web", "dismiss", "확인 필요 무시")])
+
     def test_purchase_task_notes_keep_user_text_and_compare_only_matching_current_prices(self):
         bridge = GoogleRecords(self.store, {"binding": "shopping-demo", "inbox": "@default", "task_list": "archive",
                                            "spreadsheet": "test-sheet"})

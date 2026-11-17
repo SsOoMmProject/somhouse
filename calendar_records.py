@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import re
 import secrets
 import unicodedata
 from urllib.parse import quote, urlencode
@@ -57,26 +58,69 @@ def parse_time(value):
         return None
 
 
+# Natural Assistant phrasing such as "100미리 수유 캘린더에 업데이트" usually has no 솜하우스 tag,
+# and speech recognition may write 수유 as 수육, 미리 as mm, or add a stray number.
+# Corrected titles are saved with the original text in the memo; the Sheets history keeps the raw event.
+NATURAL_AMOUNT = re.compile(r"(\d{1,4}(?:\.\d{1,2})?)\s*(ml|밀리\s*리터|밀리|미리|cc|씨씨|mm|분)(?![A-Za-z유])",
+                            re.IGNORECASE)
+FEEDING_WORD = re.compile(r"수유|분유|모유|혼합")
+MISHEARD_WORD = re.compile(r"수육")
+FILLER = {"기록", "캘린더", "업데이트", "추가", "입력", "저장", "완료", "했어", "했음", "함", "먹음", "먹었어", "먹었음", "줬어", "줬음"}
+PARTICLE = re.compile(r"(?:에서|으로|에|을|를|로|은|는)$")
+
+
+def natural_feeding(text, when, item_id, title):
+    """Return (tagged, item). tagged=False ignores the event; item=None leaves it for review."""
+    amounts = NATURAL_AMOUNT.findall(text)
+    feeding_word, misheard = FEEDING_WORD.search(text), MISHEARD_WORD.search(text)
+    if not amounts or not (feeding_word or misheard):
+        return False, None
+    # "수육" is only read as 수유 next to a volume; "수육 30분" is a cooking time, not a feeding.
+    if not feeding_word and all(unit == "분" for _, unit in amounts):
+        return False, None
+    rest = NATURAL_AMOUNT.sub(" ", text)
+    categories = [word for word in ("분유", "모유", "혼합") if word in rest]
+    rest = MISHEARD_WORD.sub(" ", FEEDING_WORD.sub(" ", rest))
+    tokens = [PARTICLE.sub("", token) for token in rest.replace(".", " ").split()]
+    # A lone number next to a unit-bearing amount is a recognition artefact ("수육 기록 1 100mm").
+    stray = [token for token in tokens if token.isdigit()]
+    leftover = [token for token in tokens if token and token not in FILLER and not token.isdigit()]
+    value, unit = amounts[0]
+    # Unknown words, a second amount or two kinds are kept for a person to check.
+    if len(amounts) != 1 or leftover or len(categories) > 1 or float(value) <= 0 or not when:
+        return True, None
+    unit = unit.lower()
+    amount = value + ("분" if unit == "분" else "ml")
+    corrected = bool(misheard or stray) or unit in ("mm", "밀리")
+    memo = f"음성 원문: {title}" if corrected else ""
+    return True, {"id": item_id, "type": "feeding",
+                  "date": when.astimezone(SEOUL).replace(tzinfo=None).isoformat(timespec="minutes"),
+                  "category": categories[0] if categories else "기타", "amount": amount, "memo": memo}
+
+
 def calendar_feeding(event, item_id):
     title = event.get("summary", "")
     if not isinstance(title, str):
         return False, None
     text = " ".join(unicodedata.normalize("NFKC", title).split())
-    prefix = PREFIX.match(text)
-    if not prefix:
-        return False, None
-    command = reformat_feeding(text[prefix.end():].rstrip("."))
-    if not (command == "수유" or command.startswith(("수유 ", "분유 ", "모유 ", "혼합 ", "기타 "))):
-        return False, None
-    if not command.startswith("수유"):
-        command = "수유 " + command
     start = event.get("start")
     when = parse_time(start.get("dateTime")) if isinstance(start, dict) else None
-    if not when or when.tzinfo is None:
+    if when and when.tzinfo is None:
+        when = None
+    prefix = PREFIX.match(text)
+    if not prefix:
+        return natural_feeding(text, when, item_id, title)
+    command = reformat_feeding(text[prefix.end():].rstrip("."))
+    if not (command == "수유" or command.startswith(("수유 ", "분유 ", "모유 ", "혼합 ", "기타 "))):
+        return natural_feeding(command, when, item_id, title)
+    if not command.startswith("수유"):
+        command = "수유 " + command
+    if not when:
         return True, None
     _, parsed = voice_payload("솜하우스 " + command, when.astimezone(SEOUL), item_id)
     if not parsed or parsed[0] != "records" or parsed[1]["type"] != "feeding":
-        return True, None
+        # Tagged feeding: never drop it; a clean natural phrase is saved, the rest goes to review.
+        return True, natural_feeding(command, when, item_id, title)[1]
     parsed[1]["date"] = when.astimezone(SEOUL).replace(tzinfo=None).isoformat(timespec="minutes")
     return True, parsed[1]
 
