@@ -88,7 +88,7 @@
   }
   // A month grid (Sunday first) with each day's feeding totals and its schedule and dated shopping items;
   // days outside the month are null.
-  function monthGrid(records, year, month, now = new Date(), schedule = [], shopping = []) {
+  function monthGrid(records, year, month, now = new Date(), schedule = [], shopping = [], google = []) {
     const first = new Date(year, month - 1, 1), days = new Date(year, month, 0).getDate();
     const cells = Array.from({length: first.getDay()}, () => null);
     const onDay = (items, key) => items.filter(x => (x.date || '').slice(0, 10) === key);
@@ -96,7 +96,8 @@
       const key = dayKey(new Date(year, month - 1, day));
       cells.push({date: key, day, future: key > dayKey(now), ...rangeSummary(records, key, key, now),
                   schedule: onDay(schedule, key).length,
-                  shopping: onDay(shopping, key).filter(x => x.done !== 'yes').length});
+                  shopping: onDay(shopping, key).filter(x => x.done !== 'yes').length,
+                  google: google.filter(x => (x.date || '').slice(0, 10) <= key && (x.end || x.date || '').slice(0, 10) >= key).length});
     }
     while (cells.length % 7) cells.push(null);
     return cells;
