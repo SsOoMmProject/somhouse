@@ -218,8 +218,56 @@ def entry_time(event):
     return when, ""
 
 
+# Sleep is told apart from feeding by its own words, compared as whole words so 잠실 or 잠깐 never match.
+SLEEP_KINDS = ("낮잠", "밤잠")
+SLEEP_WORDS = {"수면", "잠", "낮잠", "밤잠", "꿀잠", "잠듦", "잠들었어", "잠들었음", "잤어", "잤음", "잠잠",
+               "재움", "재웠어", "재웠음"}
+SLEEP_EXTRA = {"아기", "애기", "아가", "시작", "끝"}
+SLEEP_LENGTH = re.compile(r"(\d{1,2})\s*시간(?:\s*(\d{1,2})\s*분)?|(\d{1,3})\s*분")
+VOLUME = re.compile(r"\d\s*(?:ml|밀리|미리|cc|씨씨|mm)", re.IGNORECASE)
+FEEDING_TERMS = re.compile(r"수유|분유|모유|혼합|수육")
+
+
+def natural_sleep(text, event, item_id, when, note):
+    """Return None when the title has no sleep word, else (True, item or None for review)."""
+    text = PREFIX.sub("", text)
+    lengths = list(SLEEP_LENGTH.finditer(text))
+    rest = SLEEP_LENGTH.sub(" ", text)
+    tokens = [PARTICLE.sub("", token) for token in rest.replace(".", " ").split()]
+    sleepy = [token for token in tokens if token in SLEEP_WORDS]
+    if not sleepy:
+        return None
+    leftover = [t for t in tokens if t and t not in SLEEP_WORDS and t not in FILLER and t not in SLEEP_EXTRA]
+    kinds = {word for word in sleepy if word in SLEEP_KINDS}
+    # Feeding words, a volume, unknown words, two lengths or both kinds: a person decides.
+    if FEEDING_TERMS.search(rest) or VOLUME.search(text) or leftover or len(lengths) > 1 or len(kinds) > 1 or not when:
+        return True, None
+    start = when.astimezone(SEOUL).replace(tzinfo=None)
+    end = None
+    if lengths:
+        hours, minutes, only = lengths[0].groups()
+        total = int(hours or 0) * 60 + int(minutes or 0) + int(only or 0)
+        if not 0 < total <= 24 * 60:
+            return True, None
+        end = start + timedelta(minutes=total)
+    elif not note:
+        finish = parse_time((event.get("end") or {}).get("dateTime"))
+        if finish and finish.tzinfo and finish > when:
+            end = finish.astimezone(SEOUL).replace(tzinfo=None)
+    item = {"id": item_id, "type": "sleep", "date": start.isoformat(timespec="minutes"),
+            "end": end.isoformat(timespec="minutes") if end else "",
+            "category": kinds.pop() if kinds else ("낮잠" if 7 <= start.hour < 19 else "밤잠"), "memo": note}
+    if not any(word in SLEEP_KINDS for word in sleepy):
+        item["confirm"] = "category"   # 수면/잠 alone: guessed from the time, the family confirms
+    return True, item
+
+
 def calendar_feeding(event, item_id, aliases=None):
     when, note = entry_time(event) if isinstance(event.get("summary", ""), str) else (None, "")
+    if isinstance(event.get("summary"), str):
+        slept = natural_sleep(" ".join(unicodedata.normalize("NFKC", event["summary"]).split()), event, item_id, when, note)
+        if slept is not None:
+            return slept
     tagged, item = parse_feeding(event, item_id, when, aliases)
     if item and note:
         item["memo"] = " · ".join(part for part in (item.get("memo", ""), note) if part)
@@ -280,7 +328,7 @@ def with_original(description, title):
     return line + ("\n" + description if description else "")
 
 
-MERGED_FIELDS = ("date", "amount", "category", "memo")
+MERGED_FIELDS = ("date", "end", "amount", "category", "memo")
 
 
 def merge_edit(applied, current, item):

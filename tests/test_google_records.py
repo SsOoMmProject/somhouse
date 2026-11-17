@@ -604,6 +604,49 @@ class GoogleRegression(unittest.TestCase):
                 {'date': '2026-06-03', 'name': '지방선거일', 'substitute': False}])
             self.assertEqual(listing(db, date(2030, 1, 1)), [])
 
+    def test_sleep_words_make_sleep_records_and_unclear_ones_wait(self):
+        from calendar_records import calendar_feeding
+        def parse(summary, start='2026-11-17T13:00:00+09:00', end='2026-11-17T14:00:00+09:00', created='2026-11-16T00:00:00Z'):
+            return calendar_feeding({'summary': summary, 'start': {'dateTime': start}, 'end': {'dateTime': end},
+                                     'created': created}, 'cal-x')
+        item = parse('낮잠 40분')[1]
+        self.assertEqual((item['type'], item['category'], item['date'], item['end'], 'confirm' in item),
+                         ('sleep', '낮잠', '2026-11-17T13:00', '2026-11-17T13:40', False))
+        self.assertEqual(parse('밤잠 2시간 30분', start='2026-11-17T21:00:00+09:00')[1]['end'], '2026-11-17T23:30')
+        # No length: the Calendar event's end is used (when its start was not replaced by the entry time).
+        self.assertEqual(parse('아기 낮잠')[1]['end'], '2026-11-17T14:00')
+        # Only 수면/잠: the kind is guessed from the time and confirmed later.
+        for summary, start, kind in (('수면', '2026-11-17T13:00:00+09:00', '낮잠'), ('잠', '2026-11-17T22:00:00+09:00', '밤잠'),
+                                     ('잠듦', '2026-11-18T05:00:00+09:00', '밤잠'), ('솜하우스 수면 1시간', '2026-11-17T09:00:00+09:00', '낮잠')):
+            item = parse(summary, start=start, end=start)[1]
+            self.assertEqual((item['type'], item['category'], item['confirm']), ('sleep', kind, 'category'), summary)
+        # Quick entry: a default future start becomes the typed time, and the default 1h end is not trusted.
+        item = parse('수면', start='2026-11-17T13:00:00+09:00', created='2026-11-17T03:40:00Z')[1]
+        self.assertEqual((item['date'], item['end']), ('2026-11-17T12:40', ''))
+        self.assertIn('입력한 시각', item['memo'])
+        # Mixed or unknown words wait for a person; ordinary words containing 잠 are not sleep.
+        for summary in ('수유 잠', '낮잠 100ml', '낮잠 병원', '낮잠 밤잠', '낮잠 1시간 2시간', '잠 30시간'):
+            self.assertEqual(parse(summary), (True, None), summary)
+        for summary in ('잠실 약속', '잠깐 회의', '수면 내시경 예약'):
+            self.assertNotEqual(parse(summary)[1] and parse(summary)[1].get('type'), 'sleep', summary)
+        self.assertEqual(parse('잠실 약속'), (False, None))
+        self.assertEqual(parse('수면 내시경 예약'), (True, None))
+        self.assertEqual(parse('분유 100ml')[1]['type'], 'feeding')
+
+    def test_sleep_from_calendar_is_saved_and_merged_like_feedings(self):
+        start = {'dateTime': '2026-01-01T13:00:00+09:00'}
+        self.bridge.calendar.record({'id': 's1', 'summary': '낮잠 40분', 'start': start})
+        record = json.loads(self.rows("SELECT body FROM items")[0][0])
+        self.assertEqual((record['type'], record['end']), ('sleep', '2026-01-01T13:40'))
+        self.bridge.calendar.record({'id': 's1', 'summary': '낮잠 1시간', 'start': start})
+        self.assertEqual(json.loads(self.rows("SELECT body FROM items")[0][0])['end'], '2026-01-01T14:00')
+        from google_records import task_title
+        self.assertEqual(task_title('records', record), '수면 · 낮잠 13:00~13:40')
+        self.bridge.calendar.record({'id': 's2', 'summary': '낮잠 병원', 'start': start})
+        with self.store.connect() as db:
+            item = self.bridge.status(db)['review_items'][0]
+        self.assertEqual(item['suggest'], {'type': 'sleep', 'category': '낮잠'})
+
     def test_hand_typed_calendar_events_use_the_time_they_were_entered(self):
         from calendar_records import calendar_feeding
         def parse(start, created='2026-11-17T04:10:30.000Z', summary='수유 100ml'):

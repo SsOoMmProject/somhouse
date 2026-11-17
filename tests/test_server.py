@@ -573,6 +573,22 @@ class FamilyAPI(unittest.TestCase):
         with self.store.connect() as db:
             db.execute("DELETE FROM holidays")
 
+    def test_sleep_records_are_validated_and_confirmed_with_sleep_kinds(self):
+        token = self.login()
+        ok = {"id": "sl1", "type": "sleep", "date": "2026-11-17T13:00", "end": "2026-11-17T13:40", "category": "낮잠", "memo": ""}
+        self.assertEqual(self.request("/api/items/records/sl1", "PUT", ok, token)[0], 200)
+        self.assertEqual(self.request("/api/items/records/sl2", "PUT", dict(ok, id="sl2", end=""), token)[0], 200)
+        for bad in (dict(ok, category="분유"), dict(ok, end="2026-11-17T12:00"), dict(ok, category="")):
+            self.assertEqual(self.request("/api/items/records/sl1", "PUT", bad, token)[0], 400)
+        with self.store.connect() as db:
+            db.execute("UPDATE items SET body=? WHERE id='sl2'", (json.dumps(dict(ok, id="sl2", confirm="category")),))
+        self.assertEqual(self.request("/api/confirm", "POST", {"id": "sl2", "category": "분유"}, token)[0], 400)
+        code, body, _ = self.request("/api/confirm", "POST", {"id": "sl2", "category": "밤잠"}, token)
+        saved = next(x for x in body["data"]["records"] if x["id"] == "sl2")
+        self.assertEqual((code, saved["category"], "confirm" in saved), (200, "밤잠", False))
+        for item_id in ("sl1", "sl2"):
+            self.request("/api/items/records/" + item_id, "DELETE", token=token)
+
     def test_purchase_task_notes_keep_user_text_and_compare_only_matching_current_prices(self):
         bridge = GoogleRecords(self.store, {"binding": "shopping-demo", "inbox": "@default", "task_list": "archive",
                                            "spreadsheet": "test-sheet"})
