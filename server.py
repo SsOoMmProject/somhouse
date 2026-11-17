@@ -526,12 +526,44 @@ def google_status(directory):
         print(f"{error['target']}: {error['last_error']}")
 
 
+def delete_record(directory, kind, item_id):
+    """Admin removal of one record: manual backup first, then delete.
+
+    A record that was ever sent to Google gets a delete event so the Tasks copy, Sheets history and
+    Calendar projection follow. A record that never left the Mac mini leaves nothing behind externally.
+    """
+    if kind not in KINDS or not item_id:
+        raise SystemExit("--kind (records/schedule/shopping)와 --item-id를 지정해 주세요.")
+    store = Store(directory)
+    config = load_google_config(directory)
+    bridge = GoogleRecords(store, config) if config else None
+    with store.lock, store.connect() as db:
+        row = db.execute("SELECT body FROM items WHERE kind=? AND id=?", (kind, item_id)).fetchone()
+        if row is None:
+            raise SystemExit("해당 기록이 없습니다. 이미 삭제됐거나 ID가 다릅니다.")
+        item = json.loads(row[0])
+        backup = store.snapshot(db, automatic=False)
+        db.execute("DELETE FROM items WHERE kind=? AND id=?", (kind, item_id))
+        sent = bridge is not None and db.execute(
+            """SELECT 1 FROM google_record_events WHERE item_id=? UNION ALL
+               SELECT 1 FROM google_calendar_links WHERE item_id=? LIMIT 1""", (item_id, item_id)).fetchone()
+        if sent:
+            bridge.queue(db, kind, item_id, item, "delete")
+    shown = {key: item[key] for key in ("type", "date", "category", "amount", "title", "hospital") if key in item}
+    print(f"삭제했습니다: {kind} {shown}")
+    print(f"삭제 전 관리자 백업: {backup}")
+    print("Google 사본에도 삭제를 전송합니다. 서버 worker가 자동 처리합니다." if sent
+          else "Google로 보낸 적이 없는 기록이라 외부에 남는 흔적은 없습니다.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("init", "serve", "password", "backup", "restore",
                         "antigravity-config", "antigravity-test", "keep-config", "keep-test", "keep-status",
-                        "google-status", "google-retry", "google-backfill"),
+                        "google-status", "google-retry", "google-backfill", "delete-record"),
                         nargs="?", default="serve")
+    parser.add_argument("--kind", choices=KINDS, help="delete-record: 기록 종류")
+    parser.add_argument("--item-id", help="delete-record: 삭제할 기록 ID")
     parser.add_argument("username", nargs="?")
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA)
     parser.add_argument("--allow-record-summaries", action="store_true")
@@ -546,6 +578,9 @@ def main():
         return
     if args.command == "google-status":
         google_status(args.data_dir)
+        return
+    if args.command == "delete-record":
+        delete_record(args.data_dir, args.kind, args.item_id)
         return
     if args.command in ("google-retry", "google-backfill"):
         store = Store(args.data_dir)
