@@ -594,7 +594,9 @@ class CalendarRecords:
             db.executemany("INSERT OR REPLACE INTO google_calendar_view VALUES (?,?,?,?,?,?,?)", rows)
 
     def view_events(self, db):
-        return [{"id": event_id, "date": start, "end": end, "allDay": bool(all_day), "title": title, "link": link}
+        account = self.records.account_query().replace("?", "&")
+        return [{"id": event_id, "date": start, "end": end, "allDay": bool(all_day), "title": title,
+                 "link": link + account if link else ""}
                 for event_id, start, end, all_day, title, link in db.execute(
                     """SELECT event_id,start,end,all_day,title,link FROM google_calendar_view WHERE binding=?
                        ORDER BY start LIMIT ?""", (self.binding, self.VIEW_LIMIT))]

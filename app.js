@@ -19,18 +19,20 @@ function accountMessage(text){
  const status=$('#account-status');
  status.textContent=text;status.hidden=!text;
 }
+function calendarLinked(sources){return /^https:\/\/calendar\.google\.com\/calendar\/(?:r(?:\?authuser=[A-Za-z0-9._%+@-]+)?)?$/.test(sources?.calendar||'');}
 function showSources(connected){
  const element=$('#raw-sources'), sources=connected&&sharedReady?shared.sources:null;
  const links=[];
- if(/^https:\/\/docs\.google\.com\/spreadsheets\/d\/[A-Za-z0-9_-]+\/edit$/.test(sources?.sheet||'')){
+ // Only Google's own pages, optionally with ?authuser=<connected account> so the right account opens.
+ const account='(?:\\?authuser=[A-Za-z0-9._%+@-]+)?$';
+ if(new RegExp('^https://docs\\.google\\.com/spreadsheets/d/[A-Za-z0-9_-]+/edit'+account).test(sources?.sheet||'')){
   links.push(`<a href="${esc(sources.sheet)}" target="_blank" rel="noopener noreferrer">원본 시트</a>`);
  }
- if(sources?.tasks==='https://tasks.google.com/'){
-  links.push('<a href="https://tasks.google.com/" target="_blank" rel="noopener noreferrer">Google Tasks</a>');
+ if(new RegExp('^https://tasks\\.google\\.com/'+account).test(sources?.tasks||'')){
+  links.push(`<a href="${esc(sources.tasks)}" target="_blank" rel="noopener noreferrer">Google Tasks</a>`);
  }
- if(sources?.calendar==='https://calendar.google.com/calendar/'){
-  // Opens Calendar home; the feeding events live in the separate "솜하우스 수유" calendar there.
-  links.push('<a href="https://calendar.google.com/calendar/" target="_blank" rel="noopener noreferrer">Google Calendar(솜하우스 수유)</a>');
+ if(calendarLinked(sources)){
+  links.push(`<a href="${esc(sources.calendar)}" target="_blank" rel="noopener noreferrer">Google 캘린더</a>`);
  }
  const html=links.join(' · ');
  if(element.innerHTML!==html)element.innerHTML=html;
@@ -161,7 +163,7 @@ function reviewView(){
 
 const filters={records:{},schedule:{},shopping:{}};
 function route(){const name=location.hash.slice(1);page=Object.hasOwn(pageTitles,name)?name:'home';render()}
-function quickButtons(){return '<div class="quick"><button data-add="feeding">＋ 수유 기록</button><button class="secondary" data-add="hospital">병원 방문</button><button class="secondary" data-add="schedule">일정</button><button class="secondary" data-add="shopping">구매 물품</button></div>'}
+function quickButtons(){return '<div class="quick"><button class="secondary" data-add="feeding">수유 기록</button><button class="secondary" data-add="hospital">병원 방문</button><button class="secondary" data-add="schedule">일정</button><button class="secondary" data-add="shopping">구매 물품</button></div>'}
 // Opens a prefilled form only; nothing is saved until the family member taps 저장하기.
 const feedingKinds=['분유','모유','혼합','기타'];
 function unconfirmed(){return data.records.filter(x=>x.type==='feeding'&&x.confirm==='category').sort((a,b)=>b.date.localeCompare(a.date));}
@@ -179,7 +181,7 @@ function aliasList(){
 }
 // Shown only when the Google Calendar intake is connected. Static text, no user data.
 function voiceHelp(){
- if(shared?.sources?.calendar!=='https://calendar.google.com/calendar/')return '';
+ if(!calendarLinked(shared?.sources))return '';
  return `<details class="voice-help"><summary>음성·캘린더로 수유 기록하는 방법</summary><ul><li><strong>말로:</strong> 네스트 허브·휴대폰·태블릿에서 “헤이 구글, 100미리 수유 캘린더에 업데이트”</li><li><strong>직접 입력:</strong> Google 캘린더 앱에서 새 일정 제목에 <strong>수유 100ml</strong>, <strong>분유 120미리</strong>, <strong>모유 15분</strong>처럼 적고 저장</li><li>제목에는 <strong>수유·분유·모유</strong>와 <strong>단위가 붙은 양</strong>(ml·미리·cc, 직수는 분)이 있어야 해요.</li><li>시각은 따로 고치지 않아도 돼요. 일정 시각이 입력한 때부터 2시간 안이거나 종일 일정이면 입력한 시각으로 저장해요. 지난 수유는 일정의 시작 시각을 실제 시각으로 맞춰 주세요.</li><li>같은 Google 계정의 기본 캘린더만 읽고, 약 30초 뒤 여기에 나타나요. 반복 일정과 2시간보다 먼 미래 일정은 저장하지 않아요.</li><li>‘수유 100ml’처럼 종류를 말하지 않았거나 ‘부유’처럼 비슷하게 들린 말은 일단 저장하고, 홈에서 분유·모유를 고르게 해요. 고른 말은 기억해서 다음부터 자동으로 구분해요.</li>${aliasList()}<li>양을 빼고 ‘분유’만 적었거나 알아듣기 어려운 입력은 위쪽 ‘확인 필요’에 모여요. 거기서 양과 종류를 넣어 저장해요.</li></ul></details>`;
 }
 function repeatButtons(){
@@ -235,7 +237,7 @@ function calendarView(){
    +group(`🍼 수유 ${sum.count?esc(totals(sum)):''}`,day.feeding,'records',x=>`${esc(x.date.slice(11))} · ${esc(x.category)} ${esc(x.amount)}`)
    +group(`🏥 병원 ${day.hospital.length}건`,day.hospital,'records',x=>`${esc(x.date.slice(11))} · ${esc(x.hospital)} · ${esc(x.reason)}`)
    +group(`🛒 구매 예정 ${day.shopping.length}건`,day.shopping,'shopping',x=>`${desc(x,'shopping')}${x.done==='yes'?' (완료)':''}`)
-   +(day.google.length?`<h4>📆 Google 캘린더 ${day.google.length}건</h4>${day.google.map(x=>`<p>${x.allDay?'종일':esc(x.date.slice(11))} · ${esc(x.title)}${x.link?` <a href="${esc(x.link)}" target="_blank" rel="noopener noreferrer">열기</a>`:''}</p>`).join('')}`:'');
+   +(day.google.length?`<h4>📆 Google 캘린더 ${day.google.length}건</h4>${day.google.map(x=>`<p>${x.allDay?'종일':esc(x.date.slice(11))} · ${esc(x.title)}${/^https:\/\/www\.google\.com\/calendar\//.test(x.link||'')?` <a href="${esc(x.link)}" target="_blank" rel="noopener noreferrer">열기</a>`:''}</p>`).join('')}`:'');
   detail=`<div class="cal-detail"><h3>${esc(calendarDay)}</h3>${body||'<p class="empty">이 날의 기록이 없어요.</p>'}<div class="quick"><button class="secondary" data-add-on="schedule">이 날 일정 추가</button><button class="secondary" data-add-on="shopping">이 날 구매 추가</button></div></div>`;
  }
  return `<section class="card dashboard-calendar" aria-label="가족 달력"><div class="cal-nav"><button class="plain" data-cal-month="${shift(-1)}" aria-label="이전 달">‹</button><h2>${year}년 ${mon}월</h2><button class="plain" data-cal-month="${shift(1)}" aria-label="다음 달">›</button></div><p class="caption legend">🍼 수유 횟수·ml · 📅 솜하우스 일정 · 📆 Google 캘린더 · 🛒 구매 예정 — 날짜를 누르면 자세히 보여요.</p><div class="cal-grid">${head}${cells}</div>${month!==today.slice(0,7)?`<button class="plain" data-cal-month="${today.slice(0,7)}">이번 달로</button>`:''}${detail}</section>`;

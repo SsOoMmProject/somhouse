@@ -348,7 +348,7 @@ class FamilyAPI(unittest.TestCase):
             source = self.request("/api/data", token=token)[1]
             [voice] = source["data"]["records"]
             self.assertEqual((voice["date"], voice["amount"]), ("2026-11-16T14:30", "120ml"))
-            self.assertEqual(source["sources"]["calendar"], "https://calendar.google.com/calendar/")
+            self.assertEqual(source["sources"]["calendar"], "https://calendar.google.com/calendar/r")
             calendar.record(dict(event, summary="솜하우스 수유 분유 125ml"))
             [voice] = self.request("/api/data", token=token)[1]["data"]["records"]
             self.assertEqual(voice["amount"], "125ml")
