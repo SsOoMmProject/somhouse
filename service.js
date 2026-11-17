@@ -59,6 +59,16 @@
     const match = /^\s*(\d+(?:\.\d+)?)\s*분\s*$/.exec(amount || '');
     return match ? Number(match[1]) : null;
   }
+  // Minutes between a sleep's start and end (local "YYYY-MM-DDTHH:MM"), or null when it has no end yet.
+  function sleepMinutes(x) {
+    if (!x.end || x.end <= x.date) return null;
+    const at = v => { const [d, t] = v.split('T'); const [y, m, day] = d.split('-').map(Number); const [h, mi] = t.split(':').map(Number); return new Date(y, m - 1, day, h, mi); };
+    return Math.round((at(x.end) - at(x.date)) / 60000);
+  }
+  function duration(minutes) {
+    const h = Math.floor(minutes / 60), m = minutes % 60;
+    return h ? `${h}시간${m ? ` ${m}분` : ''}` : `${m}분`;
+  }
   function dayKey(date) { return localDateTime(date).slice(0, 10); }
   function addDays(key, days) {
     const [y, m, d] = key.split('-').map(Number);
@@ -74,8 +84,11 @@
     const current = localDateTime(now);
     const entries = records.filter(x => x.type === 'feeding' && x.date <= current && x.date.slice(0, 10) >= from && x.date.slice(0, 10) <= to);
     const minutes = entries.map(x => feedingMinutes(x.amount)).filter(v => v !== null);
+    const sleeps = records.filter(x => x.type === 'sleep' && x.date <= current && x.date.slice(0, 10) >= from && x.date.slice(0, 10) <= to);
+    const slept = sleeps.map(x => sleepMinutes(x)).filter(v => v !== null);
     return {from, to, count: entries.length, ...measuredVolume(entries),
-            minutes: Number(minutes.reduce((a, b) => a + b, 0).toFixed(1)), timedCount: minutes.length};
+            minutes: Number(minutes.reduce((a, b) => a + b, 0).toFixed(1)), timedCount: minutes.length,
+            sleepCount: sleeps.length, sleepMinutes: slept.reduce((a, b) => a + b, 0), sleepTimed: slept.length};
   }
   function periodSummaries(records, now = new Date()) {
     const today = dayKey(now), yesterday = addDays(today, -1), week = weekStart(today);
@@ -110,7 +123,7 @@
       && (!options.to || (x.date || '').slice(0,10) <= options.to)
       && (!options.status || (x.done === 'yes' ? 'done' : 'pending') === options.status));
   }
-  const api = { localDateTime, summary, dailyFeeding, feedingVolume, feedingMinutes, hasFeedingUnit, recentFeedings, rangeSummary, periodSummaries, monthGrid, weekStart, addDays, filter };
+  const api = { localDateTime, summary, dailyFeeding, feedingVolume, feedingMinutes, sleepMinutes, duration, hasFeedingUnit, recentFeedings, rangeSummary, periodSummaries, monthGrid, weekStart, addDays, filter };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Somhouse = api;
 })(typeof window !== 'undefined' ? window : this);

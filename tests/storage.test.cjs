@@ -165,7 +165,7 @@ test('unclear feeding kinds are settled with one tap, learned, and can be forgot
   {id:'c',type:'feeding',date:'2026-11-17T10:00',category:'분유',amount:'120ml',memo:''});
  const b=browser({server});await b.login();b.eval("page='home';render()");
  let html=b.get('#content').innerHTML;
- assert.match(html,/수유 종류를 골라 주세요 · 2건/);assert.match(html,/들린 말 ‘부유’/);
+ assert.match(html,/종류를 골라 주세요 · 2건/);assert.match(html,/들린 말 ‘부유’/);
  assert.match(html,/data-confirm-id="a" data-confirm-category="분유"/);
  assert.doesNotMatch(html,/data-confirm-id="c"/);
  const click=dataset=>b.events.get('click')({target:{closest:()=>({dataset})}});
@@ -173,11 +173,11 @@ test('unclear feeding kinds are settled with one tap, learned, and can be forgot
  assert.deepEqual(server.confirms,[{id:'a',category:'분유'}]);
  assert.match(b.get('#connection-status').textContent,/‘부유’는 분유로 기억/);
  html=b.get('#content').innerHTML;
- assert.match(html,/수유 종류를 골라 주세요 · 1건/);assert.match(html,/‘부유’→분유 <button class="plain" data-forget="부유">잊기/);
+ assert.match(html,/종류를 골라 주세요 · 1건/);assert.match(html,/‘부유’→분유 <button class="plain" data-forget="부유">잊기/);
  await click({confirmId:'b',confirmCategory:'주스'});
  assert.equal(server.confirms.length,1);
  await click({confirmId:'b',confirmCategory:'기타'});
- assert.doesNotMatch(b.get('#content').innerHTML,/수유 종류를 골라 주세요/);
+ assert.doesNotMatch(b.get('#content').innerHTML,/종류를 골라 주세요/);
  await click({forget:'부유'});
  assert.deepEqual(server.confirms.at(-1),{forget:'부유'});
  assert.doesNotMatch(b.get('#content').innerHTML,/data-forget/);
@@ -325,4 +325,44 @@ test('calendar marks Korean holidays and substitutes, and upcoming mixes Somhous
  assert.ok(upcoming.indexOf('소아과')<upcoming.indexOf('아빠 저녁'));
  assert.match(upcoming,/<strong>아빠 저녁<\/strong> <span class="badge gcal">📆 Google<\/span>/);
  assert.match(upcoming,/Google에서 열기/);assert.doesNotMatch(upcoming,/지난 일정/);
+});
+
+test('sleep records are entered, confirmed, totalled and shown on the calendar',async()=>{
+ const server=family();const today=new Date();const pad=n=>String(n).padStart(2,'0');
+ const key=`${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
+ server.data.records.push({id:'n',type:'sleep',date:key+'T00:10',end:key+'T01:40',category:'밤잠',memo:''},
+  {id:'g',type:'sleep',date:key+'T00:30',end:'',category:'밤잠',memo:'',confirm:'category'});
+ const b=browser({server});await b.login();b.eval("page='home';render()");
+ let html=b.get('#content').innerHTML;
+ assert.match(html,/data-add="sleep">수면<\/button>/);
+ assert.match(html,/😴 [0-9-]+ 00:30 · 깬 시각 미입력<\/strong> · 시각으로 추정: 밤잠/);
+ assert.match(html,/data-confirm-id="g" data-confirm-category="낮잠">낮잠/);
+ assert.match(html,/<span class="sleep-line">😴 2회 · 1시간 30분<\/span>/);
+ assert.match(b.get('#dashboard').innerHTML,/<span class="mark sleep">😴1h 30m<\/span>/);
+ const click=dataset=>b.events.get('click')({target:{closest:()=>({dataset})}});
+ await click({confirmId:'g',confirmCategory:'낮잠'});
+ assert.deepEqual(server.confirms.at(-1),{id:'g',category:'낮잠'});
+ await click({calDay:key});
+ assert.match(b.get('#dashboard').innerHTML,/😴 수면 2회<\/h4><p>밤잠 · 00:10~01:40 \(1시간 30분\)/);
+ await click({add:'sleep'});
+ assert.match(b.get('#formtitle').textContent,/수면 기록/);
+ assert.match(b.get('#fields').innerHTML,/<select name="category" required><option >낮잠<\/option><option >밤잠/);
+ b.get('#form').values={date:key+'T13:00',end:key+'T13:45',category:'낮잠',memo:''};
+ await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
+ const saved=server.data.records.find(x=>x.date===key+'T13:00');
+ assert.deepEqual([saved.type,saved.category,saved.end],['sleep','낮잠',key+'T13:45']);
+ b.eval("page='records';render()");
+ assert.match(b.get('#content').innerHTML,/수면 · 낮잠 · 13:00~13:45 \(45분\)/);
+ assert.match(b.get('#content').innerHTML,/<option value="sleep" >수면<\/option>/);
+});
+
+test('one record of an unknown type still blocks a broken payload, but every known type loads',async()=>{
+ const server=family();
+ server.data.records.push({id:'s',type:'sleep',date:'2026-11-17T13:00',end:'',category:'낮잠',memo:''},
+  {id:'f',type:'feeding',date:'2026-11-17T09:00',category:'분유',amount:'100ml',memo:''},
+  {id:'h',type:'hospital',date:'2026-11-17T10:00',hospital:'솜소아과',reason:'접종',memo:''});
+ const b=browser({server});await b.login();
+ assert.equal(b.eval('sharedReady'),true);assert.equal(b.eval('data.records.length'),3);
+ assert.equal(b.eval("valid({records:[{id:'x',type:'nap',date:'d'}],schedule:[],shopping:[]})"),false);
+ assert.equal(b.eval("valid({records:[{id:'x',type:'sleep',date:'d'}],schedule:[],shopping:[]})"),false);
 });
