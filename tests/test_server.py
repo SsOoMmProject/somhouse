@@ -561,6 +561,18 @@ class FamilyAPI(unittest.TestCase):
             self.assertNotIn("calendar_events", self.request("/api/data", token=token)[1])
         self.assertNotIn("calendar_events", self.request("/api/data", token=token)[1])
 
+    def test_family_data_lists_holidays_and_tests_never_download_them(self):
+        self.assertFalse(self.server.holiday_feed)
+        from datetime import date
+        day = date.today().isoformat()
+        with self.store.connect() as db:
+            db.execute("INSERT OR REPLACE INTO holidays VALUES (?,?,1)", (day, "광복절"))
+        token = self.login()
+        holidays = self.request("/api/data", token=token)[1]["holidays"]
+        self.assertIn({"date": day, "name": "광복절", "substitute": True}, holidays)
+        with self.store.connect() as db:
+            db.execute("DELETE FROM holidays")
+
     def test_purchase_task_notes_keep_user_text_and_compare_only_matching_current_prices(self):
         bridge = GoogleRecords(self.store, {"binding": "shopping-demo", "inbox": "@default", "task_list": "archive",
                                            "spreadsheet": "test-sheet"})

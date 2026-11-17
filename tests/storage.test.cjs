@@ -320,3 +320,26 @@ test('home puts recent feedings under their own heading and the voice help after
  assert.ok(html.indexOf('summary-cards')<html.indexOf('voice-help'));
  assert.ok(html.indexOf('repeat-title')<html.indexOf('summary-cards'));
 });
+
+test('calendar marks Korean holidays and substitutes, and upcoming mixes Somhouse and Google events',async()=>{
+ const server=family();const today=new Date();const pad=n=>String(n).padStart(2,'0');
+ const ym=`${today.getFullYear()}-${pad(today.getMonth()+1)}`,day=n=>`${ym}-${pad(n)}`;
+ const future=new Date(today.getTime()+3*86400000),fkey=`${future.getFullYear()}-${pad(future.getMonth()+1)}-${pad(future.getDate())}`;
+ server.holidays=[{date:day(3),name:'개천절',substitute:false},{date:day(5),name:'개천절',substitute:true}];
+ server.calendarEvents=[{id:'g',date:fkey+'T19:00',end:fkey+'T21:00',allDay:false,title:'아빠 저녁',link:'https://www.google.com/calendar/event?eid=a'},
+                        {id:'old',date:'2000-01-01T09:00',end:'2000-01-01T10:00',allDay:false,title:'지난 일정',link:''}];
+ server.data.schedule.push({id:'s',date:fkey+'T08:00',title:'소아과',who:'엄마',memo:''});
+ const b=browser({server});await b.login();b.eval("page='home';render()");
+ const board=b.get('#dashboard').innerHTML;
+ assert.match(board,new RegExp(`class="cal-day red[^"]*" data-cal-day="${day(3)}" aria-label="[^"]* 개천절"><span class="num">3</span><span class="holiday">개천절</span>`));
+ assert.match(board,new RegExp(`data-cal-day="${day(5)}"[^>]*><span class="num">5</span><span class="holiday">대체공휴일\\(개천절\\)</span>`));
+ const sunday=[...Array(28).keys()].map(i=>i+1).find(n=>new Date(today.getFullYear(),today.getMonth(),n).getDay()===0);
+ assert.match(board,new RegExp(`class="cal-day red[^"]*" data-cal-day="${day(sunday)}"`));
+ await b.events.get('click')({target:{closest:()=>({dataset:{calDay:day(5)}})}});
+ assert.match(b.get('#dashboard').innerHTML,new RegExp(`<h3>${day(5)} · <span class="holiday-name">대체공휴일\\(개천절\\)</span></h3>`));
+ const html=b.get('#content').innerHTML;
+ const upcoming=html.slice(html.indexOf('다가오는 일정'),html.indexOf('구매 예정</h2>'));
+ assert.ok(upcoming.indexOf('소아과')<upcoming.indexOf('아빠 저녁'));
+ assert.match(upcoming,/<strong>아빠 저녁<\/strong> <span class="badge gcal">📆 Google<\/span>/);
+ assert.match(upcoming,/Google에서 열기/);assert.doesNotMatch(upcoming,/지난 일정/);
+});

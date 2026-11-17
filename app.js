@@ -145,6 +145,12 @@ const choices={category:['모유','분유','혼합','기타'],who:['가족','엄
 function link(url){try{let u=new URL(url);return ['http:','https:'].includes(u.protocol)?`<a href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">상품 링크 ↗</a>`:''}catch{return ''}}
 function desc(x,k){if(k==='records')return x.type==='feeding'?`수유 · ${esc(x.category)} · ${esc(x.amount)}`:`병원 · ${esc(x.hospital)} · ${esc(x.reason)}`;return (k==='schedule'&&x.who?`<span class="who who-${esc(x.who)}">${esc(x.who)}</span> `:'')+esc(x.title)+(k==='shopping'?` · ${esc(x.quantity)}`:'')}
 function item(x,k,compact=false){return `<div class="item"><strong>${desc(x,k)}</strong> ${k==='shopping'?`<span class="badge">${x.done==='yes'?'구매 완료':'구매 예정'}</span>`:''}${x.confirm==='category'?'<span class="badge warn">종류 확인 필요</span>':''}<p>${esc((x.date||'').replace('T',' '))}${x.memo?'<br>'+esc(x.memo):''}</p>${x.url?link(x.url):''}${compact?'':`<div class="actions">${k==='shopping'?`<button class="secondary" data-action="toggle" data-key="${k}" data-id="${esc(x.id)}">${x.done==='yes'?'다시 예정으로':'완료로 변경'}</button>`:''}<button class="secondary" data-action="edit" data-key="${k}" data-id="${esc(x.id)}">수정</button>${k==='records'&&x.type==='feeding'&&String(x.id).startsWith('cal-')&&shared?.googleStatus?.calendar_write?`<button class="secondary" data-writeback="${esc(x.id)}">캘린더에도 반영</button>`:''}<button class="secondary" data-action="delete" data-key="${k}" data-id="${esc(x.id)}">삭제</button></div>`}</div>`}
+// A mirrored Google Calendar event: read-only, opened in Google to edit.
+function googleItem(x){
+ const when=x.allDay?`${x.date} 종일`:x.date.replace('T',' ');
+ const open=/^https:\/\/www\.google\.com\/calendar\//.test(x.link||'')?`<a href="${esc(x.link)}" target="_blank" rel="noopener noreferrer">Google에서 열기 ↗</a>`:'';
+ return `<div class="item"><strong>${esc(x.title)}</strong> <span class="badge gcal">📆 Google</span><p>${esc(when)}</p>${open}</div>`;
+}
 function sorted(k){return [...data[k]].sort((a,b)=>(b.date||b.id).localeCompare(a.date||a.id))}
 const pageTitles={home:'홈',records:'육아 기록',stats:'수유 통계',schedule:'일정',shopping:'구매 목록',ai:'AI 대화',review:'확인 필요'};
 let reviewKey='';
@@ -195,10 +201,10 @@ function latestFeeding(){
 }
 function homeView(){
   const now=Somhouse.localDateTime();
-  const upcoming=[...data.schedule].filter(x=>x.date>=now).sort((a,b)=>a.date.localeCompare(b.date));
+  const upcoming=[...data.schedule.filter(x=>x.date>=now).map(x=>({...x,source:'web'})),...googleEvents().filter(x=>(x.allDay?x.date>=now.slice(0,10):x.date>=now)).map(x=>({...x,source:'google'}))].sort((a,b)=>a.date.localeCompare(b.date));
   return `<h1>우리 가족의 오늘</h1><p class="intro">${esc(now.slice(0,10))} · 작은 순간을 차곡차곡 남겨요.</p>${quickButtons()}${repeatButtons()}${confirmBox()}
     ${summaryCards()}${latestFeeding()}${voiceHelp()}
-    <div class="grid">${[['최근 육아 기록',sorted('records').slice(0,3),'records','첫 수유나 병원 방문을 기록해보세요.'],['다가오는 일정',upcoming.slice(0,3),'schedule','예정된 일정이 없어요.'],['구매 예정',data.shopping.filter(x=>x.done!=='yes').slice(0,3),'shopping','필요한 물품을 추가해보세요.']].map(([title,items,k,msg])=>`<section class="card"><h2>${title}</h2>${items.length?items.map(x=>item(x,k,true)).join(''):`<p class="empty">${msg}</p>`}<button class="plain" data-page="${k}">전체 보기 →</button></section>`).join('')}</div>`;
+    <div class="grid">${[['최근 육아 기록',sorted('records').slice(0,3),'records','첫 수유나 병원 방문을 기록해보세요.'],['다가오는 일정',upcoming.slice(0,3),'schedule','예정된 일정이 없어요.'],['구매 예정',data.shopping.filter(x=>x.done!=='yes').slice(0,3),'shopping','필요한 물품을 추가해보세요.']].map(([title,items,k,msg])=>`<section class="card"><h2>${title}</h2>${items.length?items.map(x=>x.source==='google'?googleItem(x):item(x,k,true)).join(''):`<p class="empty">${msg}</p>`}<button class="plain" data-page="${k}">전체 보기 →</button></section>`).join('')}</div>`;
 }
 let statsDays=7,calendarMonth='',calendarDay='';
 function totals(x){
@@ -210,6 +216,8 @@ function totals(x){
 function summaryCards(){
  return `<div class="summary-cards">${Somhouse.periodSummaries(data.records).map(x=>`<div class="summary-card"><p>${x.label}<span class="caption"> ${esc(x.from.slice(5).replace('-','/'))}${x.from!==x.to?`~${esc(x.to.slice(5).replace('-','/'))}`:''}</span></p><strong>${x.count?esc(totals(x)):'기록 없음'}</strong></div>`).join('')}</div>`;
 }
+function holidayOn(day){return (Array.isArray(shared?.holidays)?shared.holidays:[]).find(x=>x.date===day);}
+function holidayName(h){return h.substitute?`대체공휴일(${h.name})`:h.name;}
 function googleEvents(){return Array.isArray(shared?.calendarEvents)?shared.calendarEvents:[];}
 function dayItems(day){
  const on=x=>(x.date||'').slice(0,10)===day,byTime=(a,b)=>(a.date||'').localeCompare(b.date||'');
@@ -226,7 +234,8 @@ function calendarView(){
   if(!c)return '<span class="cal-day empty"></span>';
   const marks=[c.count?`<span class="mark feed">🍼${c.count}${c.measuredCount?` ${c.volume}`:''}</span>`:'',c.schedule?`<span class="mark plan">📅${c.schedule}</span>`:'',c.shopping?`<span class="mark shop">🛒${c.shopping}</span>`:'',c.google?`<span class="mark gcal">📆${c.google}</span>`:''].join('');
   const label=`${c.date} 수유 ${c.count}회 일정 ${c.schedule}건 구매 ${c.shopping}건 구글 ${c.google}건`;
-  return `<button class="cal-day${c.date===today?' today':''}${c.date===calendarDay?' selected':''}${marks?' has':''}" data-cal-day="${c.date}" aria-label="${label}"><span class="num">${c.day}</span>${marks}</button>`;
+  const holiday=holidayOn(c.date),weekday=new Date(year,mon-1,c.day).getDay();
+  return `<button class="cal-day${holiday||weekday===0?' red':''}${c.date===today?' today':''}${c.date===calendarDay?' selected':''}${marks?' has':''}" data-cal-day="${c.date}" aria-label="${label}${holiday?' '+esc(holidayName(holiday)):''}"><span class="num">${c.day}</span>${holiday?`<span class="holiday">${esc(holidayName(holiday))}</span>`:''}${marks}</button>`;
  }).join('');
  const head=['일','월','화','수','목','금','토'].map(d=>`<span class="cal-head">${d}</span>`).join('');
  let detail='';
@@ -238,7 +247,8 @@ function calendarView(){
    +group(`🏥 병원 ${day.hospital.length}건`,day.hospital,'records',x=>`${esc(x.date.slice(11))} · ${esc(x.hospital)} · ${esc(x.reason)}`)
    +group(`🛒 구매 예정 ${day.shopping.length}건`,day.shopping,'shopping',x=>`${desc(x,'shopping')}${x.done==='yes'?' (완료)':''}`)
    +(day.google.length?`<h4>📆 Google 캘린더 ${day.google.length}건</h4>${day.google.map(x=>`<p>${x.allDay?'종일':esc(x.date.slice(11))} · ${esc(x.title)}${/^https:\/\/www\.google\.com\/calendar\//.test(x.link||'')?` <a href="${esc(x.link)}" target="_blank" rel="noopener noreferrer">열기</a>`:''}</p>`).join('')}`:'');
-  detail=`<div class="cal-detail"><h3>${esc(calendarDay)}</h3>${body||'<p class="empty">이 날의 기록이 없어요.</p>'}<div class="quick"><button class="secondary" data-add-on="schedule">이 날 일정 추가</button><button class="secondary" data-add-on="shopping">이 날 구매 추가</button></div></div>`;
+  const holiday=holidayOn(calendarDay);
+  detail=`<div class="cal-detail"><h3>${esc(calendarDay)}${holiday?` · <span class="holiday-name">${esc(holidayName(holiday))}</span>`:''}</h3>${body||'<p class="empty">이 날의 기록이 없어요.</p>'}<div class="quick"><button class="secondary" data-add-on="schedule">이 날 일정 추가</button><button class="secondary" data-add-on="shopping">이 날 구매 추가</button></div></div>`;
  }
  return `<section class="card dashboard-calendar" aria-label="가족 달력"><div class="cal-nav"><button class="plain" data-cal-month="${shift(-1)}" aria-label="이전 달">‹</button><h2>${year}년 ${mon}월</h2><button class="plain" data-cal-month="${shift(1)}" aria-label="다음 달">›</button></div><p class="caption legend">🍼 수유 횟수·ml · 📅 솜하우스 일정 · 📆 Google 캘린더 · 🛒 구매 예정 — 날짜를 누르면 자세히 보여요.</p><div class="cal-grid">${head}${cells}</div>${month!==today.slice(0,7)?`<button class="plain" data-cal-month="${today.slice(0,7)}">이번 달로</button>`:''}${detail}</section>`;
 }
