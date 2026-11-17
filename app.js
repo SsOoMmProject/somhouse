@@ -297,14 +297,14 @@ $('#form').onsubmit=async e=>{
  e.preventDefault();if(busy)return;
  const k=['feeding','hospital'].includes(kind)?'records':kind;
  const x={...(editing||{}),...Object.fromEntries(new FormData(e.target)),id:editing?.id||draftId};
- if(k==='records'){x.type=kind;delete x.confirm;delete x.heard;}if(k==='shopping'&&!x.done)x.done='no';
+ if(k==='records'){x.type=kind;delete x.confirm;}if(k==='shopping'&&!x.done)x.done='no';
  for(const field of schemas[kind])x[field[0]]=String(x[field[0]]||'').trim();
  if(schemas[kind].some(([name,,,required])=>required&&!x[name])){alert('필수 항목을 입력해 주세요.');return;}
  if(x.url&&!link(x.url)){alert('http 또는 https 상품 링크를 입력해 주세요.');return;}
  if(kind==='feeding'&&!Somhouse.hasFeedingUnit(x.amount)&&!confirm('양에 단위가 없어요. 120ml이나 15분처럼 단위를 붙이면 통계와 빠른 기록에 쓰여요.\n이대로 저장할까요?'))return;
  const submit=$('#form button[type="submit"]');submit.disabled=true;
- const review=reviewKey;
- try{if(await (review?sharedChange(()=>shared.resolveReview(review,'save',k,x)):changeItem(k,x))){$('#dialog').close();render();}}finally{submit.disabled=false;}
+ const review=reviewKey,remembered=JSON.stringify(shared.aliases||{});
+ try{if(await (review?sharedChange(()=>shared.resolveReview(review,'save',k,x)):changeItem(k,x))){$('#dialog').close();const word=Object.keys(shared.aliases||{}).find(w=>shared.aliases[w]===x.category&&JSON.parse(remembered)[w]!==x.category);if(word)message(`저장했어요. 앞으로 ‘${word}’는 ${x.category}로 기억할게요.`);render();}}finally{submit.disabled=false;}
 };
 window.addEventListener('hashchange',route);
 route();

@@ -459,7 +459,7 @@ class FamilyAPI(unittest.TestCase):
             self.assertEqual(code, 200)
             self.assertEqual(body["aliases"], {"부유": "분유"})
             saved = {x["amount"]: x for x in body["data"]["records"]}["100ml"]
-            self.assertEqual((saved["category"], "confirm" in saved, "heard" in saved), ("분유", False, False))
+            self.assertEqual((saved["category"], "confirm" in saved, saved["heard"]), ("분유", False, "부유"))
             self.assertEqual(self.request("/api/confirm", "POST",
                                           {"id": saved["id"], "category": "모유"}, token)[0], 409)
             # The learned word is recognised from now on; a kind-less 수유 teaches nothing.
@@ -481,6 +481,27 @@ class FamilyAPI(unittest.TestCase):
                 self.assertEqual(self.request("/api/confirm", "POST", bad, token)[0], 400)
             self.assertEqual(self.request("/api/confirm", "POST", {"id": "none", "category": "분유"}, token)[0], 409)
             self.assertEqual(self.request("/api/confirm", "POST", {"id": again["id"], "category": "분유"})[0], 401)
+
+            # A wrong pick is corrected by editing the record: 부유 -> 모유 by mistake, then 분유 in the form.
+            code, body, _ = self.request("/api/confirm", "POST", {"id": again["id"], "category": "모유"}, token)
+            self.assertEqual(body["aliases"], {"부유": "모유"})
+            wrong = next(x for x in body["data"]["records"] if x["id"] == again["id"])
+            code, body, _ = self.request("/api/items/records/" + wrong["id"], "PUT", dict(wrong, category="분유"), token)
+            self.assertEqual((code, body["aliases"]), (200, {"부유": "분유"}))
+            # A record that lost its heard field still teaches through the memo's 음성 원문.
+            legacy = {k: v for k, v in wrong.items() if k != "heard"}
+            code, body, _ = self.request("/api/items/records/" + wrong["id"], "PUT", dict(legacy, category="혼합"), token)
+            self.assertEqual(body["aliases"], {"부유": "혼합"})
+            # 기타 and unrelated records leave what was learned alone.
+            code, body, _ = self.request("/api/items/records/" + wrong["id"], "PUT", dict(legacy, category="기타"), token)
+            self.assertEqual(body["aliases"], {"부유": "혼합"})
+            plain = {"id": "plain", "type": "feeding", "date": "2026-11-17T08:00", "category": "모유",
+                     "amount": "15분", "memo": "음성 원문: 수육 기록 1 100mm"}
+            self.assertEqual(self.request("/api/items/records/plain", "PUT", plain, token)[1]["aliases"], {"부유": "혼합"})
+            bridge.calendar.record({"id": "e6", "summary": "부유 30ml", "start": start})
+            latest = {x["amount"]: x for x in self.request("/api/data", token=token)[1]["data"]["records"]}["30ml"]
+            self.assertEqual((latest["category"], "confirm" in latest, latest["heard"]), ("혼합", False, "부유"))
+            self.request("/api/confirm", "POST", {"forget": "부유"}, token)
 
             # Correcting an unclear input on the review page teaches its new word too.
             bridge.calendar.record({"id": "e5", "summary": "머유 50ml 병원", "start": start})

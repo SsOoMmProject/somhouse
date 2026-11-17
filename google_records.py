@@ -498,7 +498,8 @@ class GoogleRecords:
                 text = " ".join(unicodedata.normalize("NFKC", title[0] if title else "").split())
                 found = scan_feeding(PREFIX.sub("", text), load_aliases(db)) or {}
                 if len(found.get("heard", [])) == 1:
-                    learn_alias(db, found["heard"][0], item.get("category"))
+                    item["heard"] = found["heard"][0]
+                    learn_alias(db, item["heard"], item.get("category"))
             self.store.snapshot(db)
             db.execute("""INSERT INTO items VALUES (?,?,?)
                 ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body""", (kind, item_id, encode(item)))

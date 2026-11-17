@@ -21,7 +21,7 @@ from urllib.parse import unquote, urlsplit
 from antigravity import (CONFIG_NAME, SCOPES, Antigravity, AntigravityError,
                          executable, parse_question, save_config, summarize_records)
 from google_records import GoogleRecords, SCHEMA as GOOGLE_SCHEMA, load_config as load_google_config
-from calendar_records import FEEDING_KINDS, SCHEMA as CALENDAR_SCHEMA, learn_alias, load_aliases
+from calendar_records import FEEDING_KINDS, SCHEMA as CALENDAR_SCHEMA, load_aliases, relearn
 from shopping_records import SCHEMA as SHOPPING_SCHEMA
 from google_delivery import SCHEMA as DELIVERY_SCHEMA
 from keep_sync import (CONFIG_NAME as KEEP_CONFIG_NAME, SCHEMA as KEEP_SCHEMA,
@@ -432,9 +432,8 @@ class Handler(BaseHTTPRequestHandler):
                         if item.get("confirm") != "category":
                             raise Problem(409, "이미 확인했거나 찾을 수 없는 기록이에요. 화면을 새로고침해 주세요.")
                         del item["confirm"]
-                        heard = item.pop("heard", "")
                         item["category"] = category
-                        learn_alias(db, heard, category)
+                        relearn(db, item)
                         store.snapshot(db)
                         db.execute("UPDATE items SET body=? WHERE kind='records' AND id=?", (encode(item), item_id))
                         if self.server.google is not None:
@@ -478,6 +477,8 @@ class Handler(BaseHTTPRequestHandler):
                         body = encode(item)
                         store.snapshot(db)
                         db.execute("INSERT INTO items VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body", (kind, item_id, body))
+                        if kind == "records":
+                            relearn(db, item)
                     else:
                         body = None
                         item = None
@@ -490,7 +491,7 @@ class Handler(BaseHTTPRequestHandler):
                         self.server.google.queue(db, kind, item_id, item, "save" if body is not None else "delete")
                     elif self.server.keep is not None:
                         queue_keep(db, self.server.keep.email, kind, item_id, body)
-                    result = {"data": store.state(db)}
+                    result = {"data": store.state(db), "aliases": load_aliases(db)}
                 else:
                     raise Problem(404, "API를 찾을 수 없습니다.")
             # Only acknowledge a change after the SQLite context has committed it.

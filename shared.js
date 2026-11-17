@@ -95,7 +95,11 @@
       if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null; this.aliases = result.aliases || {};}
       return result.data;
     }
-    async put(kind, item) {return (await this.request('/api/items/' + kind + '/' + encodeURIComponent(item.id), 'PUT', item)).data;}
+    async put(kind, item) {
+      const token = this.token, result = await this.request('/api/items/' + kind + '/' + encodeURIComponent(item.id), 'PUT', item);
+      if (token === this.token && result.aliases) this.aliases = result.aliases;
+      return result.data;
+    }
     async remove(kind, id) {return (await this.request('/api/items/' + kind + '/' + encodeURIComponent(id), 'DELETE')).data;}
     // Resolve one voice input that was not saved automatically: action 'save' (with kind/item) or 'dismiss'.
     async resolveReview(key, action, kind, item) {

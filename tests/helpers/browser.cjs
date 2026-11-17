@@ -27,7 +27,7 @@ function browser({raw=JSON.stringify(blank()),session=null,local=new Map([['somh
    else{
     const item=server.data.records.find(x=>x.id===request.id);
     if(item.heard&&request.category!=='기타')server.aliases[item.heard]=request.category;
-    item.category=request.category;delete item.confirm;delete item.heard;
+    item.category=request.category;delete item.confirm;
    }
    result={data:clone(server.data),aliases:clone(server.aliases)};
   }else if(url.endsWith('/api/review')){
@@ -38,7 +38,7 @@ function browser({raw=JSON.stringify(blank()),session=null,local=new Map([['somh
    result={data:clone(server.data),sources:server.sources,google_status:server.googleStatus};
   }else if(options.method==='PUT'){
    const item=JSON.parse(options.body),kind=url.split('/').at(-2);
-   server.data[kind]=server.data[kind].filter(x=>x.id!==item.id);server.data[kind].push(clone(item));result={data:clone(server.data)};
+   server.data[kind]=server.data[kind].filter(x=>x.id!==item.id);server.data[kind].push(clone(item));if(item.heard&&['분유','모유','혼합'].includes(item.category))(server.aliases||={})[item.heard]=item.category;result={data:clone(server.data),aliases:clone(server.aliases||{})};
   }else if(options.method==='DELETE'){
    const parts=url.split('/'),kind=parts.at(-2),id=decodeURIComponent(parts.at(-1));server.data[kind]=server.data[kind].filter(x=>x.id!==id);result={data:clone(server.data)};
   }else result={data:clone(server.data),sources:server.sources,google_status:server.googleStatus,aliases:server.aliases};
