@@ -53,3 +53,25 @@ test('feeding amounts need a volume or duration unit to become presets',()=>{
   {id:'b',type:'feeding',date:'2026-11-02T11:00',category:'모유',amount:'15분'}];
  assert.deepEqual(recentFeedings(records,3,now),[{category:'모유',amount:'15분'}]);
 });
+
+test('period summaries cover today, yesterday, this week and last week (Sunday start) without future entries',()=>{
+ const {periodSummaries,weekStart,monthGrid,rangeSummary}=require('../service.js');
+ const now=new Date(2026,10,17,15,0); // Tuesday
+ assert.equal(weekStart('2026-11-17'),'2026-11-15');assert.equal(weekStart('2026-11-15'),'2026-11-15');assert.equal(weekStart('2026-11-01'),'2026-11-01');
+ const f=(date,amount,category='분유')=>({id:date+amount,type:'feeding',date,category,amount});
+ const records=[f('2026-11-17T07:12','100ml'),f('2026-11-17T13:18','15분','모유'),f('2026-11-17T18:00','90ml'),
+  f('2026-11-16T09:00','120ml'),f('2026-11-15T09:00','80cc'),f('2026-11-14T09:00','60ml'),f('2026-11-08T09:00','50ml'),
+  f('2026-11-17T08:00','2'),{id:'h',type:'hospital',date:'2026-11-17T09:00',hospital:'x',reason:'y'}];
+ const [today,yesterday,week,last]=periodSummaries(records,now);
+ assert.deepEqual([today.count,today.volume,today.minutes,today.measuredCount,today.timedCount],[3,100,15,1,1]);
+ assert.deepEqual([yesterday.from,yesterday.count,yesterday.volume],['2026-11-16',1,120]);
+ assert.deepEqual([week.from,week.to,week.count,week.volume],['2026-11-15','2026-11-17',5,300]);
+ assert.deepEqual([last.from,last.to,last.count,last.volume],['2026-11-08','2026-11-14',2,110]);
+ const grid=monthGrid(records,2026,11,now);
+ assert.equal(grid.length%7,0);assert.equal(grid[0].date,'2026-11-01');
+ const day17=grid.find(c=>c&&c.day===17),day18=grid.find(c=>c&&c.day===18);
+ assert.deepEqual([day17.count,day17.volume,day17.future],[3,100,false]);
+ assert.deepEqual([day18.count,day18.future],[0,true]);
+ const feb=monthGrid([],2027,2,now);assert.equal(feb.filter(Boolean).length,28);assert.equal(feb.slice(0,1)[0],null);
+ assert.equal(rangeSummary(records,'2026-12-01','2026-12-31',now).count,0);
+});

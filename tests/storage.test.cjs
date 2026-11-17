@@ -226,6 +226,28 @@ test('review cards explain why an input waits and name their buttons by situatio
  assert.match(b.get('#fields').innerHTML,/name="amount" type="text" value=""/);
 });
 
+test('stats page shows summary cards and a month calendar that can be moved and opened by day',async()=>{
+ const server=family();const today=new Date();const pad=n=>String(n).padStart(2,'0');
+ const key=`${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
+ server.data.records.push({id:'a',type:'feeding',date:key+'T00:01',category:'분유',amount:'100ml',memo:'음성 원문: 뷰유'});
+ const b=browser({server});await b.login();b.eval("page='stats';render()");
+ let html=b.get('#content').innerHTML;
+ for(const label of ['오늘','어제','이번 주','지난주'])assert.match(html,new RegExp(`<p>${label}<span`));
+ assert.match(html,/<strong>1회 · 100ml<\/strong>/);
+ assert.match(html,new RegExp(`data-cal-day="${key}" aria-label="${key} 1회"`));
+ assert.match(html,/<span class="cal-head">일<\/span>/);
+ const click=dataset=>b.events.get('click')({target:{closest:()=>({dataset})}});
+ await click({calDay:key});
+ html=b.get('#content').innerHTML;
+ assert.match(html,new RegExp(`<h3>${key} · 1회 · 100ml</h3>`));assert.match(html,/분유 100ml/);
+ const next=new Date(today.getFullYear(),today.getMonth()+1,1),nextKey=`${next.getFullYear()}-${pad(next.getMonth()+1)}`;
+ await click({calMonth:nextKey});
+ html=b.get('#content').innerHTML;
+ assert.match(html,new RegExp(`${next.getFullYear()}년 ${next.getMonth()+1}월`));assert.match(html,/이번 달로/);assert.doesNotMatch(html,/cal-detail/);
+ await click({calMonth:'bad'});
+ assert.match(b.get('#content').innerHTML,new RegExp(`${next.getFullYear()}년 ${next.getMonth()+1}월`));
+});
+
 test('calendar writeback button appears only with write permission and asks before sending',async()=>{
  const server=family();
  server.data.records.push({id:'cal-1',type:'feeding',date:'2026-11-17T14:00',category:'분유',amount:'10ml',memo:''},

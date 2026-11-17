@@ -54,6 +54,49 @@
     }
     return result;
   }
+  // Direct breastfeeding is recorded as minutes ("15분"); it is summed separately from volume.
+  function feedingMinutes(amount) {
+    const match = /^\s*(\d+(?:\.\d+)?)\s*분\s*$/.exec(amount || '');
+    return match ? Number(match[1]) : null;
+  }
+  function dayKey(date) { return localDateTime(date).slice(0, 10); }
+  function addDays(key, days) {
+    const [y, m, d] = key.split('-').map(Number);
+    return dayKey(new Date(y, m - 1, d + days));
+  }
+  // Weeks start on Sunday, like the phone's calendar.
+  function weekStart(key) {
+    const [y, m, d] = key.split('-').map(Number);
+    return addDays(key, -new Date(y, m - 1, d).getDay());
+  }
+  // Totals of feedings between two dates (inclusive, YYYY-MM-DD). Entries after now are not counted.
+  function rangeSummary(records, from, to, now = new Date()) {
+    const current = localDateTime(now);
+    const entries = records.filter(x => x.type === 'feeding' && x.date <= current && x.date.slice(0, 10) >= from && x.date.slice(0, 10) <= to);
+    const minutes = entries.map(x => feedingMinutes(x.amount)).filter(v => v !== null);
+    return {from, to, count: entries.length, ...measuredVolume(entries),
+            minutes: Number(minutes.reduce((a, b) => a + b, 0).toFixed(1)), timedCount: minutes.length};
+  }
+  function periodSummaries(records, now = new Date()) {
+    const today = dayKey(now), yesterday = addDays(today, -1), week = weekStart(today);
+    return [
+      {key: 'today', label: '오늘', ...rangeSummary(records, today, today, now)},
+      {key: 'yesterday', label: '어제', ...rangeSummary(records, yesterday, yesterday, now)},
+      {key: 'week', label: '이번 주', ...rangeSummary(records, week, today, now)},
+      {key: 'lastWeek', label: '지난주', ...rangeSummary(records, addDays(week, -7), addDays(week, -1), now)},
+    ];
+  }
+  // A month grid (Sunday first) with each day's totals; days outside the month are null.
+  function monthGrid(records, year, month, now = new Date()) {
+    const first = new Date(year, month - 1, 1), days = new Date(year, month, 0).getDate();
+    const cells = Array.from({length: first.getDay()}, () => null);
+    for (let day = 1; day <= days; day++) {
+      const key = dayKey(new Date(year, month - 1, day));
+      cells.push({date: key, day, future: key > dayKey(now), ...rangeSummary(records, key, key, now)});
+    }
+    while (cells.length % 7) cells.push(null);
+    return cells;
+  }
   function filter(items, options = {}) {
     const query = (options.query || '').trim().toLocaleLowerCase();
     return items.filter(x => (!query || Object.values(x).some(v => String(v).toLocaleLowerCase().includes(query)))
@@ -62,7 +105,7 @@
       && (!options.to || (x.date || '').slice(0,10) <= options.to)
       && (!options.status || (x.done === 'yes' ? 'done' : 'pending') === options.status));
   }
-  const api = { localDateTime, summary, dailyFeeding, feedingVolume, hasFeedingUnit, recentFeedings, filter };
+  const api = { localDateTime, summary, dailyFeeding, feedingVolume, feedingMinutes, hasFeedingUnit, recentFeedings, rangeSummary, periodSummaries, monthGrid, weekStart, addDays, filter };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Somhouse = api;
 })(typeof window !== 'undefined' ? window : this);
