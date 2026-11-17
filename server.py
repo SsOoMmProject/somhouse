@@ -415,6 +415,8 @@ class Handler(BaseHTTPRequestHandler):
                     if self.server.google is not None:
                         result["sources"] = self.server.google.sources()
                         result["google_status"] = self.server.google.status(db)
+                        if self.server.google.calendar is not None:
+                            result["calendar_events"] = self.server.google.calendar.view_events(db)
                 elif path == "/api/merge" and self.command == "POST":
                     result = store.merge(db, self.body())
                     if self.server.google is not None:

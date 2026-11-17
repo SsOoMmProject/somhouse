@@ -528,6 +528,39 @@ class GoogleRegression(unittest.TestCase):
                 calendar.request_writeback(db, allday)
         self.assertFalse(calls)
 
+    def test_primary_calendar_events_are_mirrored_read_only_for_the_dashboard(self):
+        calendar = self.bridge.calendar
+        calendar.record({'id': 'feed', 'summary': '분유 120ml', 'start': {'dateTime': '2026-01-01T10:00:00+09:00'}})
+        pages = [{'items': [
+            {'id': 'feed', 'summary': '분유 120ml', 'start': {'dateTime': '2026-01-01T10:00:00+09:00'}},
+            {'id': 'dinner', 'summary': '아빠 회식', 'htmlLink': 'https://www.google.com/calendar/event?eid=a',
+             'start': {'dateTime': '2026-01-02T09:30:00Z'}, 'end': {'dateTime': '2026-01-02T11:00:00Z'}},
+            {'id': 'trip', 'summary': '가족 여행', 'htmlLink': 'javascript:alert(1)',
+             'start': {'date': '2026-01-03'}, 'end': {'date': '2026-01-05'}},
+            {'id': 'gone', 'status': 'cancelled', 'summary': '취소', 'start': {'date': '2026-01-03'}},
+            {'id': 'copy', 'summary': '수유 · 분유 120ml', 'start': {'dateTime': '2026-01-01T10:00:00+09:00'},
+             'extendedProperties': {'private': {'somhouseProjection': '1'}}},
+        ], 'nextPageToken': 'p2'}, {'items': [{'id': 'untitled', 'start': {'date': '2026-01-06'}, 'end': {'date': '2026-01-07'}}]}]
+        seen = []
+        def api(url, method='GET', body=None, service=None):
+            self.assertEqual(method, 'GET')
+            seen.append(url)
+            return pages[len(seen) - 1]
+        with patch.object(self.bridge.api, 'request', side_effect=api):
+            calendar.refresh_view()
+        self.assertIn('singleEvents=true', seen[0]); self.assertIn('pageToken=p2', seen[1])
+        with self.store.connect() as db:
+            events = calendar.view_events(db)
+        self.assertEqual([(e['id'], e['date'], e['end'], e['allDay'], e['title'], e['link']) for e in events], [
+            ('dinner', '2026-01-02T18:30', '2026-01-02T20:00', False, '아빠 회식', 'https://www.google.com/calendar/event?eid=a'),
+            ('trip', '2026-01-03', '2026-01-04', True, '가족 여행', ''),
+            ('untitled', '2026-01-06', '2026-01-06', True, '(제목 없음)', '')])
+        # A later refresh replaces the window, so a deleted event disappears.
+        with patch.object(self.bridge.api, 'request', return_value={'items': []}):
+            calendar.refresh_view()
+        with self.store.connect() as db:
+            self.assertEqual(calendar.view_events(db), [])
+
     def test_hand_typed_calendar_events_use_the_time_they_were_entered(self):
         from calendar_records import calendar_feeding
         def parse(start, created='2026-11-17T04:10:30.000Z', summary='수유 100ml'):

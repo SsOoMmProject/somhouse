@@ -13,7 +13,7 @@ function valid(d){
 // The old device key is read only, and is automatically merged after login.
 const shared=window.SomhouseShared?new window.SomhouseShared.Client():null;
 let mode=shared?.token?'shared':'login', sharedReady=false, busy=false, refreshing=false, refreshTask=null, migratedRaw, legacyWarning='', needsRender=false;
-let ai={config:null,checking:false,pending:false}, googleStatusHtml='';
+let ai={config:null,checking:false,pending:false}, googleStatusHtml='', dashboardHtml='';
 function message(text){$('#connection-status').textContent=text;}
 function accountMessage(text){
  const status=$('#account-status');
@@ -195,7 +195,7 @@ function homeView(){
   const now=Somhouse.localDateTime();
   const upcoming=[...data.schedule].filter(x=>x.date>=now).sort((a,b)=>a.date.localeCompare(b.date));
   return `<h1>우리 가족의 오늘</h1><p class="intro">${esc(now.slice(0,10))} · 작은 순간을 차곡차곡 남겨요.</p>${quickButtons()}${repeatButtons()}${voiceHelp()}${confirmBox()}
-    ${summaryCards()}${latestFeeding()}${calendarView()}
+    ${summaryCards()}${latestFeeding()}
     <div class="grid">${[['최근 육아 기록',sorted('records').slice(0,3),'records','첫 수유나 병원 방문을 기록해보세요.'],['다가오는 일정',upcoming.slice(0,3),'schedule','예정된 일정이 없어요.'],['구매 예정',data.shopping.filter(x=>x.done!=='yes').slice(0,3),'shopping','필요한 물품을 추가해보세요.']].map(([title,items,k,msg])=>`<section class="card"><h2>${title}</h2>${items.length?items.map(x=>item(x,k,true)).join(''):`<p class="empty">${msg}</p>`}<button class="plain" data-page="${k}">전체 보기 →</button></section>`).join('')}</div>`;
 }
 let statsDays=7,calendarMonth='',calendarDay='';
@@ -208,20 +208,22 @@ function totals(x){
 function summaryCards(){
  return `<div class="summary-cards">${Somhouse.periodSummaries(data.records).map(x=>`<div class="summary-card"><p>${x.label}<span class="caption"> ${esc(x.from.slice(5).replace('-','/'))}${x.from!==x.to?`~${esc(x.to.slice(5).replace('-','/'))}`:''}</span></p><strong>${x.count?esc(totals(x)):'기록 없음'}</strong></div>`).join('')}</div>`;
 }
+function googleEvents(){return Array.isArray(shared?.calendarEvents)?shared.calendarEvents:[];}
 function dayItems(day){
  const on=x=>(x.date||'').slice(0,10)===day,byTime=(a,b)=>(a.date||'').localeCompare(b.date||'');
  return {feeding:data.records.filter(x=>x.type==='feeding'&&on(x)).sort(byTime),hospital:data.records.filter(x=>x.type==='hospital'&&on(x)).sort(byTime),
-  schedule:data.schedule.filter(on).sort(byTime),shopping:data.shopping.filter(on)};
+  schedule:data.schedule.filter(on).sort(byTime),shopping:data.shopping.filter(on),
+  google:googleEvents().filter(x=>x.date.slice(0,10)<=day&&(x.end||x.date).slice(0,10)>=day)};
 }
 // The family dashboard calendar: feedings, schedules (with whose they are) and dated shopping on one month.
 function calendarView(){
  const today=Somhouse.localDateTime().slice(0,10),month=calendarMonth||today.slice(0,7);
  const [year,mon]=month.split('-').map(Number);
  const shift=n=>{const d=new Date(year,mon-1+n,1);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;};
- const cells=Somhouse.monthGrid(data.records,year,mon,new Date(),data.schedule,data.shopping).map(c=>{
+ const cells=Somhouse.monthGrid(data.records,year,mon,new Date(),data.schedule,data.shopping,googleEvents()).map(c=>{
   if(!c)return '<span class="cal-day empty"></span>';
-  const marks=[c.count?`<span class="mark feed">🍼${c.count}${c.measuredCount?` ${c.volume}`:''}</span>`:'',c.schedule?`<span class="mark plan">📅${c.schedule}</span>`:'',c.shopping?`<span class="mark shop">🛒${c.shopping}</span>`:''].join('');
-  const label=`${c.date} 수유 ${c.count}회 일정 ${c.schedule}건 구매 ${c.shopping}건`;
+  const marks=[c.count?`<span class="mark feed">🍼${c.count}${c.measuredCount?` ${c.volume}`:''}</span>`:'',c.schedule?`<span class="mark plan">📅${c.schedule}</span>`:'',c.shopping?`<span class="mark shop">🛒${c.shopping}</span>`:'',c.google?`<span class="mark gcal">📆${c.google}</span>`:''].join('');
+  const label=`${c.date} 수유 ${c.count}회 일정 ${c.schedule}건 구매 ${c.shopping}건 구글 ${c.google}건`;
   return `<button class="cal-day${c.date===today?' today':''}${c.date===calendarDay?' selected':''}${marks?' has':''}" data-cal-day="${c.date}" aria-label="${label}"><span class="num">${c.day}</span>${marks}</button>`;
  }).join('');
  const head=['일','월','화','수','목','금','토'].map(d=>`<span class="cal-head">${d}</span>`).join('');
@@ -232,10 +234,11 @@ function calendarView(){
   const body=group(`📅 일정 ${day.schedule.length}건`,day.schedule,'schedule',x=>`${esc(x.date.slice(11))} · ${desc(x,'schedule')}`)
    +group(`🍼 수유 ${sum.count?esc(totals(sum)):''}`,day.feeding,'records',x=>`${esc(x.date.slice(11))} · ${esc(x.category)} ${esc(x.amount)}`)
    +group(`🏥 병원 ${day.hospital.length}건`,day.hospital,'records',x=>`${esc(x.date.slice(11))} · ${esc(x.hospital)} · ${esc(x.reason)}`)
-   +group(`🛒 구매 예정 ${day.shopping.length}건`,day.shopping,'shopping',x=>`${desc(x,'shopping')}${x.done==='yes'?' (완료)':''}`);
+   +group(`🛒 구매 예정 ${day.shopping.length}건`,day.shopping,'shopping',x=>`${desc(x,'shopping')}${x.done==='yes'?' (완료)':''}`)
+   +(day.google.length?`<h4>📆 Google 캘린더 ${day.google.length}건</h4>${day.google.map(x=>`<p>${x.allDay?'종일':esc(x.date.slice(11))} · ${esc(x.title)}${x.link?` <a href="${esc(x.link)}" target="_blank" rel="noopener noreferrer">열기</a>`:''}</p>`).join('')}`:'');
   detail=`<div class="cal-detail"><h3>${esc(calendarDay)}</h3>${body||'<p class="empty">이 날의 기록이 없어요.</p>'}<div class="quick"><button class="secondary" data-add-on="schedule">이 날 일정 추가</button><button class="secondary" data-add-on="shopping">이 날 구매 추가</button></div></div>`;
  }
- return `<section class="card dashboard-calendar" aria-label="가족 달력"><div class="cal-nav"><button class="plain" data-cal-month="${shift(-1)}" aria-label="이전 달">‹</button><h2>${year}년 ${mon}월</h2><button class="plain" data-cal-month="${shift(1)}" aria-label="다음 달">›</button></div><p class="caption legend">🍼 수유 횟수·ml · 📅 일정 · 🛒 구매 예정 — 날짜를 누르면 자세히 보여요.</p><div class="cal-grid">${head}${cells}</div>${month!==today.slice(0,7)?`<button class="plain" data-cal-month="${today.slice(0,7)}">이번 달로</button>`:''}${detail}</section>`;
+ return `<section class="card dashboard-calendar" aria-label="가족 달력"><div class="cal-nav"><button class="plain" data-cal-month="${shift(-1)}" aria-label="이전 달">‹</button><h2>${year}년 ${mon}월</h2><button class="plain" data-cal-month="${shift(1)}" aria-label="다음 달">›</button></div><p class="caption legend">🍼 수유 횟수·ml · 📅 솜하우스 일정 · 📆 Google 캘린더 · 🛒 구매 예정 — 날짜를 누르면 자세히 보여요.</p><div class="cal-grid">${head}${cells}</div>${month!==today.slice(0,7)?`<button class="plain" data-cal-month="${today.slice(0,7)}">이번 달로</button>`:''}${detail}</section>`;
 }
 function statsView(){
  const rows=Somhouse.dailyFeeding(data.records,statsDays);
@@ -297,11 +300,13 @@ function render(){
  const connected=mode==='shared'&&sharedReady,showAI=connected&&page==='ai';
  const aiPanel=$('#ai-panel'),openingAI=aiPanel.hidden&&showAI;
  aiPanel.hidden=!showAI;
+ if(!connected){$('#dashboard').hidden=true;$('#dashboard').innerHTML='';dashboardHtml='';}
  if(!connected||showAI){
   $('#content').innerHTML='';connectionView();
   if(openingAI)checkAI();
   return;
  }
+ const dashboard=$('#dashboard'),board=calendarView();if(dashboardHtml!==board){dashboard.innerHTML=board;dashboardHtml=board;}dashboard.hidden=false;
  $('#content').innerHTML=page==='home'?homeView():page==='stats'?statsView():page==='review'?reviewView():listView(page);
  connectionView();
  const form=$('#filter-form');if(form)form.onsubmit=e=>{e.preventDefault();const next=Object.fromEntries(new FormData(form));if(next.from&&next.to&&next.from>next.to){alert('시작 날짜는 마지막 날짜보다 늦을 수 없어요.');return}filters[page]=next;render()};

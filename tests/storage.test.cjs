@@ -226,22 +226,27 @@ test('review cards explain why an input waits and name their buttons by situatio
  assert.match(b.get('#fields').innerHTML,/name="amount" type="text" value=""/);
 });
 
-test('home dashboard shows summaries and a family calendar with feedings, schedules and dated shopping',async()=>{
+test('the family calendar sits above the menu and shows feedings, schedules, dated shopping and Google events',async()=>{
  const server=family();const today=new Date();const pad=n=>String(n).padStart(2,'0');
  const key=`${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
  server.data.records.push({id:'a',type:'feeding',date:key+'T00:01',category:'분유',amount:'100ml',memo:'음성 원문: 뷰유'});
  server.data.schedule.push({id:'s1',date:key+'T19:00',title:'저녁 약속',who:'엄마',memo:''},{id:'s2',date:key+'T08:00',title:'소아과',memo:''});
  server.data.shopping.push({id:'p1',title:'기저귀',quantity:'1팩',date:key,done:'no'},{id:'p2',title:'물티슈',quantity:'2개',done:'no'});
+ server.calendarEvents=[{id:'g1',date:key+'T18:30',end:key+'T20:00',allDay:false,title:'아빠 회식',link:'https://www.google.com/calendar/event?eid=x'},{id:'g2',date:key,end:key,allDay:true,title:'<b>휴가</b>',link:''}];
  const b=browser({server});await b.login();b.eval("page='home';render()");
  let html=b.get('#content').innerHTML;
+ assert.doesNotMatch(html,/cal-grid/);
  for(const label of ['오늘','어제','이번 주','지난주'])assert.match(html,new RegExp(`<p>${label}<span`));
  assert.match(html,/<strong>1회 · 100ml<\/strong>/);
- assert.match(html,new RegExp(`data-cal-day="${key}" aria-label="${key} 수유 1회 일정 2건 구매 1건"`));
- assert.match(html,/🍼1 100<\/span><span class="mark plan">📅2<\/span><span class="mark shop">🛒1/);
+ html=b.get('#dashboard').innerHTML;assert.equal(b.get('#dashboard').hidden,false);
+ assert.match(html,new RegExp(`data-cal-day="${key}" aria-label="${key} 수유 1회 일정 2건 구매 1건 구글 2건"`));
+ assert.match(html,/🍼1 100<\/span><span class="mark plan">📅2<\/span><span class="mark shop">🛒1<\/span><span class="mark gcal">📆2/);
  assert.doesNotMatch(html,/오늘의 수유<\/h2>/);
  const click=dataset=>b.events.get('click')({target:{closest:()=>({dataset})}});
  await click({calDay:key});
- html=b.get('#content').innerHTML;
+ html=b.get('#dashboard').innerHTML;
+ assert.match(html,/📆 Google 캘린더 2건<\/h4><p>18:30 · 아빠 회식 <a href="https:\/\/www.google.com\/calendar\/event\?eid=x"/);
+ assert.match(html,/종일 · &lt;b&gt;휴가&lt;\/b&gt;<\/p>/);
  assert.match(html,/📅 일정 2건<\/h4><p>08:00 · 소아과/);
  assert.match(html,/19:00 · <span class="who who-엄마">엄마<\/span> 저녁 약속/);
  assert.match(html,/🍼 수유 1회 · 100ml<\/h4>/);assert.match(html,/🛒 구매 예정 1건<\/h4><p>기저귀 · 1팩/);
@@ -255,14 +260,18 @@ test('home dashboard shows summaries and a family calendar with feedings, schedu
  b.get('#dialog').open=false;
  const next=new Date(today.getFullYear(),today.getMonth()+1,1),nextKey=`${next.getFullYear()}-${pad(next.getMonth()+1)}`;
  await click({calMonth:nextKey});
- html=b.get('#content').innerHTML;
+ html=b.get('#dashboard').innerHTML;
  assert.match(html,new RegExp(`${next.getFullYear()}년 ${next.getMonth()+1}월`));assert.match(html,/이번 달로/);assert.doesNotMatch(html,/cal-detail/);
  // The stats page keeps the summary cards and tables, without the calendar.
  b.eval("page='stats';render()");
- assert.match(b.get('#content').innerHTML,/summary-cards/);assert.doesNotMatch(b.get('#content').innerHTML,/cal-grid/);
+ assert.match(b.get('#content').innerHTML,/summary-cards/);assert.match(b.get('#dashboard').innerHTML,/cal-grid/);
  // A new shopping item starts without a date; schedule items keep their who.
  b.eval("openForm('shopping')");
  assert.match(b.get('#fields').innerHTML,/name="date" type="date" value=""/);
+ b.get('#dialog').open=false;
+ b.eval("showLogin('로그아웃')");
+ assert.equal(b.get('#dashboard').hidden,true);assert.equal(b.get('#dashboard').innerHTML,'');
+ assert.deepEqual(JSON.parse(b.eval('JSON.stringify([shared.calendarEvents,shared.aliases])')),[[],{}]);
 });
 
 test('calendar writeback button appears only with write permission and asks before sending',async()=>{
