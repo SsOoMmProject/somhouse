@@ -511,6 +511,20 @@ class FamilyAPI(unittest.TestCase):
             self.assertEqual(code, 200)
             self.assertEqual(self.request("/api/data", token=token)[1]["aliases"], {"머유": "모유"})
 
+    def test_family_data_includes_mirrored_google_events_only_with_calendar(self):
+        config = {"binding": "view-demo", "inbox": "@default", "task_list": "archive", "spreadsheet": "test-sheet"}
+        plain, linked = GoogleRecords(self.store, config), GoogleRecords(self.store, dict(config, calendar_inbox="primary", calendar_outbox="app-cal"))
+        with self.store.connect() as db:
+            db.execute("INSERT INTO google_calendar_view VALUES ('view-demo','e1','2026-11-20T19:00','2026-11-20T21:00',0,'엄마 약속','')")
+        token = self.login()
+        with patch.object(self.server, "google", linked):
+            events = self.request("/api/data", token=token)[1]["calendar_events"]
+            self.assertEqual(events, [{"id": "e1", "date": "2026-11-20T19:00", "end": "2026-11-20T21:00",
+                                       "allDay": False, "title": "엄마 약속", "link": ""}])
+        with patch.object(self.server, "google", plain):
+            self.assertNotIn("calendar_events", self.request("/api/data", token=token)[1])
+        self.assertNotIn("calendar_events", self.request("/api/data", token=token)[1])
+
     def test_purchase_task_notes_keep_user_text_and_compare_only_matching_current_prices(self):
         bridge = GoogleRecords(self.store, {"binding": "shopping-demo", "inbox": "@default", "task_list": "archive",
                                            "spreadsheet": "test-sheet"})

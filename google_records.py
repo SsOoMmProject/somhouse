@@ -740,7 +740,7 @@ class GoogleRecords:
             db.execute("INSERT OR REPLACE INTO google_sheet_state VALUES (?,?)", (self.binding, self.api.sheet_id))
 
     def loop(self):
-        next_poll = 0
+        next_poll = next_view = 0
         protected = False
         while not self.stop.is_set():
             self.wake.clear()
@@ -751,6 +751,9 @@ class GoogleRecords:
                 self.attempt("Tasks 음성 가져오기", self.pull)
                 if self.calendar:
                     self.attempt("Calendar 음성 가져오기", self.calendar.pull)
+            if self.calendar and time.monotonic() >= next_view:
+                next_view = time.monotonic() + 300
+                self.attempt("Calendar 일정 보기", self.calendar.refresh_view)
             self.attempt("Sheets", self.deliver, "sheets")
             self.attempt("Tasks", self.deliver, "tasks")
             if self.calendar:

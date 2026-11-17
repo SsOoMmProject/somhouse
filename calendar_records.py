@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS google_calendar_links (
     binding TEXT NOT NULL, item_id TEXT NOT NULL, event_id TEXT NOT NULL, PRIMARY KEY (binding,item_id)
 );
 CREATE TABLE IF NOT EXISTS feeding_aliases (word TEXT PRIMARY KEY, category TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS google_calendar_view (
+    binding TEXT NOT NULL, event_id TEXT NOT NULL, start TEXT NOT NULL, end TEXT NOT NULL,
+    all_day INTEGER NOT NULL, title TEXT NOT NULL, link TEXT NOT NULL, PRIMARY KEY (binding,event_id)
+);
 """
 
 
@@ -385,6 +389,61 @@ class CalendarRecords:
         with self.store.lock, self.store.connect() as db:
             db.execute("INSERT OR REPLACE INTO google_calendar_checkpoint VALUES (?,?,?)",
                        (self.binding, self.inbox, (now - timedelta(minutes=2)).isoformat(timespec="seconds")))
+
+    VIEW_BEFORE, VIEW_AFTER, VIEW_LIMIT = timedelta(days=40), timedelta(days=120), 1000
+
+    def refresh_view(self):
+        """Read-only copy of the family's primary-calendar events for the web dashboard.
+
+        Feedings imported from Calendar are already records and are not shown twice. Nothing is
+        written back to Google. The window is replaced as a whole so deleted events disappear.
+        """
+        now = datetime.now(timezone.utc)
+        params = {"singleEvents": "true", "orderBy": "startTime", "maxResults": 250,
+                  "timeMin": (now - self.VIEW_BEFORE).isoformat(timespec="seconds"),
+                  "timeMax": (now + self.VIEW_AFTER).isoformat(timespec="seconds")}
+        with self.store.connect() as db:
+            imported = {row[0] for row in db.execute(
+                "SELECT event_id FROM google_calendar_inputs WHERE binding=? AND inbox=?", (self.binding, self.inbox))}
+        rows = []
+        for event in event_pages(self.api, self.inbox, **params):
+            if self.records.stop.is_set():
+                return
+            if (not isinstance(event, dict) or event.get("status") == "cancelled" or event.get("id") in imported
+                    or event.get("recurringEventId") in imported
+                    or ((event.get("extendedProperties") or {}).get("private") or {}).get("somhouseProjection") == "1"):
+                continue
+            start, end = event.get("start") or {}, event.get("end") or {}
+            if start.get("dateTime"):
+                begin, finish, all_day = parse_time(start["dateTime"]), parse_time(end.get("dateTime")), 0
+                if not begin or begin.tzinfo is None:
+                    continue
+                begin = begin.astimezone(SEOUL).replace(tzinfo=None).isoformat(timespec="minutes")
+                finish = (finish.astimezone(SEOUL).replace(tzinfo=None).isoformat(timespec="minutes")
+                          if finish and finish.tzinfo else begin)
+            elif isinstance(start.get("date"), str):
+                # Google's all-day end date is exclusive; keep the last day the event covers.
+                begin, all_day = start["date"], 1
+                try:
+                    finish = (datetime.fromisoformat(end.get("date", begin)) - timedelta(days=1)).date().isoformat()
+                except ValueError:
+                    finish = begin
+                finish = max(finish, begin)
+            else:
+                continue
+            link = event.get("htmlLink") if str(event.get("htmlLink", "")).startswith("https://www.google.com/calendar/") else ""
+            rows.append((self.binding, event["id"], begin, finish, all_day, (event.get("summary") or "(제목 없음)")[:200], link))
+            if len(rows) >= self.VIEW_LIMIT:
+                break
+        with self.store.lock, self.store.connect() as db:
+            db.execute("DELETE FROM google_calendar_view WHERE binding=?", (self.binding,))
+            db.executemany("INSERT OR REPLACE INTO google_calendar_view VALUES (?,?,?,?,?,?,?)", rows)
+
+    def view_events(self, db):
+        return [{"id": event_id, "date": start, "end": end, "allDay": bool(all_day), "title": title, "link": link}
+                for event_id, start, end, all_day, title, link in db.execute(
+                    """SELECT event_id,start,end,all_day,title,link FROM google_calendar_view WHERE binding=?
+                       ORDER BY start LIMIT ?""", (self.binding, self.VIEW_LIMIT))]
 
     def flush(self):
         with self.store.connect() as db:
