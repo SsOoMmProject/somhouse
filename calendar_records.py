@@ -98,15 +98,47 @@ def natural_feeding(text, when, item_id, title):
                   "category": categories[0] if categories else "기타", "amount": amount, "memo": memo}
 
 
+QUICK_ENTRY = timedelta(hours=2)
+
+
+def entry_time(event):
+    """Return (when, note) for a feeding event typed or spoken on any device.
+
+    Nest sets the start to the moment of speaking. A hand-typed event usually keeps the app's default
+    start (the next slot, shortly after it was created) or is all-day; both mean "just now", so the
+    creation time is used. This depends only on the event, never on the clock, so re-reading the same
+    event always gives the same record time. A start further ahead stays a future plan for review.
+    """
+    start = event.get("start")
+    start = start if isinstance(start, dict) else {}
+    when, created = parse_time(start.get("dateTime")), parse_time(event.get("created"))
+    if when and when.tzinfo is None:
+        when = None
+    if created and created.tzinfo is None:
+        created = None
+    if when is None:
+        if created and start.get("date") == created.astimezone(SEOUL).date().isoformat():
+            return created, "종일 일정이라 입력한 시각으로 저장"
+        return None, ""
+    if created and timedelta(0) < when - created <= QUICK_ENTRY:
+        planned = when.astimezone(SEOUL).strftime("%H:%M")
+        return created, f"일정 시각 {planned} 대신 입력한 시각으로 저장"
+    return when, ""
+
+
 def calendar_feeding(event, item_id):
+    when, note = entry_time(event) if isinstance(event.get("summary", ""), str) else (None, "")
+    tagged, item = parse_feeding(event, item_id, when)
+    if item and note:
+        item["memo"] = " · ".join(part for part in (item.get("memo", ""), note) if part)
+    return tagged, item
+
+
+def parse_feeding(event, item_id, when):
     title = event.get("summary", "")
     if not isinstance(title, str):
         return False, None
     text = " ".join(unicodedata.normalize("NFKC", title).split())
-    start = event.get("start")
-    when = parse_time(start.get("dateTime")) if isinstance(start, dict) else None
-    if when and when.tzinfo is None:
-        when = None
     prefix = PREFIX.match(text)
     if not prefix:
         return natural_feeding(text, when, item_id, title)

@@ -305,6 +305,41 @@ class GoogleRegression(unittest.TestCase):
         self.assertEqual(calendar_feeding({'summary': '100미리 수유', 'start': {'date': '2026-11-17'}}, 'x'),
                          (True, None))
 
+    def test_hand_typed_calendar_events_use_the_time_they_were_entered(self):
+        from calendar_records import calendar_feeding
+        def parse(start, created='2026-11-17T04:10:30.000Z', summary='수유 100ml'):
+            return calendar_feeding({'summary': summary, 'start': start, 'created': created}, 'cal-x')[1]
+        # The Calendar app defaults a new event to the next slot: record it at the time it was typed (13:10 KST).
+        item = parse({'dateTime': '2026-11-17T14:00:00+09:00'})
+        self.assertEqual((item['date'], item['memo']), ('2026-11-17T13:10', '일정 시각 14:00 대신 입력한 시각으로 저장'))
+        # An all-day event created on that day is also "just now".
+        item = parse({'date': '2026-11-17'})
+        self.assertEqual((item['date'], item['memo']), ('2026-11-17T13:10', '종일 일정이라 입력한 시각으로 저장'))
+        # A start in the past (a feeding logged afterwards, or Nest's spoken time) is kept as entered.
+        item = parse({'dateTime': '2026-11-17T11:30:00+09:00'})
+        self.assertEqual((item['date'], item['memo']), ('2026-11-17T11:30', ''))
+        # Corrections keep both notes.
+        item = parse({'dateTime': '2026-11-17T14:00:00+09:00'}, summary='수육 100mm')
+        self.assertEqual(item['memo'], '음성 원문: 수육 100mm · 일정 시각 14:00 대신 입력한 시각으로 저장')
+        item = parse({'dateTime': '2026-11-17T14:00:00+09:00'}, summary='솜하우스 수유 분유 120ml')
+        self.assertEqual((item['date'], item['category']), ('2026-11-17T13:10', '분유'))
+        # More than two hours ahead is a plan, and an all-day event for another day has no usable time.
+        self.assertEqual(parse({'dateTime': '2026-11-17T15:10:31+09:00'})['date'], '2026-11-17T15:10')
+        self.assertIsNone(parse({'date': '2026-11-18'}))
+        self.assertIsNone(parse({'date': '2026-11-17'}, created=None))
+
+    def test_planned_feeding_far_ahead_stays_in_review_and_quick_entry_is_saved(self):
+        now = datetime.now(SEOUL)
+        created = (now - timedelta(minutes=1)).isoformat()
+        self.bridge.calendar.record({'id': 'soon', 'summary': '분유 120미리 수유', 'created': created,
+                                     'start': {'dateTime': (now + timedelta(minutes=40)).isoformat()}})
+        self.bridge.calendar.record({'id': 'plan', 'summary': '분유 120미리 수유', 'created': created,
+                                     'start': {'dateTime': (now + timedelta(hours=5)).isoformat()}})
+        items = [json.loads(body) for (body,) in self.rows("SELECT body FROM items WHERE kind='records'")]
+        self.assertEqual([x['date'] for x in items], [(now - timedelta(minutes=1)).replace(tzinfo=None).isoformat(timespec='minutes')])
+        with self.store.connect() as db:
+            self.assertEqual(self.bridge.status(db)['review'], 1)
+
     def test_natural_calendar_feeding_is_imported_once_and_unclear_one_is_counted_for_review(self):
         start = {'dateTime': '2026-01-01T07:12:00+09:00'}
         self.bridge.calendar.record({'id': 'n1', 'summary': '100미리 수유 캘린더에 업데이트', 'start': start})
