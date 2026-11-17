@@ -138,9 +138,10 @@ async function sharedChange(operation){
  }finally{busy=false;connectionView();}
 }
 async function changeItem(k,x,remove=false){return sharedChange(()=>remove?shared.remove(k,x.id):shared.put(k,x));}
-const schemas={feeding:[['date','날짜와 시간','datetime-local',1],['category','수유 종류','select',1],['amount','양 또는 시간','text',1],['memo','메모','textarea',0]],hospital:[['date','날짜와 시간','datetime-local',1],['hospital','병원','text',1],['reason','방문 이유','text',1],['memo','메모','textarea',0]],schedule:[['date','날짜와 시간','datetime-local',1],['title','일정 이름','text',1],['memo','메모','textarea',0]],shopping:[['title','품목','text',1],['quantity','수량','text',1],['memo','메모','textarea',0],['url','상품 링크 (선택)','url',0]]};
+const schemas={feeding:[['date','날짜와 시간','datetime-local',1],['category','수유 종류','select',1],['amount','양 또는 시간','text',1],['memo','메모','textarea',0]],hospital:[['date','날짜와 시간','datetime-local',1],['hospital','병원','text',1],['reason','방문 이유','text',1],['memo','메모','textarea',0]],schedule:[['date','날짜와 시간','datetime-local',1],['who','누구 일정','select',0],['title','일정 이름','text',1],['memo','메모','textarea',0]],shopping:[['title','품목','text',1],['quantity','수량','text',1],['date','구매 예정일 (선택)','date',0],['memo','메모','textarea',0],['url','상품 링크 (선택)','url',0]]};
+const choices={category:['모유','분유','혼합','기타'],who:['가족','엄마','아빠','아기']};
 function link(url){try{let u=new URL(url);return ['http:','https:'].includes(u.protocol)?`<a href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">상품 링크 ↗</a>`:''}catch{return ''}}
-function desc(x,k){if(k==='records')return x.type==='feeding'?`수유 · ${esc(x.category)} · ${esc(x.amount)}`:`병원 · ${esc(x.hospital)} · ${esc(x.reason)}`;return esc(x.title)+(k==='shopping'?` · ${esc(x.quantity)}`:'')}
+function desc(x,k){if(k==='records')return x.type==='feeding'?`수유 · ${esc(x.category)} · ${esc(x.amount)}`:`병원 · ${esc(x.hospital)} · ${esc(x.reason)}`;return (k==='schedule'&&x.who?`<span class="who who-${esc(x.who)}">${esc(x.who)}</span> `:'')+esc(x.title)+(k==='shopping'?` · ${esc(x.quantity)}`:'')}
 function item(x,k,compact=false){return `<div class="item"><strong>${desc(x,k)}</strong> ${k==='shopping'?`<span class="badge">${x.done==='yes'?'구매 완료':'구매 예정'}</span>`:''}${x.confirm==='category'?'<span class="badge warn">종류 확인 필요</span>':''}<p>${esc((x.date||'').replace('T',' '))}${x.memo?'<br>'+esc(x.memo):''}</p>${x.url?link(x.url):''}${compact?'':`<div class="actions">${k==='shopping'?`<button class="secondary" data-action="toggle" data-key="${k}" data-id="${esc(x.id)}">${x.done==='yes'?'다시 예정으로':'완료로 변경'}</button>`:''}<button class="secondary" data-action="edit" data-key="${k}" data-id="${esc(x.id)}">수정</button>${k==='records'&&x.type==='feeding'&&String(x.id).startsWith('cal-')&&shared?.googleStatus?.calendar_write?`<button class="secondary" data-writeback="${esc(x.id)}">캘린더에도 반영</button>`:''}<button class="secondary" data-action="delete" data-key="${k}" data-id="${esc(x.id)}">삭제</button></div>`}</div>`}
 function sorted(k){return [...data[k]].sort((a,b)=>(b.date||b.id).localeCompare(a.date||a.id))}
 const pageTitles={home:'홈',records:'육아 기록',stats:'수유 통계',schedule:'일정',shopping:'구매 목록',ai:'AI 대화',review:'확인 필요'};
@@ -186,11 +187,15 @@ function repeatButtons(){
  if(!recent.length)return '';
  return `<div class="quick repeat" aria-label="최근 수유 다시 기록"><span class="caption">최근 수유 다시 기록</span>${recent.map(x=>`<button class="secondary" data-repeat-category="${esc(x.category)}" data-repeat-amount="${esc(x.amount)}">${esc(x.category)} ${esc(x.amount)}</button>`).join('')}</div>`;
 }
+function latestFeeding(){
+ const latest=Somhouse.summary(data.records).latest;
+ return `<p class="caption latest">가장 최근 수유: ${latest?esc(latest.replace('T',' ')):'아직 없어요'} · 용량은 ‘80ml’처럼 단위가 있는 기록만, 직수는 ‘15분’처럼 분으로 적은 기록만 합산해요.</p>`;
+}
 function homeView(){
-  const now=Somhouse.localDateTime();const stats=Somhouse.summary(data.records);
+  const now=Somhouse.localDateTime();
   const upcoming=[...data.schedule].filter(x=>x.date>=now).sort((a,b)=>a.date.localeCompare(b.date));
   return `<h1>우리 가족의 오늘</h1><p class="intro">${esc(now.slice(0,10))} · 작은 순간을 차곡차곡 남겨요.</p>${quickButtons()}${repeatButtons()}${voiceHelp()}${confirmBox()}
-    <section class="card daily" aria-label="오늘의 수유 요약"><h2>오늘의 수유</h2><div class="summary-grid"><div><strong>${stats.count}회</strong><p>오늘 기록한 수유</p></div><div><strong>${stats.volume}ml</strong><p>용량이 명시된 기록 합계</p></div><div><strong>${stats.latest?esc(stats.latest.replace('T',' ')):'아직 없어요'}</strong><p>가장 최근 수유</p></div></div><p class="caption">용량 합계는 오늘 기록 중 ‘80ml’처럼 단위를 명시한 ${stats.measuredCount}건만 계산합니다. 직수 시간과 단위 없는 값은 합산하지 않습니다.</p></section>
+    ${summaryCards()}${latestFeeding()}${calendarView()}
     <div class="grid">${[['최근 육아 기록',sorted('records').slice(0,3),'records','첫 수유나 병원 방문을 기록해보세요.'],['다가오는 일정',upcoming.slice(0,3),'schedule','예정된 일정이 없어요.'],['구매 예정',data.shopping.filter(x=>x.done!=='yes').slice(0,3),'shopping','필요한 물품을 추가해보세요.']].map(([title,items,k,msg])=>`<section class="card"><h2>${title}</h2>${items.length?items.map(x=>item(x,k,true)).join(''):`<p class="empty">${msg}</p>`}<button class="plain" data-page="${k}">전체 보기 →</button></section>`).join('')}</div>`;
 }
 let statsDays=7,calendarMonth='',calendarDay='';
@@ -203,19 +208,34 @@ function totals(x){
 function summaryCards(){
  return `<div class="summary-cards">${Somhouse.periodSummaries(data.records).map(x=>`<div class="summary-card"><p>${x.label}<span class="caption"> ${esc(x.from.slice(5).replace('-','/'))}${x.from!==x.to?`~${esc(x.to.slice(5).replace('-','/'))}`:''}</span></p><strong>${x.count?esc(totals(x)):'기록 없음'}</strong></div>`).join('')}</div>`;
 }
+function dayItems(day){
+ const on=x=>(x.date||'').slice(0,10)===day,byTime=(a,b)=>(a.date||'').localeCompare(b.date||'');
+ return {feeding:data.records.filter(x=>x.type==='feeding'&&on(x)).sort(byTime),hospital:data.records.filter(x=>x.type==='hospital'&&on(x)).sort(byTime),
+  schedule:data.schedule.filter(on).sort(byTime),shopping:data.shopping.filter(on)};
+}
+// The family dashboard calendar: feedings, schedules (with whose they are) and dated shopping on one month.
 function calendarView(){
  const today=Somhouse.localDateTime().slice(0,10),month=calendarMonth||today.slice(0,7);
  const [year,mon]=month.split('-').map(Number);
  const shift=n=>{const d=new Date(year,mon-1+n,1);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;};
- const cells=Somhouse.monthGrid(data.records,year,mon).map(c=>c?`<button class="cal-day${c.date===today?' today':''}${c.date===calendarDay?' selected':''}${c.count?' has':''}" data-cal-day="${c.date}" aria-label="${c.date} ${c.count}회"><span class="num">${c.day}</span>${c.count?`<span>${c.count}회</span>${c.measuredCount?`<span>${c.volume}ml</span>`:''}`:''}</button>`:'<span class="cal-day empty"></span>').join('');
+ const cells=Somhouse.monthGrid(data.records,year,mon,new Date(),data.schedule,data.shopping).map(c=>{
+  if(!c)return '<span class="cal-day empty"></span>';
+  const marks=[c.count?`<span class="mark feed">🍼${c.count}${c.measuredCount?` ${c.volume}`:''}</span>`:'',c.schedule?`<span class="mark plan">📅${c.schedule}</span>`:'',c.shopping?`<span class="mark shop">🛒${c.shopping}</span>`:''].join('');
+  const label=`${c.date} 수유 ${c.count}회 일정 ${c.schedule}건 구매 ${c.shopping}건`;
+  return `<button class="cal-day${c.date===today?' today':''}${c.date===calendarDay?' selected':''}${marks?' has':''}" data-cal-day="${c.date}" aria-label="${label}"><span class="num">${c.day}</span>${marks}</button>`;
+ }).join('');
  const head=['일','월','화','수','목','금','토'].map(d=>`<span class="cal-head">${d}</span>`).join('');
  let detail='';
  if(calendarDay){
-  const list=data.records.filter(x=>x.type==='feeding'&&x.date.slice(0,10)===calendarDay).sort((a,b)=>a.date.localeCompare(b.date));
-  const sum=Somhouse.rangeSummary(data.records,calendarDay,calendarDay);
-  detail=`<div class="cal-detail"><h3>${esc(calendarDay)} · ${list.length?esc(totals(sum)):'기록 없음'}</h3>${list.map(x=>`<p>${esc(x.date.slice(11))} · ${esc(x.category)} ${esc(x.amount)}${x.memo?` <span class="caption">${esc(x.memo)}</span>`:''}</p>`).join('')}</div>`;
+  const day=dayItems(calendarDay),sum=Somhouse.rangeSummary(data.records,calendarDay,calendarDay);
+  const group=(title,items,k,line)=>items.length?`<h4>${title}</h4>${items.map(x=>`<p>${line(x)}${x.memo?` <span class="caption">${esc(x.memo)}</span>`:''} <button class="plain small" data-action="edit" data-key="${k}" data-id="${esc(x.id)}">수정</button></p>`).join('')}`:'';
+  const body=group(`📅 일정 ${day.schedule.length}건`,day.schedule,'schedule',x=>`${esc(x.date.slice(11))} · ${desc(x,'schedule')}`)
+   +group(`🍼 수유 ${sum.count?esc(totals(sum)):''}`,day.feeding,'records',x=>`${esc(x.date.slice(11))} · ${esc(x.category)} ${esc(x.amount)}`)
+   +group(`🏥 병원 ${day.hospital.length}건`,day.hospital,'records',x=>`${esc(x.date.slice(11))} · ${esc(x.hospital)} · ${esc(x.reason)}`)
+   +group(`🛒 구매 예정 ${day.shopping.length}건`,day.shopping,'shopping',x=>`${desc(x,'shopping')}${x.done==='yes'?' (완료)':''}`);
+  detail=`<div class="cal-detail"><h3>${esc(calendarDay)}</h3>${body||'<p class="empty">이 날의 기록이 없어요.</p>'}<div class="quick"><button class="secondary" data-add-on="schedule">이 날 일정 추가</button><button class="secondary" data-add-on="shopping">이 날 구매 추가</button></div></div>`;
  }
- return `<section class="card"><div class="cal-nav"><button class="plain" data-cal-month="${shift(-1)}" aria-label="이전 달">‹</button><h2>${year}년 ${mon}월</h2><button class="plain" data-cal-month="${shift(1)}" aria-label="다음 달">›</button></div><div class="cal-grid">${head}${cells}</div>${month!==today.slice(0,7)?`<button class="plain" data-cal-month="${today.slice(0,7)}">이번 달로</button>`:''}${detail}</section>`;
+ return `<section class="card dashboard-calendar" aria-label="가족 달력"><div class="cal-nav"><button class="plain" data-cal-month="${shift(-1)}" aria-label="이전 달">‹</button><h2>${year}년 ${mon}월</h2><button class="plain" data-cal-month="${shift(1)}" aria-label="다음 달">›</button></div><p class="caption legend">🍼 수유 횟수·ml · 📅 일정 · 🛒 구매 예정 — 날짜를 누르면 자세히 보여요.</p><div class="cal-grid">${head}${cells}</div>${month!==today.slice(0,7)?`<button class="plain" data-cal-month="${today.slice(0,7)}">이번 달로</button>`:''}${detail}</section>`;
 }
 function statsView(){
  const rows=Somhouse.dailyFeeding(data.records,statsDays);
@@ -225,7 +245,7 @@ function statsView(){
   const recorded=measuredCount>0&&Number.isFinite(volume), percent=recorded?Math.min(100,volume/max*100):0;
   return `<tr><th scope="row"><time datetime="${date}">${date.slice(5)}</time></th><td>${count}회</td><td>${recorded?`${volume.toLocaleString('ko-KR')} ml`:'—'}</td><td aria-hidden="true"><div class="stats-bar"><span style="width:${percent}%"></span></div></td></tr>`;
  }).join('');
- return `<h1>수유 통계</h1>${summaryCards()}${calendarView()}<div class="quick stats-period" aria-label="조회 기간">${periods}</div><section class="card"><h2>최근 ${statsDays}일</h2><p class="caption">횟수에는 모든 수유를, 용량에는 ml·cc·밀리리터·미리·씨씨 단위가 있는 기록만 집계해요. 직수 시간과 단위 없는 값은 용량에 합산하지 않아요.</p><table class="stats-table"><thead><tr><th scope="col">날짜</th><th scope="col">수유 횟수</th><th scope="col">합계 용량</th><th scope="col">용량 비교</th></tr></thead><tbody>${table}</tbody></table></section>`;
+ return `<h1>수유 통계</h1>${summaryCards()}<div class="quick stats-period" aria-label="조회 기간">${periods}</div><section class="card"><h2>최근 ${statsDays}일</h2><p class="caption">횟수에는 모든 수유를, 용량에는 ml·cc·밀리리터·미리·씨씨 단위가 있는 기록만 집계해요. 직수 시간과 단위 없는 값은 용량에 합산하지 않아요.</p><table class="stats-table"><thead><tr><th scope="col">날짜</th><th scope="col">수유 횟수</th><th scope="col">합계 용량</th><th scope="col">용량 비교</th></tr></thead><tbody>${table}</tbody></table></section>`;
 }
 function filterView(k){const f=filters[k];return `<form id="filter-form" class="filters" aria-label="목록 검색"><label>검색<input name="query" type="search" placeholder="메모, 병원, 품목 검색" value="${esc(f.query||'')}"></label>${k==='records'?`<label>기록 종류<select name="type"><option value="">전체</option><option value="feeding" ${f.type==='feeding'?'selected':''}>수유</option><option value="hospital" ${f.type==='hospital'?'selected':''}>병원</option></select></label>`:''}${k==='shopping'?`<label>구매 상태<select name="status"><option value="">전체</option><option value="pending" ${f.status==='pending'?'selected':''}>구매 예정</option><option value="done" ${f.status==='done'?'selected':''}>구매 완료</option></select></label>`:`<label>시작 날짜<input name="from" type="date" value="${esc(f.from||'')}"></label><label>마지막 날짜<input name="to" type="date" value="${esc(f.to||'')}"></label>`}<button type="submit" class="secondary">검색</button><button type="button" class="plain" data-reset="${k}">초기화</button></form>`}
 function listView(k){const names={records:'소중한 하루를 간단히 남겨보세요.',schedule:'병원 예약과 가족 일정을 관리해요.',shopping:'필요한 물품을 정리해요. Google 음성 장보기는 관리자가 상품 규격과 가격 검색을 설정한 경우에만 가격 비교 링크를 남겨요. 구매는 링크에서 직접 진행해 주세요.'};const items=Somhouse.filter(sorted(k),filters[k]);return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p><div class="heading"><h2>기록 ${items.length}개</h2><div class="quick">${k==='records'?'<button data-add="feeding">수유 추가</button><button class="secondary" data-add="hospital">병원 추가</button>':`<button data-add="${k}">추가하기</button>`}</div></div>${filterView(k)}${items.map(x=>item(x,k)).join('')||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}`}
@@ -286,13 +306,14 @@ function render(){
  connectionView();
  const form=$('#filter-form');if(form)form.onsubmit=e=>{e.preventDefault();const next=Object.fromEntries(new FormData(form));if(next.from&&next.to&&next.from>next.to){alert('시작 날짜는 마지막 날짜보다 늦을 수 없어요.');return}filters[page]=next;render()};
 }
-function openForm(type,x,preset={},review=''){reviewKey=review;kind=type;editing=x||null;draftId=x?.id||(typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():Date.now().toString()+'-'+Math.random().toString(36).slice(2));const values=x||{...preset,date:preset.date||Somhouse.localDateTime()};$('#formtitle').textContent=(review?'확인 필요 정정 · ':x?'수정 · ':'추가 · ')+({feeding:'수유 기록',hospital:'병원 방문',schedule:'일정',shopping:'구매 목록'}[type]);$('#fields').innerHTML=schemas[type].map(([name,label,t,required])=>`<label class="field">${label}${required?' *':''}${t==='select'?`<select name="${name}" required>${['모유','분유','혼합','기타'].map(v=>`<option ${values[name]===v?'selected':''}>${v}</option>`).join('')}</select>`:t==='textarea'?`<textarea name="${name}">${esc(values[name]||'')}</textarea>`:`<input name="${name}" type="${t}" value="${esc(values[name]||'')}" ${required?'required':''}${name==='amount'?' placeholder="예: 120ml 또는 15분"':''}>`}</label>`).join('');$('#dialog').showModal()}
+function openForm(type,x,preset={},review=''){reviewKey=review;kind=type;editing=x||null;draftId=x?.id||(typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():Date.now().toString()+'-'+Math.random().toString(36).slice(2));const values=x||{...preset,date:preset.date||(type==='shopping'?'':Somhouse.localDateTime())};$('#formtitle').textContent=(review?'확인 필요 정정 · ':x?'수정 · ':'추가 · ')+({feeding:'수유 기록',hospital:'병원 방문',schedule:'일정',shopping:'구매 목록'}[type]);$('#fields').innerHTML=schemas[type].map(([name,label,t,required])=>`<label class="field">${label}${required?' *':''}${t==='select'?`<select name="${name}" required>${choices[name].map(v=>`<option ${values[name]===v?'selected':''}>${v}</option>`).join('')}</select>`:t==='textarea'?`<textarea name="${name}">${esc(values[name]||'')}</textarea>`:`<input name="${name}" type="${t}" value="${esc(values[name]||'')}" ${required?'required':''}${name==='amount'?' placeholder="예: 120ml 또는 15분"':''}>`}</label>`).join('');$('#dialog').showModal()}
 document.addEventListener('click',async e=>{
  const b=e.target.closest('button');if(!b)return;
  if(b.dataset.page){location.hash=b.dataset.page;if(page===b.dataset.page)render();}
  if(b.dataset.reset){filters[b.dataset.reset]={};render();}
  if(busy||mode!=='shared'||!sharedReady)return;
  if(['7','30'].includes(b.dataset.statsDays)){statsDays=Number(b.dataset.statsDays);render();return;}
+ if(['schedule','shopping'].includes(b.dataset.addOn)&&calendarDay){openForm(b.dataset.addOn,null,{date:b.dataset.addOn==='schedule'?calendarDay+'T09:00':calendarDay});return;}
  if(/^\d{4}-\d{2}$/.test(b.dataset.calMonth||'')){calendarMonth=b.dataset.calMonth;calendarDay='';render();return;}
  if(/^\d{4}-\d{2}-\d{2}$/.test(b.dataset.calDay||'')){calendarDay=calendarDay===b.dataset.calDay?'':b.dataset.calDay;render();return;}
  if(b.dataset.add){if(mode==='shared'&&!sharedReady)return;openForm(b.dataset.add);}
