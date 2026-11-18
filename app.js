@@ -43,7 +43,9 @@ function connectionView(){
  const connected=mode==='shared'&&Boolean(shared?.token);
  $('#connection-title').textContent=connected?(shared.readOnly?'게스트 보기 · 예시 기록':'가족 기록 · '+shared.username):'가족 로그인';
  $('#connection').classList.toggle('compact',connected);
- $('#login-form').hidden=connected;$('#logout').hidden=!connected;$('#change-password').hidden=!connected||shared.readOnly;
+ $('#login-form').hidden=connected;$('#google-login-box').hidden=connected;$('#password-login').hidden=connected;$('#logout').hidden=!connected;
+ // A Google sign-in has no Somhouse password to change.
+ $('#change-password').hidden=!connected||shared.readOnly||shared.username==='family';
  $('nav').hidden=!connected||!sharedReady;
  showSources(connected);
  showGoogleStatus(connected);
@@ -58,7 +60,8 @@ function showGoogleStatus(connected){
  if(!status){element.innerHTML='';googleStatusHtml='';googleFooter='';return;}
  const services={sheets:'원본 시트',tasks:'Tasks 사본',calendar:'수유 캘린더',shopping:'장보기'};
  const rows=Object.entries(status.services||{}).map(([key,value])=>`<li>${esc(services[key]||key)}: 미전송 ${esc(value.pending)}건 · 재시도 ${esc(value.retrying)}건 · 실패 ${esc(value.failed)}건 · 마지막 전송 ${esc(value.last_success?.replace('T',' ')||'없음')}</li>`).join('');
- const warning=status.auth_state==='reconnect_required'?'Google 재연결이 필요해요. 외부 전송을 멈췄어요. 관리자에게 알려주세요.':status.auth_state==='configuration_error'?'Google 연결 설정을 읽지 못했어요. 관리자에게 알려주세요.':'Google 연동 상태';
+ const reconnect=shared.readOnly?'':'<button type="button" class="secondary" data-google-connect="1">Google 다시 연결</button>';
+ const warning=status.auth_state==='reconnect_required'?'Google 재연결이 필요해요. 외부 전송을 멈췄어요. 아래 ‘Google 다시 연결’을 눌러 주세요.':status.auth_state==='configuration_error'?'Google 연결 설정을 읽지 못했어요. 관리자에게 알려주세요.':'Google 연동 상태';
  const values=Object.values(status.services||{});
  const waiting=values.reduce((sum,x)=>sum+(Number(x.pending)||0)+(Number(x.retrying)||0),0);
  const failed=values.reduce((sum,x)=>sum+(Number(x.failed)||0),0);
@@ -66,9 +69,9 @@ function showGoogleStatus(connected){
  // Inputs waiting for a person are shown in the home 'check' box, so they do not make the connection look broken.
  const healthy=status.auth_state==='ready'&&!failed&&!status.errors?.length;
  const note='<p class="caption">웹 기록은 맥미니에 저장됩니다. 음성으로 만든 원본 Task·일정은 웹에서 수정하거나 삭제해도 바뀌지 않아요. 수정 이력은 원본 시트에 남습니다.</p>';
- googleFooter=healthy?`<details class="google-footer"><summary>🟢 Google 연동 정상 · ${waiting?`전송 대기 ${esc(waiting)}건`:'모두 반영됨'}${latest?` · 마지막 전송 ${esc(latest.slice(11,16))}`:''}</summary><ul>${rows}</ul>${note}</details>`:'';
+ googleFooter=healthy?`<details class="google-footer"><summary>🟢 Google 연동 정상 · ${waiting?`전송 대기 ${esc(waiting)}건`:'모두 반영됨'}${latest?` · 마지막 전송 ${esc(latest.slice(11,16))}`:''}</summary><ul>${rows}</ul>${note}${reconnect}</details>`:'';
  if(healthy){element.hidden=true;element.innerHTML='';googleStatusHtml='';return;}
- const html=`<strong>${warning}</strong><ul>${rows}</ul>${status.errors?.length?'<p>일부 연동을 확인하지 못했어요. 잠시 후 다시 시도합니다.</p>':''}${status.review?`<p>음성·캘린더 입력 ${esc(status.review)}건은 확인이 필요해요.</p><button type="button" class="secondary" data-page="review">확인 필요 ${esc(status.review)}건 정리하기</button>`:''}${note}`;
+ const html=`<strong>${warning}</strong>${status.auth_state==='reconnect_required'?reconnect:''}<ul>${rows}</ul>${status.errors?.length?'<p>일부 연동을 확인하지 못했어요. 잠시 후 다시 시도합니다.</p>':''}${status.review?`<p>음성·캘린더 입력 ${esc(status.review)}건은 확인이 필요해요.</p><button type="button" class="secondary" data-page="review">확인 필요 ${esc(status.review)}건 정리하기</button>`:''}${note}`;
  // Rewriting on every poll would close an opened <details>; the browser adds `open` to innerHTML, so compare our own copy.
  if(googleStatusHtml!==html){element.innerHTML=html;googleStatusHtml=html;}
 }
@@ -467,6 +470,11 @@ document.addEventListener('click',async e=>{
   if(!input||!unit)return;
   const value=Math.max(0,(parseFloat(input.value)||0)+Number(b.dataset.step)*unit[1]);input.value=String(Math.round(value*10)/10);return;
  }
+ if(b.dataset.googleConnect&&!shared.readOnly){
+  busy=true;connectionView();message('Google로 이동하고 있어요…');
+  try{location.href=await shared.googleStart('connect',location.origin+location.pathname);}catch(error){message(error.message);}finally{busy=false;connectionView();}
+  return;
+ }
  if(b.dataset.moreDays){recordDays+=Number(b.dataset.moreDays);render();return;}
  if(['7','30'].includes(b.dataset.statsDays)){statsDays=Number(b.dataset.statsDays);render();return;}
  if(['schedule','shopping'].includes(b.dataset.addOn)&&calendarDay){openForm(b.dataset.addOn,null,{date:b.dataset.addOn==='schedule'?calendarDay+'T09:00':calendarDay});return;}
@@ -603,5 +611,23 @@ if(shared){
  $('#dialog').addEventListener('close',()=>{reviewKey='';refreshShared();});
  setInterval(()=>{if(!document.hidden)refreshShared();},2000);
  setInterval(()=>{if(!document.hidden&&page==='home'&&mode==='shared'&&sharedReady&&!editingScreen())render();},60000);
- if(mode==='shared'){message('가족의 기록을 불러오고 있어요…');refreshShared(true);}
+ $('#google-login').onclick=async()=>{
+  if(busy)return;busy=true;connectionView();message('Google로 이동하고 있어요…');
+  try{location.href=await shared.googleStart('login',location.origin+location.pathname);}catch(error){message(error.message);busy=false;connectionView();}
+ };
+ // Coming back from Google: #google=<one-time code>, #google-error=<message> or #google-connected=1.
+ const returned=new URLSearchParams(location.hash.slice(1));
+ const clearHash=()=>{try{history.replaceState(null,'',location.pathname+location.search);}catch{}};
+ if(returned.has('google')){
+  clearHash();busy=true;connectionView();message('Google 계정으로 로그인하고 있어요…');
+  (async()=>{
+   try{await shared.googleLogin(returned.get('google'));mode='shared';sharedReady=false;data=empty();migratedRaw=undefined;render();}
+   catch(error){message(error.message);}finally{busy=false;connectionView();}
+   if(mode==='shared')await refreshShared(true);
+  })();
+ }else{
+  if(returned.has('google-error')){clearHash();message(returned.get('google-error'));}
+  if(returned.has('google-connected')){clearHash();accountMessage('Google을 다시 연결했어요. 멈춰 있던 전송을 이어서 진행해요.');}
+  if(mode==='shared'){if(!returned.has('google-error'))message('가족의 기록을 불러오고 있어요…');refreshShared(true);}
+ }
 }else message('화면을 불러오지 못했어요. 잠시 후 다시 열어주세요.');

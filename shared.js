@@ -58,7 +58,17 @@
     }
     async login(base, username, password) {
       base = serverURL(base);
-      const result = await this.request('/api/login', 'POST', {username, password}, base, '');
+      this.adopt(base, await this.request('/api/login', 'POST', {username, password}, base, ''));
+    }
+    // Google sign-in returns here with a one-time code; trade it for the session token.
+    async googleLogin(code) {
+      this.adopt(this.base, await this.request('/api/login/google', 'POST', {code}, this.base, ''));
+    }
+    // Ask the server for Google's address: 'login' (anyone) or 'connect' (signed-in family, renews the Google link).
+    async googleStart(mode, returnTo) {
+      return (await this.request('/api/google/start', 'POST', {mode, returnTo}, this.base, mode === 'connect' ? this.token : '')).url;
+    }
+    adopt(base, result) {
       this.base = base; this.token = result.token; this.username = result.username; this.readOnly = result.read_only === true; this.sources = null; this.googleStatus = null;
       try {localStorage.setItem(SERVER, base);} catch {}
       this.remember();

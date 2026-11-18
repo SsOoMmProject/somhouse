@@ -46,6 +46,23 @@ LaunchAgent `com.ssoomm.somhouse`는 맥 사용자 로그인 시 서버를 시�
 python3 server.py password family1
 ```
 
+### Google 로그인과 휴대폰에서 다시 연결
+
+가족은 **솜하우스에 연결된 Google 계정과 같은 계정**으로만 Google 로그인할 수 있습니다(Google 고유 ID 비교). 이 로그인은 이름·이메일 권한만 쓰므로 Testing 앱의 7일 토큰 만료와 상관없이 유지됩니다. Google 연동에 "재연결 필요"가 뜨면 홈 맨 위의 **Google 다시 연결**(정상일 때는 맨 아래 연동 줄을 펼치면 있음)로 휴대폰에서 다시 승인합니다. 새 승인으로 기존 Tasks 목록·원본 시트·수유 캘린더를 실제로 읽어 본 뒤에만 바꾸고, 실패하면 이전 연결을 유지합니다. 처음 연결은 지금처럼 맥의 `scripts/connect_google_records.py`로 합니다.
+
+관리자 설정(한 번):
+
+1. Google Cloud Console → **Google Auth Platform → 클라이언트 → 클라이언트 만들기 → 웹 애플리케이션**
+2. **승인된 JavaScript 원본**: `https://ssoommproject.github.io`
+3. **승인된 리디렉션 URI**: `https://ssoomm-main.tail31d445.ts.net/api/google/callback`
+4. 만든 클라이언트의 JSON을 맥에 내려받고 등록:
+
+```sh
+python3 server.py google-web-client --file ~/Downloads/client_secret_웹.json
+```
+
+`아이디로 로그인 (게스트·비상용)`의 비밀번호 로그인은 게스트와 비상용으로 남아 있습니다.
+
 ### 게스트(읽기 전용) 계정
 
 화면 구성과 사용법을 보여 줄 때 쓰는 계정입니다. 게스트는 실제 가족 기록 대신 서버가 오늘 날짜 기준으로 만든 **예시 기록**만 봅니다(공휴일은 실제 공개 목록). 입력창은 열어 볼 수 있지만 저장·수정·삭제·종류 확인·AI 질문·비밀번호 변경은 서버에서 모두 거절합니다. 같은 브라우저의 예전 기기 기록도 게스트 로그인으로는 서버에 보내지 않습니다.

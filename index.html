@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f8f5ef"><title>솜하우스</title><link rel="stylesheet" href="style.css?v=review2-20261118"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f8f5ef"><title>솜하우스</title><link rel="stylesheet" href="style.css?v=glogin-20261118"></head>
 <body>
 <header><div><span class="logo">✿</span> <strong>솜하우스</strong><small>우리 가족의 작은 기록</small></div></header>
 <main>
@@ -13,7 +13,8 @@
 <p id="account-status" role="status" hidden></p>
 <p id="raw-sources" hidden></p>
 <div id="google-status" role="status" hidden></div>
-<form id="login-form"><label class="field">아이디<input name="username" autocomplete="username" required maxlength="100"></label><label class="field">비밀번호<input name="password" type="password" autocomplete="current-password" required maxlength="256"></label><button type="submit">로그인</button></form>
+<div id="google-login-box"><button type="button" id="google-login" class="google-login">Google로 로그인</button><p class="caption">가족 Google 계정으로 로그인해요.</p></div>
+<details id="password-login"><summary>아이디로 로그인 (게스트·비상용)</summary><form id="login-form"><label class="field">아이디<input name="username" autocomplete="username" required maxlength="100"></label><label class="field">비밀번호<input name="password" type="password" autocomplete="current-password" required maxlength="256"></label><button type="submit">로그인</button></form></details>
 </section>
 <nav aria-label="메뉴" hidden><button data-page="home"><span class="ic" aria-hidden="true">🏠</span>홈</button><button data-page="records"><span class="ic" aria-hidden="true">📝</span>기록</button><button data-page="stats"><span class="ic" aria-hidden="true">📊</span>통계</button><button data-page="schedule"><span class="ic" aria-hidden="true">📅</span>일정</button><button data-page="shopping"><span class="ic" aria-hidden="true">🛒</span>구매</button><button data-page="ai"><span class="ic" aria-hidden="true">💬</span>AI</button></nav>
 <section id="dashboard" aria-label="가족 달력" hidden></section>
@@ -54,5 +55,5 @@
 <div class="actions"><button type="button" id="cancel-password" class="secondary">취소</button><button type="submit">비밀번호 저장</button></div>
 </form>
 </dialog>
-<script src="config.js?v=auto-20261102" defer></script><script src="service.js?v=sleep-20261117" defer></script><script src="shared.js?v=retry-20261118" defer></script><script src="app.js?v=guestfix-20261118" defer></script>
+<script src="config.js?v=auto-20261102" defer></script><script src="service.js?v=sleep-20261117" defer></script><script src="shared.js?v=glogin-20261118" defer></script><script src="app.js?v=glogin-20261118" defer></script>
 </body></html>

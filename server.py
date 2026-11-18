@@ -16,22 +16,26 @@ import time
 from contextlib import closing, contextmanager
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from antigravity import (CONFIG_NAME, SCOPES, Antigravity, AntigravityError,
                          executable, parse_question, save_config, summarize_records)
-from google_records import GoogleRecords, SCHEMA as GOOGLE_SCHEMA, load_config as load_google_config
+from google_records import (GoogleError, GoogleRecords, SCHEMA as GOOGLE_SCHEMA, SCOPES as GOOGLE_SCOPES,
+                            load_config as load_google_config, read_config as read_google_config)
 from calendar_records import FEEDING_KINDS, SLEEP_KINDS, SCHEMA as CALENDAR_SCHEMA, load_aliases, relearn
 from shopping_records import SCHEMA as SHOPPING_SCHEMA
 from google_delivery import SCHEMA as DELIVERY_SCHEMA
 from holidays import HolidayFeed, SCHEMA as HOLIDAY_SCHEMA, listing as holiday_listing
 from demo import GUEST, READ_ONLY_MESSAGE, demo_payload
 from sleep_wake import end_sleep_on_feeding
+import google_web
+from calendar_records import CALENDAR_SCOPES
 from keep_sync import (CONFIG_NAME as KEEP_CONFIG_NAME, SCHEMA as KEEP_SCHEMA,
                        KeepSync, configured_email, queue as queue_keep)
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA = Path.home() / "Library/Application Support/Somhouse"
+DEFAULT_RETURN = "https://ssoommproject.github.io/somhouse/"
 KINDS = ("records", "schedule", "shopping")
 STATIC = {"index.html", "app.js", "service.js", "shared.js", "config.js", "style.css"}
 ITERATIONS = 600_000
@@ -205,9 +209,13 @@ class Store:
             db.execute("BEGIN IMMEDIATE")
             if not self.password_matches(db, username, password):
                 raise Problem(401, "아이디 또는 비밀번호를 확인해 주세요.")
-            token = secrets.token_urlsafe(32)
-            db.execute("INSERT INTO sessions VALUES(?,?,?)", (hashlib.sha256(token.encode()).hexdigest(), username, NO_SESSION_EXPIRY))
-            return {"token": token, "username": username, "read_only": username == GUEST}
+            return {"token": self.new_session(db, username), "username": username, "read_only": username == GUEST}
+
+    @staticmethod
+    def new_session(db, username):
+        token = secrets.token_urlsafe(32)
+        db.execute("INSERT INTO sessions VALUES(?,?,?)", (hashlib.sha256(token.encode()).hexdigest(), username, NO_SESSION_EXPIRY))
+        return token
 
     def change_password(self, token, current, new):
         with self.lock, self.connect() as db:
@@ -268,6 +276,8 @@ class FamilyServer(ThreadingHTTPServer):
                                        f"http://localhost:{port}", "http://127.0.0.1:8765", "http://localhost:8765"}
         self.failures = []
         self.login_lock = threading.Lock()
+        self.google_states = google_web.Pending(600)  # OAuth round trips in progress
+        self.login_codes = google_web.Pending(120)    # one-time codes handed back to the web page
         self.google = GoogleRecords.load(store)
         self.keep = KeepSync.load(store) if self.google is None and not (store.directory / "google-records.json").exists() else None
 
@@ -327,6 +337,89 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Retry-After", "60")
         self.end_headers()
         self.wfile.write(body)
+
+    def redirect(self, location):
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+
+    def return_target(self, value):
+        """Only a page on an allowed web origin may receive the result of a Google round trip."""
+        try:
+            parts = urlsplit(value)
+        except (TypeError, ValueError):
+            return DEFAULT_RETURN
+        origin = f"{parts.scheme}://{parts.netloc}"
+        return origin + (parts.path or "/") if isinstance(value, str) and origin in self.server.origins else DEFAULT_RETURN
+
+    def google_start(self):
+        store, body = self.server.store, self.body(4096)
+        client = google_web.load_web_client(store.directory)
+        if client is None:
+            raise Problem(503, "관리자가 맥에서 Google 웹 로그인을 먼저 설정해야 해요.")
+        mode, state = body.get("mode"), {"return": self.return_target(body.get("returnTo"))}
+        if mode == "connect":
+            auth = self.headers.get("Authorization", "")
+            if not auth.startswith("Bearer ") or len(auth) > 200:
+                raise Problem(401, "로그인이 필요합니다.")
+            with store.lock, store.connect() as db:
+                if store.user(db, auth[7:]) == GUEST:
+                    raise Problem(403, READ_ONLY_MESSAGE)
+            if self.server.google is None:
+                raise Problem(409, "처음 연결은 관리자가 맥에서 해야 해요. 연결된 뒤부터 여기서 다시 연결할 수 있어요.")
+            state["session"] = hashlib.sha256(auth[7:].encode()).hexdigest()
+            scopes = GOOGLE_SCOPES + (CALENDAR_SCOPES if self.server.google.calendar else ())
+        elif mode == "login":
+            scopes = google_web.LOGIN_SCOPES
+        else:
+            raise Problem(400, "로그인 방식을 확인해 주세요.")
+        state.update(mode=mode, verifier=secrets.token_urlsafe(48))
+        key = self.server.google_states.add(state)
+        return {"url": google_web.authorization_url(client, key, state["verifier"], scopes, offline=mode == "connect")}
+
+    def google_callback(self):
+        store = self.server.store
+        params = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
+        state = self.server.google_states.take(params.get("state"))
+        back = state["return"] if state else DEFAULT_RETURN
+        fail = lambda message: self.redirect(back + "#google-error=" + quote(message))
+        if state is None:
+            return fail("Google 로그인 시간이 지났어요. 다시 시도해 주세요.")
+        if "code" not in params:
+            return fail("Google 로그인을 취소했어요.")
+        client = google_web.load_web_client(store.directory)
+        connected = read_google_config(store.directory) or {}
+        try:
+            tokens = google_web.exchange(client, params["code"], state["verifier"])
+            who = google_web.identity(tokens["access_token"])
+        except (GoogleError, KeyError, TypeError):
+            return fail("Google 로그인을 확인하지 못했어요. 잠시 후 다시 시도해 주세요.")
+        if not connected.get("subject") or who.get("sub") != connected["subject"] or who.get("email_verified") is not True:
+            return fail("솜하우스에 연결된 가족 Google 계정으로 로그인해 주세요.")
+        if state["mode"] == "login":
+            with store.lock, store.connect() as db:
+                token = store.new_session(db, google_web.FAMILY_USER)
+            code = self.server.login_codes.add({"token": token, "username": google_web.FAMILY_USER})
+            return self.redirect(back + "#google=" + code)
+        # Reconnect: the person who started it must still be signed in, and the new grant must reach every resource.
+        with store.lock, store.connect() as db:
+            row = db.execute("SELECT username FROM sessions WHERE token=?", (state["session"],)).fetchone()
+        google = self.server.google
+        if not row or row[0] == GUEST or google is None:
+            return fail("다시 로그인한 뒤 Google 연결을 다시 시도해 주세요.")
+        if not tokens.get("refresh_token"):
+            return fail("Google이 계속 연결 권한을 주지 않았어요. 모든 권한에 체크하고 다시 시도해 주세요.")
+        trial = {**google.config, "client_id": client["client_id"], "client_secret": client["client_secret"],
+                 "refresh_token": tokens["refresh_token"]}
+        try:
+            google_web.check_access(trial, tokens["access_token"], bool(google.calendar))
+        except (GoogleError, KeyError, TypeError):
+            return fail("새 연결로 기존 시트·Tasks·캘린더를 읽지 못해 이전 연결을 유지했어요. 모든 권한에 체크했는지 확인해 주세요.")
+        google.adopt_credentials(client["client_id"], client["client_secret"], tokens["refresh_token"], tokens["access_token"])
+        return self.redirect(back + "#google-connected=1")
 
     def body(self, max_size=MAX_BODY):
         if self.headers.get("Transfer-Encoding"):
@@ -393,6 +486,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, {"ok": True})
                 return
             store = self.server.store
+            if path == "/api/google/start" and self.command == "POST":
+                self.respond(200, self.google_start())
+                return
+            if path == google_web.CALLBACK_PATH and self.command == "GET":
+                self.google_callback()
+                return
+            if path == "/api/login/google" and self.command == "POST":
+                found = self.server.login_codes.take(self.body(4096).get("code"))
+                if found is None:
+                    raise Problem(401, "Google 로그인 시간이 지났어요. 다시 로그인해 주세요.")
+                self.respond(200, {**found, "read_only": False})
+                return
             if path == "/api/login" and self.command == "POST":
                 body = self.body()
                 username, password = body.get("username"), body.get("password")
@@ -625,7 +730,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("init", "serve", "password", "backup", "restore",
                         "antigravity-config", "antigravity-test", "keep-config", "keep-test", "keep-status",
-                        "google-status", "google-retry", "google-backfill", "delete-record", "guest"),
+                        "google-status", "google-retry", "google-backfill", "delete-record", "guest", "google-web-client"),
                         nargs="?", default="serve")
     parser.add_argument("--kind", choices=KINDS, help="delete-record: 기록 종류")
     parser.add_argument("--item-id", help="delete-record: 삭제할 기록 ID")
@@ -635,7 +740,8 @@ def main():
     parser.add_argument("--agy", type=Path, default=Path.home() / ".local/bin/agy")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--origin", action="append", default=[])
-    parser.add_argument("--file", type=Path, help="관리자 복원용 JSON 파일")
+    parser.add_argument("--file", type=Path, help="관리자 복원용 JSON 파일 / google-web-client: 웹 OAuth JSON")
+    parser.add_argument("--public-url", default="https://ssoomm-main.tail31d445.ts.net", help="google-web-client: 서버 공개 HTTPS 주소")
     args = parser.parse_args()
     os.umask(0o077)
     if args.command == "keep-status":
@@ -643,6 +749,15 @@ def main():
         return
     if args.command == "google-status":
         google_status(args.data_dir)
+        return
+    if args.command == "google-web-client":
+        if not args.file:
+            parser.error("Google Cloud에서 받은 웹 애플리케이션 OAuth JSON을 --file 로 지정해 주세요.")
+        try:
+            redirect = google_web.save_web_client(args.data_dir, args.file, args.public_url)
+        except (OSError, ValueError) as error:
+            parser.exit(1, f"{error}\n")
+        print(f"Google 웹 로그인 설정을 저장했습니다. 리디렉션 URI: {redirect}\n서버를 다시 시작할 필요는 없습니다.")
         return
     if args.command == "delete-record":
         delete_record(args.data_dir, args.kind, args.item_id)
