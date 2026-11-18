@@ -26,6 +26,7 @@ from shopping_records import SCHEMA as SHOPPING_SCHEMA
 from google_delivery import SCHEMA as DELIVERY_SCHEMA
 from holidays import HolidayFeed, SCHEMA as HOLIDAY_SCHEMA, listing as holiday_listing
 from demo import GUEST, READ_ONLY_MESSAGE, demo_payload
+from sleep_wake import end_sleep_on_feeding
 from keep_sync import (CONFIG_NAME as KEEP_CONFIG_NAME, SCHEMA as KEEP_SCHEMA,
                        KeepSync, configured_email, queue as queue_keep)
 
@@ -499,6 +500,7 @@ class Handler(BaseHTTPRequestHandler):
                     kind, item_id = parts[3], unquote(parts[4])
                     if not item_id or len(item_id) > 200:
                         raise Problem(400, "기록 ID를 확인해 주세요.")
+                    woke = None
                     if self.command == "PUT":
                         item = validate_item(kind, self.body())
                         if item["id"] != item_id:
@@ -508,6 +510,7 @@ class Handler(BaseHTTPRequestHandler):
                         db.execute("INSERT INTO items VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body", (kind, item_id, body))
                         if kind == "records":
                             relearn(db, item)
+                            woke = end_sleep_on_feeding(db, item)
                     else:
                         body = None
                         item = None
@@ -518,8 +521,12 @@ class Handler(BaseHTTPRequestHandler):
                         db.execute("DELETE FROM items WHERE kind=? AND id=?", (kind, item_id))
                     if self.server.google is not None:
                         self.server.google.queue(db, kind, item_id, item, "save" if body is not None else "delete")
+                        if woke:
+                            self.server.google.queue(db, "records", woke["id"], woke, "save")
                     elif self.server.keep is not None:
                         queue_keep(db, self.server.keep.email, kind, item_id, body)
+                        if woke:
+                            queue_keep(db, self.server.keep.email, "records", woke["id"], encode(woke))
                     result = {"data": store.state(db), "aliases": load_aliases(db)}
                 else:
                     raise Problem(404, "API를 찾을 수 없습니다.")

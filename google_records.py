@@ -525,6 +525,7 @@ class GoogleRecords:
             db.execute("""INSERT INTO items VALUES (?,?,?)
                 ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body""", (kind, item_id, encode(item)))
             self.queue(db, kind, item_id, item, "save")
+            self.wake_from_sleep(db, item)
         else:
             queue_event(db, self.binding, "", item_id, {"review": key}, action="dismiss",
                         status="확인 필요 무시", skip_task=True)
@@ -573,6 +574,14 @@ class GoogleRecords:
                         voice_id=original[0] if original else "", title=task_title(kind, item))
             if self.calendar:
                 self.calendar.queue(db, kind, item_id, item, action)
+
+    def wake_from_sleep(self, db, feeding):
+        """A feeding from any input ends the open sleep; the change goes to Google like a web edit."""
+        from sleep_wake import end_sleep_on_feeding
+        sleep = end_sleep_on_feeding(db, feeding)
+        if sleep:
+            self.queue(db, "records", sleep["id"], sleep, "save")
+        return sleep
 
     def backfill(self, db):
         count = 0
@@ -633,6 +642,7 @@ class GoogleRecords:
                     db.execute("INSERT INTO items VALUES (?,?,?)", (kind, item_id, encode(item)))
                     if self.calendar:
                         self.calendar.queue(db, kind, item_id, item)
+                    self.wake_from_sleep(db, item)
                     if purchase and purchase["done"] != "yes":
                         self.shopping.queue(db, item, task)
             else:
