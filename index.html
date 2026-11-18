@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f8f5ef"><title>솜하우스</title><link rel="stylesheet" href="style.css?v=sleepbtn-20261118"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f8f5ef"><title>솜하우스</title><link rel="stylesheet" href="style.css?v=review2-20261118"></head>
 <body>
 <header><div><span class="logo">✿</span> <strong>솜하우스</strong><small>우리 가족의 작은 기록</small></div></header>
 <main>
@@ -15,7 +15,7 @@
 <div id="google-status" role="status" hidden></div>
 <form id="login-form"><label class="field">아이디<input name="username" autocomplete="username" required maxlength="100"></label><label class="field">비밀번호<input name="password" type="password" autocomplete="current-password" required maxlength="256"></label><button type="submit">로그인</button></form>
 </section>
-<nav aria-label="메뉴" hidden><button data-page="home">홈</button><button data-page="records">육아 기록</button><button data-page="stats">수유 통계</button><button data-page="schedule">일정</button><button data-page="shopping">구매 목록</button><button data-page="ai">AI 대화</button></nav>
+<nav aria-label="메뉴" hidden><button data-page="home"><span class="ic" aria-hidden="true">🏠</span>홈</button><button data-page="records"><span class="ic" aria-hidden="true">📝</span>기록</button><button data-page="stats"><span class="ic" aria-hidden="true">📊</span>통계</button><button data-page="schedule"><span class="ic" aria-hidden="true">📅</span>일정</button><button data-page="shopping"><span class="ic" aria-hidden="true">🛒</span>구매</button><button data-page="ai"><span class="ic" aria-hidden="true">💬</span>AI</button></nav>
 <section id="dashboard" aria-label="가족 달력" hidden></section>
 <div id="content"></div>
 <section id="ai-panel" aria-labelledby="ai-title" hidden>
@@ -41,7 +41,7 @@
 </article>
 </section>
 </main>
-<dialog id="dialog"><form id="form"><div class="formhead"><h2 id="formtitle"></h2><button type="button" id="close" class="plain" aria-label="닫기">✕</button></div><div id="fields"></div><div class="actions"><button type="button" id="cancel" class="secondary">취소</button><button type="submit">저장하기</button></div></form></dialog>
+<dialog id="dialog"><form id="form"><div class="formhead"><h2 id="formtitle"></h2><button type="button" id="close" class="plain" aria-label="닫기">✕</button></div><div id="fields"></div><div class="actions"><button type="button" id="delete-item" class="danger" hidden>삭제</button><button type="button" id="cancel" class="secondary">취소</button><button type="submit">저장하기</button></div></form></dialog>
 <dialog id="password-dialog" aria-labelledby="password-title">
 <form id="password-form">
 <h2 id="password-title">비밀번호 변경</h2>
@@ -54,5 +54,5 @@
 <div class="actions"><button type="button" id="cancel-password" class="secondary">취소</button><button type="submit">비밀번호 저장</button></div>
 </form>
 </dialog>
-<script src="config.js?v=auto-20261102" defer></script><script src="service.js?v=sleep-20261117" defer></script><script src="shared.js?v=retry-20261118" defer></script><script src="app.js?v=retry-20261118" defer></script>
+<script src="config.js?v=auto-20261102" defer></script><script src="service.js?v=sleep-20261117" defer></script><script src="shared.js?v=retry-20261118" defer></script><script src="app.js?v=review2-20261118" defer></script>
 </body></html>
