@@ -14,7 +14,7 @@ function valid(d){
 // The old device key is read only, and is automatically merged after login.
 const shared=window.SomhouseShared?new window.SomhouseShared.Client():null;
 let mode=shared?.token?'shared':'login', sharedReady=false, busy=false, refreshing=false, refreshTask=null, migratedRaw, legacyWarning='', needsRender=false;
-let ai={config:null,checking:false,pending:false}, googleStatusHtml='', dashboardHtml='';
+let ai={config:null,checking:false,pending:false}, googleStatusHtml='', dashboardHtml='', missedPolls=0;
 function message(text){$('#connection-status').textContent=text;}
 function accountMessage(text){
  const status=$('#account-status');
@@ -112,12 +112,15 @@ function refreshShared(force=false){
    if(shared.token!==token)return;
    if(!valid(next))throw Error('기록을 확인하지 못했어요. 다시 연결하고 있습니다.');
    const changed=JSON.stringify(next)!==JSON.stringify(data)||(page==='review'&&JSON.stringify(reviewItems())!==reviewBefore),wasReady=sharedReady;
-   data=next;sharedReady=true;if(changed)needsRender=true;
+   data=next;sharedReady=true;missedPolls=0;if(changed)needsRender=true;
    message(shared.readOnly?'게스트 보기예요. 실제 가족 기록이 아닌 예시 기록이에요. 입력창은 열어 볼 수 있지만 저장·수정·삭제는 되지 않아요.':'기록은 자동으로 저장되고 가족과 함께 업데이트돼요.'+legacyWarning);
    if((needsRender||!wasReady)&&(!editingScreen()||!wasReady))render();else connectionView();
   }catch(error){
    if(shared.token!==token)return;
-   if(error.status===401)showLogin(error.message);else message(error.message);
+   // A slow relay often recovers by the next poll: keep the screen and only warn after repeated misses.
+   if(error.status===401)showLogin(error.message);
+   else if(sharedReady&&!error.status&&++missedPolls<3)message('연결이 잠시 느려요. 기록은 그대로 두고 자동으로 다시 확인하고 있어요.');
+   else message(error.message);
   }finally{refreshing=false;refreshTask=null;}
  })();
  return refreshTask;

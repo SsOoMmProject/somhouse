@@ -117,3 +117,16 @@ test('guest login is read only: no device merge, no writes, no password change',
  assert.equal(JSON.parse(b.local.get('somhouse-session-v1')).readOnly,true);
  assert.equal(browser({local:b.local,server}).eval('shared.readOnly'),true);
 });
+
+test('a dropped connection is retried once for safe requests, never for other POSTs',async()=>{
+ const {Client}=require('../shared.js');
+ const calls=[];let failNext=0;
+ global.location={hostname:'example.com'};global.localStorage={getItem:()=>null,setItem(){},removeItem(){}};global.sessionStorage=global.localStorage;
+ global.fetch=async(url,options)=>{calls.push(options.method);if(failNext>0){failNext--;throw TypeError('network');}return {ok:true,json:async()=>({data:{records:[],schedule:[],shopping:[]}})};};
+ const client=new Client();client.base='https://family.example';client.token='t';
+ failNext=1;await client.load();assert.deepEqual(calls,['GET','GET']);
+ calls.length=0;failNext=1;await client.put('shopping',{id:'a',title:'x',quantity:'1'});assert.deepEqual(calls,['PUT','PUT']);
+ calls.length=0;failNext=1;await assert.rejects(client.merge({records:[],schedule:[],shopping:[]}),/맥미니에 연결하지 못했어요/);assert.deepEqual(calls,['POST']);
+ calls.length=0;failNext=2;await assert.rejects(client.load(),/맥미니에 연결하지 못했어요/);assert.deepEqual(calls,['GET','GET']);
+ delete global.fetch;delete global.location;delete global.localStorage;delete global.sessionStorage;
+});
