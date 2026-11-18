@@ -47,3 +47,5 @@ nav button{display:inline-flex;gap:6px}nav .ic{font-size:16px}
 }
 .cal-grid{grid-template-columns:repeat(7,minmax(0,1fr))}.cal-day{min-width:0;overflow:hidden}
 @media(max-width:600px){.cal-day .mark{font-size:9px;letter-spacing:-.3px}}
+
+#google-login-box{margin:4px 0 12px}.google-login{width:100%;background:#fff;color:#2d3a33;border:1px solid #cfd6cf;font-size:17px}.google-login::before{content:"G";font-weight:800;color:#4285f4;margin-right:10px;font-size:19px}#password-login summary{cursor:pointer;color:#536158;padding:8px 0;min-height:40px}

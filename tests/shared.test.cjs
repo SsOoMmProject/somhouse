@@ -130,3 +130,26 @@ test('a dropped connection is retried once for safe requests, never for other PO
  calls.length=0;failNext=2;await assert.rejects(client.load(),/맥미니에 연결하지 못했어요/);assert.deepEqual(calls,['GET','GET']);
  delete global.fetch;delete global.location;delete global.localStorage;delete global.sessionStorage;
 });
+
+test('returning from Google signs in with the one-time code and clears it from the address',async()=>{
+ const b=browser({hash:'#google=one-time-code'});await b.settle();await b.settle();
+ const call=b.calls.find(x=>x.url.endsWith('/api/login/google'));
+ assert.deepEqual(JSON.parse(call.options.body),{code:'one-time-code'});
+ assert.equal(b.eval('shared.token'),'google-token');assert.equal(b.eval('mode'),'shared');
+ assert.equal(b.context.location.hash,'');
+ assert.equal(b.get('#change-password').hidden,true);  // a Google sign-in has no Somhouse password
+ const failed=browser({hash:'#google-error='+encodeURIComponent('솜하우스에 연결된 가족 Google 계정으로 로그인해 주세요.')});
+ assert.match(failed.get('#connection-status').textContent,/가족 Google 계정/);assert.equal(failed.eval('mode'),'login');
+});
+
+test('Google sign-in and reconnect buttons go to the address the server gives',async()=>{
+ const b=browser();await b.get('#google-login').onclick();
+ assert.equal(b.context.location.href,'https://accounts.google.com/o/oauth2/v2/auth?state=x');
+ assert.deepEqual(JSON.parse(b.calls.at(-1).options.body).mode,'login');
+ const server=family();server.googleStatus={auth_state:'reconnect_required',review:0,errors:[],services:{}};
+ const c=browser({server});await c.login();
+ assert.match(c.get('#google-status').innerHTML,/data-google-connect="1">Google 다시 연결/);
+ await c.events.get('click')({target:{closest:sel=>sel==='a'?null:({dataset:{googleConnect:'1'}})}});
+ const start=c.calls.find(x=>x.url.endsWith('/api/google/start'));
+ assert.equal(JSON.parse(start.options.body).mode,'connect');assert.equal(start.options.headers.Authorization,'Bearer test-token');
+});

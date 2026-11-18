@@ -386,6 +386,20 @@ class GoogleRecords:
                        (self.binding, credential_hash))
             self.auth_state = db.execute("SELECT state FROM google_auth_state WHERE binding=?", (self.binding,)).fetchone()[0]
 
+    def adopt_credentials(self, client_id, client_secret, refresh_token, access_token):
+        """Switch to credentials renewed from the web: same account and resources, new client and refresh token."""
+        updated = {**self.config, "client_id": client_id, "client_secret": client_secret, "refresh_token": refresh_token}
+        save_config(self.store.directory, updated)
+        self.config.update(updated)  # GoogleAPI and the Calendar/shopping helpers share this dict
+        self.api.token, self.api.expires = access_token, time.monotonic() + 3000
+        credential_hash = hashlib.sha256(encode([client_id, refresh_token]).encode()).hexdigest()
+        with self.store.lock, self.store.connect() as db:
+            db.execute("""INSERT INTO google_auth_state VALUES (?,?,'ready') ON CONFLICT(binding) DO UPDATE
+                SET credential_hash=excluded.credential_hash, state='ready'""", (self.binding, credential_hash))
+            db.execute("UPDATE google_service_state SET attempts=0,next_retry_at=0 WHERE binding=?", (self.binding,))
+        self.auth_state = "ready"
+        self.wake.set()
+
     @classmethod
     def load(cls, store):
         config = load_config(store.directory)
