@@ -390,3 +390,29 @@ test('home leads with the last feeding and sleep; schedules list the soonest fir
  server.data.records.find(x=>x.id==='z').end=at(-5);await b.eval('refreshShared(true)');b.eval("page='home';render()");
  assert.match(b.get('#content').innerHTML,/마지막 수면<\/p><strong>25분<\/strong><span>[^<]*낮잠 · 깬 지 5분/);
 });
+
+test('sleep start and end buttons, and a feeding ends the open sleep',async()=>{
+ const server=family(),b=browser({server});await b.login();b.eval("page='home';render()");
+ const click=dataset=>b.events.get('click')({target:{closest:()=>({dataset})}});
+ assert.match(b.get('#content').innerHTML,/data-sleep-start="1">😴 수면 시작/);
+ await click({sleepStart:'1'});
+ const sleep=server.data.records.find(x=>x.type==='sleep');
+ assert.equal(sleep.end,'');assert.ok(['낮잠','밤잠'].includes(sleep.category));
+ assert.match(b.get('#content').innerHTML,new RegExp(`data-sleep-end="${sleep.id}">☀️ 수면 종료`));
+ assert.match(b.get('#content').innerHTML,/자는 중 · 방금/);
+ // Pressed in the same minute: nothing is saved.
+ await click({sleepEnd:sleep.id});assert.match(b.alerts.at(-1),/1분/);assert.equal(sleep.end,'');
+ // Started 45 minutes ago, then ended with the button.
+ const pad=n=>String(n).padStart(2,'0'),stamp=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+ sleep.date=stamp(new Date(Date.now()-45*60000));await b.eval('refreshShared(true)');
+ await click({sleepEnd:sleep.id});
+ assert.equal(server.data.records.find(x=>x.id===sleep.id).end,b.eval('Somhouse.localDateTime()'));
+ assert.match(b.get('#connection-status').textContent,/45분을 기록했어요/);
+ // A new open sleep is ended by recording a feeding.
+ server.data.records.push({id:'s2',type:'sleep',date:stamp(new Date(Date.now()-90*60000)),end:'',category:'낮잠'});
+ await b.eval('refreshShared(true)');
+ b.eval("openForm('feeding')");b.get('#form').values={date:b.eval('Somhouse.localDateTime()'),category:'분유',amount:'120ml',memo:''};
+ await b.eval("document.querySelector('#form').onsubmit({preventDefault(){},target:document.querySelector('#form')})");
+ assert.equal(server.data.records.find(x=>x.id==='s2').end,b.eval('Somhouse.localDateTime()'));
+ assert.match(b.get('#connection-status').textContent,/수유를 기록해서 낮잠을 .*에 끝냈어요 \(1시간 30분\)/);
+});

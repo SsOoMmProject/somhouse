@@ -38,7 +38,7 @@ function browser({raw=JSON.stringify(blank()),session=null,local=new Map([['somh
    result={data:clone(server.data),sources:server.sources,google_status:server.googleStatus};
   }else if(options.method==='PUT'){
    const item=JSON.parse(options.body),kind=url.split('/').at(-2);
-   server.data[kind]=server.data[kind].filter(x=>x.id!==item.id);server.data[kind].push(clone(item));if(item.heard&&['분유','모유','혼합'].includes(item.category))(server.aliases||={})[item.heard]=item.category;result={data:clone(server.data),aliases:clone(server.aliases||{})};
+   server.data[kind]=server.data[kind].filter(x=>x.id!==item.id);server.data[kind].push(clone(item));if(item.type==='feeding'){const open=server.data.records.filter(x=>x.type==='sleep'&&!x.end&&x.date<item.date).sort((a,b)=>b.date.localeCompare(a.date))[0];if(open)open.end=item.date;}if(item.heard&&['분유','모유','혼합'].includes(item.category))(server.aliases||={})[item.heard]=item.category;result={data:clone(server.data),aliases:clone(server.aliases||{})};
   }else if(options.method==='DELETE'){
    const parts=url.split('/'),kind=parts.at(-2),id=decodeURIComponent(parts.at(-1));server.data[kind]=server.data[kind].filter(x=>x.id!==id);result={data:clone(server.data)};
   }else result={data:clone(server.data),sources:server.sources,google_status:server.googleStatus,aliases:server.aliases,calendar_events:server.calendarEvents,holidays:server.holidays,read_only:server.readOnly};

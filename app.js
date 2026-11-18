@@ -206,6 +206,12 @@ function ago(from,now){
  return minutes===null?'방금':minutes<1?'방금':Somhouse.duration(minutes)+' 전';
 }
 // The first thing a parent needs: when the baby last ate and slept.
+// Same rule as the server (sleep_wake.py): the latest sleep without a wake time, started before `at`, within 16 hours.
+function openSleep(at=Somhouse.localDateTime(),inclusive=true){
+ return data.records.filter(x=>x.type==='sleep'&&!x.end&&x.date&&(inclusive?x.date<=at:x.date<at)&&(Somhouse.sleepMinutes({date:x.date,end:at})??0)<=16*60)
+  .sort((a,b)=>b.date.localeCompare(a.date))[0]||null;
+}
+function newId(){return typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():Date.now().toString()+'-'+Math.random().toString(36).slice(2);}
 function nowCard(){
  const now=Somhouse.localDateTime(),past=x=>x.date<=now;
  const feed=data.records.filter(x=>x.type==='feeding'&&past(x)).sort((a,b)=>b.date.localeCompare(a.date))[0];
@@ -213,9 +219,10 @@ function nowCard(){
  const day=v=>v.slice(0,10)===now.slice(0,10)?v.slice(11):v.slice(5).replace('-','/').replace('T',' ');
  const feedHtml=feed?`<strong>${esc(ago(feed.date,now))}</strong><span>${esc(day(feed.date))} · ${esc(feed.category)} ${esc(feed.amount)}</span>`:'<strong>기록 없음</strong><span>수유를 기록해 보세요</span>';
  let sleepHtml='<strong>기록 없음</strong><span>수면을 기록해 보세요</span>';
- if(sleep&&!sleep.end&&Somhouse.sleepMinutes({date:sleep.date,end:now})<=16*60)sleepHtml=`<strong>자는 중 · ${esc(ago(sleep.date,now).replace(' 전','째'))}</strong><span>${esc(day(sleep.date))}부터 · ${esc(sleep.category)}</span>`;
+ const open=openSleep(now);
+ if(open)sleepHtml=`<strong>자는 중 · ${esc(ago(open.date,now).replace(' 전','째'))}</strong><span>${esc(day(open.date))}부터 · ${esc(open.category)}</span>`;
  else if(sleep){const m=Somhouse.sleepMinutes(sleep);sleepHtml=`<strong>${m!==null?esc(Somhouse.duration(m)):'깬 시각 미입력'}</strong><span>${esc(day(sleep.date))}${sleep.end?`~${esc(day(sleep.end))}`:''} · ${esc(sleep.category)}${sleep.end&&sleep.end<=now?` · ${ago(sleep.end,now)==='방금'?'방금 깸':`깬 지 ${esc(ago(sleep.end,now).replace(' 전',''))}`}`:''}</span>`;}
- return `<section class="now-card" aria-label="지금 아기 상태"><div><p>🍼 마지막 수유</p>${feedHtml}</div><div><p>😴 마지막 수면</p>${sleepHtml}</div></section>`;
+ return `<section class="now-card" aria-label="지금 아기 상태"><div><p>🍼 마지막 수유</p>${feedHtml}</div><div><p>😴 마지막 수면</p>${sleepHtml}${open?`<button class="sleep-toggle wake" data-sleep-end="${esc(open.id)}">☀️ 수면 종료</button>`:'<button class="sleep-toggle" data-sleep-start="1">😴 수면 시작</button>'}</div></section>`;
 }
 function homeView(){
   const now=Somhouse.localDateTime();
@@ -363,6 +370,17 @@ document.addEventListener('click',async e=>{
  if(['schedule','shopping'].includes(b.dataset.addOn)&&calendarDay){openForm(b.dataset.addOn,null,{date:b.dataset.addOn==='schedule'?calendarDay+'T09:00':calendarDay});return;}
  if(/^\d{4}-\d{2}$/.test(b.dataset.calMonth||'')){calendarMonth=b.dataset.calMonth;calendarDay='';render();return;}
  if(/^\d{4}-\d{2}-\d{2}$/.test(b.dataset.calDay||'')){calendarDay=calendarDay===b.dataset.calDay?'':b.dataset.calDay;render();if(calendarDay)document.querySelector('.cal-detail')?.scrollIntoView?.({block:'nearest',behavior:'smooth'});return;}
+ if(b.dataset.sleepStart){
+  const now=Somhouse.localDateTime(),hour=Number(now.slice(11,13)),category=hour>=7&&hour<19?'낮잠':'밤잠';
+  if(await changeItem('records',{id:newId(),type:'sleep',date:now,end:'',category,memo:''})){message(`${now.slice(11)}에 ${category}을 시작했어요. 깨면 ‘수면 종료’를 누르거나 수유를 기록하면 끝나요.`);render();}
+  return;
+ }
+ if(b.dataset.sleepEnd){
+  const entry=data.records.find(x=>x.id===b.dataset.sleepEnd),now=Somhouse.localDateTime();if(!entry)return;
+  if(now<=entry.date){alert('잠든 지 1분이 지난 뒤에 눌러 주세요.');return;}
+  if(await changeItem('records',{...entry,end:now})){message(`${entry.category} ${Somhouse.duration(Somhouse.sleepMinutes({date:entry.date,end:now}))}을 기록했어요.`);render();}
+  return;
+ }
  if(b.dataset.add){if(mode==='shared'&&!sharedReady)return;openForm(b.dataset.add);}
  if(b.dataset.repeatCategory&&b.dataset.repeatAmount){openForm('feeding',null,{category:b.dataset.repeatCategory,amount:b.dataset.repeatAmount});return;}
  if(b.dataset.confirmId&&[...feedingKinds,...sleepKinds].includes(b.dataset.confirmCategory)){
@@ -403,8 +421,8 @@ $('#form').onsubmit=async e=>{
  if(x.url&&!link(x.url)){alert('http 또는 https 상품 링크를 입력해 주세요.');return;}
  if(kind==='feeding'&&!Somhouse.hasFeedingUnit(x.amount)&&!confirm('양에 단위가 없어요. 120ml이나 15분처럼 단위를 붙이면 통계와 빠른 기록에 쓰여요.\n이대로 저장할까요?'))return;
  const submit=$('#form button[type="submit"]');submit.disabled=true;
- const review=reviewKey,remembered=JSON.stringify(shared.aliases||{});
- try{if(await (review?sharedChange(()=>shared.resolveReview(review,'save',k,x)):changeItem(k,x))){$('#dialog').close();const word=Object.keys(shared.aliases||{}).find(w=>shared.aliases[w]===x.category&&JSON.parse(remembered)[w]!==x.category);if(word)message(`저장했어요. 앞으로 ‘${word}’는 ${x.category}로 기억할게요.`);render();}}finally{submit.disabled=false;}
+ const review=reviewKey,remembered=JSON.stringify(shared.aliases||{}),asleep=kind==='feeding'?openSleep(x.date,false):null;
+ try{if(await (review?sharedChange(()=>shared.resolveReview(review,'save',k,x)):changeItem(k,x))){$('#dialog').close();const word=Object.keys(shared.aliases||{}).find(w=>shared.aliases[w]===x.category&&JSON.parse(remembered)[w]!==x.category);if(word)message(`저장했어요. 앞으로 ‘${word}’는 ${x.category}로 기억할게요.`);const woke=asleep&&data.records.find(r=>r.id===asleep.id&&r.end);if(woke)message(`수유를 기록해서 ${woke.category}을 ${woke.end.slice(11)}에 끝냈어요 (${Somhouse.duration(Somhouse.sleepMinutes(woke))}).`);render();}}finally{submit.disabled=false;}
 };
 window.addEventListener('hashchange',route);
 route();

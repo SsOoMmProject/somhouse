@@ -131,6 +131,32 @@ class FamilyAPI(unittest.TestCase):
         with self.store.connect() as db:
             db.execute("DELETE FROM users WHERE username='guest'")
 
+    def test_feeding_ends_the_open_sleep_from_web_and_voice(self):
+        token = self.login()
+        put = lambda item: self.request("/api/items/records/" + item["id"], "PUT", item, token)
+        sleep = {"id": "s", "type": "sleep", "date": "2026-11-18T13:00", "end": "", "category": "낮잠", "memo": ""}
+        old = {"id": "old", "type": "sleep", "date": "2026-11-17T08:00", "end": "", "category": "낮잠"}
+        for item in (old, sleep):
+            self.assertEqual(put(item)[0], 200)
+        # A feeding before the sleep started does not end it.
+        put({"id": "f0", "type": "feeding", "date": "2026-11-18T12:30", "category": "분유", "amount": "100ml"})
+        code, result, _ = put({"id": "f1", "type": "feeding", "date": "2026-11-18T14:10", "category": "분유", "amount": "120ml"})
+        self.assertEqual(code, 200)
+        records = {x["id"]: x for x in result["data"]["records"]}
+        self.assertEqual(records["s"]["end"], "2026-11-18T14:10")
+        self.assertEqual(records["old"]["end"], "")  # open for over 16 hours: left for a person to fix
+        # Voice and Calendar inputs use the same rule and send the changed sleep to Google.
+        from google_records import GoogleRecords
+        queued = []
+        fake = type("Fake", (), {"queue": lambda self, db, kind, item_id, item, action: queued.append((item_id, item["end"]))})()
+        put({"id": "s2", "type": "sleep", "date": "2026-11-18T15:00", "end": "", "category": "낮잠"})
+        with self.store.connect() as db:
+            woke = GoogleRecords.wake_from_sleep(fake, db, {"type": "feeding", "date": "2026-11-18T16:05"})
+        self.assertEqual(woke["end"], "2026-11-18T16:05")
+        self.assertEqual(queued, [("s2", "2026-11-18T16:05")])
+        with self.store.connect() as db:
+            self.assertIsNone(GoogleRecords.wake_from_sleep(fake, db, {"type": "feeding", "date": "2026-11-18T17:00"}))
+
     def test_login_stays_active_until_logout_and_stores_hashes(self):
         self.assertEqual(self.request("/api/data")[0], 401)
         self.assertEqual(self.request("/api/login", "POST", {"username": "family1", "password": "wrong"})[0], 401)
