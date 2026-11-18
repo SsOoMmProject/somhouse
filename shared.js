@@ -27,7 +27,19 @@
       }
       if (!this.base && ['localhost', '127.0.0.1'].includes(location.hostname)) this.base = 'http://127.0.0.1:8787';
     }
-    async request(path, method = 'GET', body, base = this.base, token = this.token, timeoutMs = 15000) {
+    // The public relay (Tailscale Funnel) sometimes takes 5-20 seconds to open a connection.
+    // Requests that are safe to repeat get one more try; a POST (other than login) never repeats.
+    async request(path, method = 'GET', body, base = this.base, token = this.token, timeoutMs = 30000) {
+      const repeatable = method !== 'POST' || path === '/api/login';
+      try {
+        return await this.attempt(path, method, body, base, token, timeoutMs);
+      } catch (error) {
+        if (error.status || !repeatable) throw error;
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        return this.attempt(path, method, body, base, token, timeoutMs);
+      }
+    }
+    async attempt(path, method, body, base, token, timeoutMs) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
       try {
@@ -41,7 +53,7 @@
       } catch (error) {
         if (error.status) throw error;
         if (controller.signal.aborted) throw Error('응답이 늦어지고 있어요. 잠시 후 다시 시도해 주세요. 입력한 내용은 유지됩니다.');
-        throw Error('맥미니에 연결하지 못했어요. 연결을 확인하고 다시 시도해 주세요. 입력한 내용은 유지됩니다.');
+        throw Error('맥미니에 연결하지 못했어요. 인터넷 연결을 확인하고 다시 시도해 주세요. 입력한 내용은 유지됩니다.');
       } finally {clearTimeout(timeout);}
     }
     async login(base, username, password) {

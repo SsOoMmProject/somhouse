@@ -157,6 +157,10 @@ class FamilyAPI(unittest.TestCase):
         with self.store.connect() as db:
             self.assertIsNone(GoogleRecords.wake_from_sleep(fake, db, {"type": "feeding", "date": "2026-11-18T17:00"}))
 
+    def test_preflight_is_cached_by_the_browser(self):
+        code, _, headers = self.request("/api/data", "OPTIONS", origin="https://ssoommproject.github.io")
+        self.assertEqual((code, headers["Access-Control-Max-Age"]), (204, "600"))
+
     def test_login_stays_active_until_logout_and_stores_hashes(self):
         self.assertEqual(self.request("/api/data")[0], 401)
         self.assertEqual(self.request("/api/login", "POST", {"username": "family1", "password": "wrong"})[0], 401)
