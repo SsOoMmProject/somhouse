@@ -113,6 +113,7 @@ class FamilyAPI(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertTrue(view["read_only"])
         self.assertNotIn("실제병원", json.dumps(view, ensure_ascii=False))
+        self.assertNotIn("sources", view)  # no links that would open the viewer's own Google account
         self.assertTrue(all(view["data"][k] for k in ("records", "schedule", "shopping")))
         from server import validate_data
         validate_data(view["data"])

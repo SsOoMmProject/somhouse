@@ -76,6 +76,5 @@ def demo_payload(now=None):
          "status": "확인 필요", "suggest": {"category": "분유", "amount": ""}}]}
     return {"data": {"records": records, "schedule": schedule, "shopping": shopping},
             "aliases": {"부유": "분유"}, "calendar_events": calendar_events,
-            # A generic Calendar address (no account, no file ID) only turns on the voice-input help.
-            "sources": {"calendar": "https://calendar.google.com/calendar/r"},
+            # No Google links: on a phone they would open whatever Google account that phone is signed in to.
             "google_status": google_status, "read_only": True}

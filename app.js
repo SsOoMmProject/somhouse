@@ -216,7 +216,7 @@ function aliasList(){
 }
 // Shown only when the Google Calendar intake is connected. Static text, no user data.
 function voiceHelp(){
- if(!calendarLinked(shared?.sources))return '';
+ if(!calendarLinked(shared?.sources)&&!shared?.readOnly)return '';
  return `<details class="voice-help"><summary>ⓘ 음성·캘린더 입력 도움말 <span class="caption">기억한 말 관리</span></summary><ul><li><strong>말로:</strong> 네스트 허브·휴대폰·태블릿에서 “헤이 구글, 100미리 수유 캘린더에 업데이트”</li><li><strong>수면:</strong> “낮잠 40분”, “밤잠 2시간”처럼 말하거나 적어요. ‘수면’·‘잠’만 있으면 시각으로 낮잠·밤잠을 추정해 홈에서 한 번 확인해요. 길이를 말하지 않으면 캘린더 일정의 끝 시각을 써요.</li><li><strong>직접 입력:</strong> Google 캘린더 앱에서 새 일정 제목에 <strong>수유 100ml</strong>, <strong>분유 120미리</strong>, <strong>모유 15분</strong>처럼 적고 저장</li><li>제목에는 <strong>수유·분유·모유</strong>와 <strong>단위가 붙은 양</strong>(ml·미리·cc, 직수는 분)이 있어야 해요.</li><li>시각은 따로 고치지 않아도 돼요. 일정 시각이 입력한 때부터 2시간 안이거나 종일 일정이면 입력한 시각으로 저장해요. 지난 수유는 일정의 시작 시각을 실제 시각으로 맞춰 주세요.</li><li>같은 Google 계정의 기본 캘린더만 읽고, 약 30초 뒤 여기에 나타나요. 반복 일정과 2시간보다 먼 미래 일정은 저장하지 않아요.</li><li>‘수유 100ml’처럼 종류를 말하지 않았거나 ‘부유’처럼 비슷하게 들린 말은 일단 저장하고, 홈에서 분유·모유를 고르게 해요. 고른 말은 기억해서 다음부터 자동으로 구분해요.</li>${aliasList()}<li>양을 빼고 ‘분유’만 적었거나 알아듣기 어려운 입력은 위쪽 ‘확인 필요’에 모여요. 거기서 양과 종류를 넣어 저장해요.</li></ul></details>`;
 }
 function repeatButtons(){
