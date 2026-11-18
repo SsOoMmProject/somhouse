@@ -25,6 +25,7 @@ from calendar_records import FEEDING_KINDS, SLEEP_KINDS, SCHEMA as CALENDAR_SCHE
 from shopping_records import SCHEMA as SHOPPING_SCHEMA
 from google_delivery import SCHEMA as DELIVERY_SCHEMA
 from holidays import HolidayFeed, SCHEMA as HOLIDAY_SCHEMA, listing as holiday_listing
+from demo import GUEST, READ_ONLY_MESSAGE, demo_payload
 from keep_sync import (CONFIG_NAME as KEEP_CONFIG_NAME, SCHEMA as KEEP_SCHEMA,
                        KeepSync, configured_email, queue as queue_keep)
 
@@ -205,7 +206,7 @@ class Store:
                 raise Problem(401, "아이디 또는 비밀번호를 확인해 주세요.")
             token = secrets.token_urlsafe(32)
             db.execute("INSERT INTO sessions VALUES(?,?,?)", (hashlib.sha256(token.encode()).hexdigest(), username, NO_SESSION_EXPIRY))
-            return {"token": token, "username": username}
+            return {"token": token, "username": username, "read_only": username == GUEST}
 
     def change_password(self, token, current, new):
         with self.lock, self.connect() as db:
@@ -346,8 +347,8 @@ class Handler(BaseHTTPRequestHandler):
         store = self.server.store
         if self.command == "GET":
             with store.lock, store.connect() as db:
-                store.user(db, token)
-            return ai.status()
+                guest = store.user(db, token) == GUEST
+            return {**ai.status(), "enabled": False, "readOnly": True} if guest else ai.status()
 
         # Read the small body before taking the lock, but check the session
         # before validating it so signed-out callers only ever see 401.
@@ -355,6 +356,8 @@ class Handler(BaseHTTPRequestHandler):
         summary = None
         with store.lock, store.connect() as db:
             username = store.user(db, token)
+            if username == GUEST:
+                raise Problem(403, READ_ONLY_MESSAGE)
             question, scope = parse_question(body)
             if not ai.binary:
                 raise Problem(503, "관리자가 맥미니에 Antigravity CLI를 설정해야 해요.")
@@ -410,6 +413,9 @@ class Handler(BaseHTTPRequestHandler):
                     raise Problem(400, "현재 비밀번호를 입력해 주세요.")
                 if not valid_new_password(new):
                     raise Problem(400, f"새 비밀번호를 {MIN_PASSWORD_LENGTH}~{MAX_PASSWORD_LENGTH}자로 입력해 주세요.")
+                with store.lock, store.connect() as db:
+                    if store.user(db, token) == GUEST:
+                        raise Problem(403, READ_ONLY_MESSAGE)
                 with self.server.credential_attempt(403):
                     store.change_password(token, current, new)
                 self.respond(200, {"ok": True})
@@ -417,10 +423,16 @@ class Handler(BaseHTTPRequestHandler):
             with store.lock, store.connect() as db:
                 username = store.user(db, token)
                 if path == "/api/me" and self.command == "GET":
-                    result = {"username": username}
+                    result = {"username": username, "read_only": username == GUEST}
                 elif path == "/api/logout" and self.command == "POST":
                     db.execute("DELETE FROM sessions WHERE token=?", (hashlib.sha256(token.encode()).hexdigest(),))
                     result = {"ok": True}
+                elif username == GUEST:
+                    # The guest never reads family records and never writes anything: made-up records only.
+                    if path != "/api/data" or self.command != "GET":
+                        raise Problem(403, READ_ONLY_MESSAGE)
+                    self.respond(200, {**demo_payload(), "holidays": holiday_listing(db)})
+                    return
                 elif path == "/api/data" and self.command == "GET":
                     result = {"data": store.state(db), "aliases": load_aliases(db), "holidays": holiday_listing(db)}
                     if self.server.google is not None:
@@ -604,7 +616,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("init", "serve", "password", "backup", "restore",
                         "antigravity-config", "antigravity-test", "keep-config", "keep-test", "keep-status",
-                        "google-status", "google-retry", "google-backfill", "delete-record"),
+                        "google-status", "google-retry", "google-backfill", "delete-record", "guest"),
                         nargs="?", default="serve")
     parser.add_argument("--kind", choices=KINDS, help="delete-record: 기록 종류")
     parser.add_argument("--item-id", help="delete-record: 삭제할 기록 ID")
@@ -695,6 +707,11 @@ def main():
         except (OSError, ValueError, Problem) as error:
             parser.exit(1, f"복원하지 못했습니다. 기존 기록은 유지됩니다: {error}\n")
         print(f"관리자 복원 완료: {result['added']}개 추가, {result['skipped']}개 중복 건너뜀. 기존 기록 유지.")
+    elif args.command == "guest":
+        # Read-only demo account. Running it again issues a new password and signs the guest out everywhere.
+        password = secrets.token_urlsafe(12)
+        store.password(GUEST, password)
+        print(f"게스트(읽기 전용, 예시 기록만 표시)\n아이디: {GUEST}\n비밀번호: {password}")
     elif args.command == "password":
         with store.connect() as db:
             if not db.execute("SELECT 1 FROM users WHERE username=?", (args.username,)).fetchone():
@@ -706,7 +723,7 @@ def main():
         print("비밀번호를 변경하고 해당 계정의 기존 로그인을 해제했습니다.")
     else:
         with store.connect() as db:
-            if db.execute("SELECT COUNT(*) FROM users").fetchone()[0] != 2:
+            if db.execute("SELECT COUNT(*) FROM users WHERE username<>?", (GUEST,)).fetchone()[0] != 2:
                 parser.error("먼저 python3 server.py init 명령으로 두 계정을 생성해 주세요.")
         server = FamilyServer(("127.0.0.1", args.port), store, args.origin, holidays=True)
         print(f"솜하우스: http://127.0.0.1:{server.server_port}/", flush=True)

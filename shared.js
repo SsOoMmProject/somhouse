@@ -12,7 +12,7 @@
   }
   class Client {
     constructor() {
-      this.base = ''; this.token = ''; this.username = ''; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = [];
+      this.base = ''; this.token = ''; this.username = ''; this.readOnly = false; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = [];
       try {this.base = serverURL(root.SOMHOUSE_API_URL);} catch {}
       if (['localhost', '127.0.0.1'].includes(location.hostname)) this.base = 'http://127.0.0.1:8787';
       try { this.base = serverURL(localStorage.getItem(SERVER)); } catch {}
@@ -20,7 +20,7 @@
         try {
           const saved = JSON.parse(root[name].getItem(SESSION));
           if (!saved || typeof saved.token !== 'string' || !saved.token || typeof saved.username !== 'string') continue;
-          this.base = serverURL(saved.base); this.token = saved.token; this.username = saved.username;
+          this.base = serverURL(saved.base); this.token = saved.token; this.username = saved.username; this.readOnly = saved.readOnly === true;
           if (name === 'sessionStorage') this.remember();
           break;
         } catch {}
@@ -47,12 +47,12 @@
     async login(base, username, password) {
       base = serverURL(base);
       const result = await this.request('/api/login', 'POST', {username, password}, base, '');
-      this.base = base; this.token = result.token; this.username = result.username; this.sources = null; this.googleStatus = null;
+      this.base = base; this.token = result.token; this.username = result.username; this.readOnly = result.read_only === true; this.sources = null; this.googleStatus = null;
       try {localStorage.setItem(SERVER, base);} catch {}
       this.remember();
     }
     remember() {
-      const saved = JSON.stringify({base: this.base, token: this.token, username: this.username});
+      const saved = JSON.stringify({base: this.base, token: this.token, username: this.username, readOnly: this.readOnly});
       try {
         localStorage.setItem(SESSION, saved);
       } catch {
@@ -63,7 +63,7 @@
     }
     clear() {
       const token = this.token;
-      this.token = ''; this.username = ''; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = [];
+      this.token = ''; this.username = ''; this.readOnly = false; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = [];
       for (const name of ['localStorage', 'sessionStorage']) {
         try {
           const storage = root[name];
@@ -92,7 +92,7 @@
     }
     async load() {
       const token = this.token, result = await this.request('/api/data');
-      if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null; this.aliases = result.aliases || {}; this.calendarEvents = Array.isArray(result.calendar_events) ? result.calendar_events : []; this.holidays = Array.isArray(result.holidays) ? result.holidays : [];}
+      if (token === this.token) {if (this.readOnly !== (result.read_only === true)) {this.readOnly = result.read_only === true; this.remember();} this.sources = result.sources || null; this.googleStatus = result.google_status || null; this.aliases = result.aliases || {}; this.calendarEvents = Array.isArray(result.calendar_events) ? result.calendar_events : []; this.holidays = Array.isArray(result.holidays) ? result.holidays : [];}
       return result.data;
     }
     async put(kind, item) {

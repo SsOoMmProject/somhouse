@@ -16,7 +16,7 @@ function browser({raw=JSON.stringify(blank()),session=null,local=new Map([['somh
  fetch:async(url,options)=>{
   calls.push({url,options});if(server.failure)throw server.failure;
   let result;
-  if(url.endsWith('/api/login'))result={token:'test-token',username:JSON.parse(options.body).username};
+  if(url.endsWith('/api/login')){const username=JSON.parse(options.body).username;result={token:'test-token',username,read_only:username==='guest'};}
   else if(url.endsWith('/api/merge')){
    const original=JSON.parse(options.body);
    for(const k of Object.keys(original))for(const item of original[k]){const key=k+':'+item.id;if(!server.imported.has(key)&&!server.data[k].some(x=>x.id===item.id))server.data[k].push(clone(item));server.imported.add(key);}
@@ -41,7 +41,7 @@ function browser({raw=JSON.stringify(blank()),session=null,local=new Map([['somh
    server.data[kind]=server.data[kind].filter(x=>x.id!==item.id);server.data[kind].push(clone(item));if(item.heard&&['분유','모유','혼합'].includes(item.category))(server.aliases||={})[item.heard]=item.category;result={data:clone(server.data),aliases:clone(server.aliases||{})};
   }else if(options.method==='DELETE'){
    const parts=url.split('/'),kind=parts.at(-2),id=decodeURIComponent(parts.at(-1));server.data[kind]=server.data[kind].filter(x=>x.id!==id);result={data:clone(server.data)};
-  }else result={data:clone(server.data),sources:server.sources,google_status:server.googleStatus,aliases:server.aliases,calendar_events:server.calendarEvents,holidays:server.holidays};
+  }else result={data:clone(server.data),sources:server.sources,google_status:server.googleStatus,aliases:server.aliases,calendar_events:server.calendarEvents,holidays:server.holidays,read_only:server.readOnly};
   if(url.endsWith('/api/data')&&server.readGate){const gate=server.readGate;server.readGate=null;await gate;}
   return {ok:true,json:async()=>result};
  }};

@@ -102,3 +102,18 @@ test('unchanged polls do not rebuild the search form and mid-read edits are pres
  assert.equal(b.get('#content').innerHTML,'keep current form');
  b.context.document.activeElement=null;await b.eval('refreshShared()');assert.notEqual(b.get('#content').innerHTML,'keep current form');
 });
+
+test('guest login is read only: no device merge, no writes, no password change',async()=>{
+ const raw=JSON.stringify({records:[],schedule:[],shopping:[{id:'device',title:'기기 기록',quantity:'1'}]});
+ const server=family();server.readOnly=true;
+ const b=browser({raw,server});await b.login('guest');
+ assert.equal(b.eval('shared.readOnly'),true);
+ assert.ok(!b.calls.some(x=>x.url.endsWith('/api/merge')));
+ assert.equal(b.get('#connection-title').textContent,'게스트 보기 · 예시 기록');
+ assert.equal(b.get('#change-password').hidden,true);
+ const count=b.calls.length;
+ assert.equal(await b.eval("changeItem('shopping',{id:'x',title:'차단',quantity:'1'})"),false);
+ assert.equal(b.calls.length,count);assert.match(b.alerts.at(-1),/볼 수만/);
+ assert.equal(JSON.parse(b.local.get('somhouse-session-v1')).readOnly,true);
+ assert.equal(browser({local:b.local,server}).eval('shared.readOnly'),true);
+});

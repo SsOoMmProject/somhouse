@@ -100,6 +100,37 @@ class FamilyAPI(unittest.TestCase):
         with reopened.connect() as db:
             self.assertEqual(reopened.state(db)["shopping"], [a])
 
+    def test_guest_sees_only_demo_records_and_can_change_nothing(self):
+        family = self.login()
+        secret = {"id": "real", "type": "hospital", "date": "2026-11-01T10:00", "hospital": "실제병원", "reason": "비공개"}
+        self.assertEqual(self.request("/api/items/records/real", "PUT", secret, family)[0], 200)
+        self.store.password("guest", "guest-password-1")
+        code, login, _ = self.request("/api/login", "POST", {"username": "guest", "password": "guest-password-1"})
+        self.assertEqual((code, login["read_only"]), (200, True))
+        guest = login["token"]
+        self.assertEqual(self.request("/api/me", token=guest)[1], {"username": "guest", "read_only": True})
+        code, view, _ = self.request("/api/data", token=guest)
+        self.assertEqual(code, 200)
+        self.assertTrue(view["read_only"])
+        self.assertNotIn("실제병원", json.dumps(view, ensure_ascii=False))
+        self.assertTrue(all(view["data"][k] for k in ("records", "schedule", "shopping")))
+        from server import validate_data
+        validate_data(view["data"])
+        blocked = [("/api/items/records/real", "DELETE", None), ("/api/items/shopping/x", "PUT", self.item("x")),
+                   ("/api/merge", "POST", self.blank([self.item("m")])), ("/api/confirm", "POST", {"forget": "부유"}),
+                   ("/api/review", "POST", {"key": "k", "action": "dismiss"}),
+                   ("/api/ai", "POST", {"question": "안녕", "scope": "none"}),
+                   ("/api/password", "POST", {"currentPassword": "guest-password-1", "newPassword": "another-password-2"})]
+        for path, method, body in blocked:
+            self.assertEqual(self.request(path, method, body, guest)[0], 403, path)
+        self.assertFalse(self.request("/api/ai", token=guest)[1]["enabled"])
+        self.assertEqual(self.request("/api/data", token=family)[1]["data"],
+                         {"records": [secret], "schedule": [], "shopping": []})
+        self.assertNotIn("read_only", self.request("/api/data", token=family)[1])
+        self.assertEqual(self.request("/api/logout", "POST", {}, guest)[0], 200)
+        with self.store.connect() as db:
+            db.execute("DELETE FROM users WHERE username='guest'")
+
     def test_login_stays_active_until_logout_and_stores_hashes(self):
         self.assertEqual(self.request("/api/data")[0], 401)
         self.assertEqual(self.request("/api/login", "POST", {"username": "family1", "password": "wrong"})[0], 401)
