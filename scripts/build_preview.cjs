@@ -18,7 +18,7 @@ const fetcher = async url => {
   await b.login('guest');
   const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const nav = index.match(/<nav[^>]*>[\s\S]*?<\/nav>/)[0].replace(' hidden', '');
-  const ai = index.match(/<section id="ai-panel"[\s\S]*?<\/section>/)[0].replace(' hidden', '').replace('<fieldset id="ai-fields" disabled>', '<fieldset id="ai-fields">');
+  const ai = index.match(/<section id="ai-panel"[\s\S]*?<\/section>/)[0].replace(' hidden', '').replace('<p id="ai-status" role="status"></p>', '<p id="ai-status" role="status">관리자가 맥미니에 Antigravity CLI를 연결하면 질문할 수 있어요. (연결 전에는 입력칸이 비활성)</p>');
   const today = b.eval('Somhouse.localDateTime()');
   const screen = (title, note, page, extra = '') => {
     b.eval(`page=${JSON.stringify(page)};render()`);
@@ -36,14 +36,14 @@ const fetcher = async url => {
   const header = `<section class="card connection"><div class="heading"><h2>가족 기록 · family1</h2><div class="account-actions"><button type="button" class="plain">비밀번호 변경</button><button type="button" class="plain">로그아웃</button></div></div><p>기록은 자동으로 저장되고 가족과 함께 업데이트돼요.</p></section>`;
   b.eval(`calendarDay=${JSON.stringify(today.slice(0, 10))}`);
   const screens = [
-    screen('1. 홈', '로그인 직후 첫 화면. 상단(모든 화면 공통)에는 아래 계정 카드가 있고, 그 아래 메뉴가 있습니다. ‘지금 아기 상태’ 카드의 수면 시작/종료 버튼, 빠른 기록 버튼, 최근 수유 다시 기록, 종류 확인 상자, 기간별 요약, 최근 기록·다가오는 일정·구매 예정 카드 순서입니다.', 'home'),
-    screen('2. 육아 기록', '수유·수면·병원 기록 전체 목록. 검색·종류·기간 필터와 기록별 수정/삭제 버튼.', 'records'),
-    screen('3. 수유 통계', '오늘·어제·이번 주·지난주 요약과 최근 7일/30일 일별 수유 횟수·용량 표.', 'stats'),
-    screen('4. 일정', '월간 가족 달력(수유·일정·수면·구매·Google 캘린더 표시, 공휴일 빨간 글씨)은 이 화면에만 있습니다. 오늘 날짜를 누른 상태이며, 그 아래 다가오는 일정이 가까운 순, 지난 일정은 접혀 있습니다.', 'schedule'),
-    screen('5. 구매 목록', '구매 예정/완료 상태 전환, 수량, 상품 링크.', 'shopping'),
-    screen('6. 확인 필요', '음성(Nest → Google Tasks)이나 Google 캘린더로 들어왔지만 자동 저장하지 못한 입력을 정정하는 화면. 홈의 Google 연동 상태에서 들어옵니다.', 'review'),
+    screen('1. 홈', '로그인 직후 첫 화면. 맨 위에 얇은 계정 줄, 휴대폰에서는 메뉴가 화면 아래 고정 탭 바(홈·기록·통계·일정·구매·AI)입니다. 순서: 지금 아기 상태(마지막 수유 경과 시간, 마지막 수면 ‘깬 지 N분’, 수면 시작 버튼 — 자는 중에는 ‘☀️ 수면 종료’로 바뀌고 수유를 기록해도 수면이 끝남) → 빠른 기록 → 최근 수유 다시 기록 → ⚠️ 확인할 것(종류만 고르면 되는 기록 + 저장하지 못한 음성 입력) → 다가오는 일정·구매 예정·최근 기록 → 기간별 요약(주 단위는 하루 평균) → 맨 아래 Google 연동 한 줄(문제가 있으면 맨 위 경고로 바뀜).', 'home'),
+    screen('2. 육아 기록', '날짜별로 묶고 하루 소계를 붙인 목록(기본 최근 3일, ‘이전 기록 더 보기’). 카드를 누르면 수정창이 열리고 삭제는 그 안에 있습니다. 필터는 고르는 즉시 적용. 맨 아래 음성·캘린더 입력 도움말.', 'records'),
+    screen('3. 수유 통계', '7일/30일 선택, 하루 평균 횟수·용량, 평균 수유 간격, 기간 합계, 일별 횟수·용량 표(막대는 옆 칸 수치의 시각화).', 'stats'),
+    screen('4. 일정', '월간 가족 달력(수유·일정·수면·구매·Google 캘린더, 공휴일 빨간 글씨)은 이 화면에만 있습니다. 오늘 날짜를 누른 상태. 아래 목록은 ‘다가오는 N · 지난 M’, 가까운 순, D-day 배지(오늘·내일·D-n), 지난 일정은 접힘. 입력 항목: 날짜와 시간·누구 일정·일정 이름·장소·메모.', 'schedule'),
+    screen('5. 구매 목록', '‘살 것 N · 산 것 M’. 예정일이 가까운 순, 날짜 없는 항목은 그 아래. ‘✓ 샀어요’ 한 번으로 완료, 산 것은 접혀 있고 ‘다시 사기’로 되돌림. 수량 기본값 1.', 'shopping'),
+    screen('6. (메뉴 없음) 확인 필요 전체 보기', '메뉴 탭이 아닙니다. 홈 ‘확인할 것’에 3건 넘게 쌓였을 때 ‘나머지 보기’로 들어오는 화면입니다. 음성(Nest → Google Tasks)이나 Google 캘린더로 들어왔지만 자동 저장하지 못한 입력을 정정합니다.', 'review'),
     `<article class="preview-screen" id="screen-ai"><h2 class="preview-title">7. AI 대화</h2><p class="preview-note">Antigravity CLI(Google)로 질문하는 화면. 관리자가 연결해야 활성화됩니다.</p><div class="phone"><main>${nav.replace('data-page="ai">', 'data-page="ai" class="active">')}${ai}</main></div></article>`,
-    form('feeding', '8. 입력창 · 수유 기록', '‘수유 기록’·‘수유 추가’ 버튼을 누르면 열리는 입력창. 양은 텍스트로 ‘120ml’, ‘15분’처럼 입력합니다.'),
+    form('feeding', '8. 입력창 · 수유 기록', '날짜와 시간은 지금으로 채워짐. 분유·혼합은 ml, 모유는 분 단위가 고정되고 숫자만 입력하거나 ±10ml/±5분 버튼으로 조절. 기본값은 같은 종류의 직전 양. 기타만 자유 입력.'),
     form('sleep', '9. 입력창 · 수면 기록', '수기 입력용. 보통은 홈의 수면 시작/종료 버튼을 쓰며, 수면 중 수유를 기록하면 수면이 자동으로 끝납니다.'),
     form('hospital', '10. 입력창 · 병원 방문', ''),
     form('schedule', '11. 입력창 · 일정', ''),

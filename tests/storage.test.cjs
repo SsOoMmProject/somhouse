@@ -72,29 +72,28 @@ test('recent feeding button only prefills the form and never saves by itself',as
  assert.equal(b.get('#dialog').open,true);
  assert.equal(b.eval('editing'),null);
  assert.match(b.get('#fields').innerHTML,/<option selected>분유<\/option>/);
- assert.match(b.get('#fields').innerHTML,/name="amount" type="text" value="120ml"/);
+ assert.match(b.get('#fields').innerHTML,/name="amount" type="text" inputmode="decimal" value="120"[^>]*><span class="unit">ml<\/span>/);
  assert.doesNotMatch(b.get('#fields').innerHTML,/value="2026-01-01T09:00"/);
  assert.equal(writes(),before);
 });
 
-test('healthy Google status is one folded line and is not rewritten while unchanged',async()=>{
+test('healthy Google status is one folded line at the bottom of home, problems go to the top',async()=>{
  const server=family();
  server.googleStatus={auth_state:'ready',review:0,errors:[],services:{
   sheets:{pending:0,retrying:0,failed:0,last_success:'2026-11-16T12:03:44'},
   tasks:{pending:1,retrying:0,failed:0,last_success:'2026-11-16T11:00:00'}}};
- const b=browser({server});await b.login();
+ const b=browser({server});await b.login();b.eval("page='home';render()");
  const status=b.get('#google-status');
- assert.match(status.innerHTML,/Google 연동 정상<\/strong> · 전송 대기 1건 · 마지막 전송 2026-11-16 12:03/);
- assert.match(status.innerHTML,/<details><summary>자세히 보기<\/summary>/);
- // Simulate the browser reflecting an opened <details>; an unchanged poll must not reset it.
- status.innerHTML=status.innerHTML.replace('<details>','<details open="">');
- await b.eval('refreshShared(true)');
- assert.match(status.innerHTML,/<details open="">/);
+ assert.equal(status.hidden,true);
+ const html=b.get('#content').innerHTML;
+ assert.match(html,/<details class="google-footer"><summary>🟢 Google 연동 정상 · 전송 대기 1건 · 마지막 전송 12:03<\/summary>/);
+ assert.ok(html.indexOf('google-footer')>html.indexOf('summary-cards'));
  server.googleStatus={...server.googleStatus,services:{sheets:{pending:0,retrying:0,failed:2,last_success:null}}};
  await b.eval('refreshShared(true)');
+ assert.equal(status.hidden,false);
  assert.match(status.innerHTML,/<strong>Google 연동 상태<\/strong><ul>/);
  assert.match(status.innerHTML,/실패 2건/);
- assert.doesNotMatch(status.innerHTML,/<details/);
+ assert.doesNotMatch(b.get('#content').innerHTML,/google-footer/);
 });
 
 test('unit-less feedings show no preset and ask before saving',async()=>{
@@ -104,8 +103,18 @@ test('unit-less feedings show no preset and ask before saving',async()=>{
  b.eval("page='home';render()");
  assert.doesNotMatch(b.get('#content').innerHTML,/data-repeat-category/);
  const asked=[];b.context.confirm=text=>{asked.push(text);return false;};
+ // 모유 is typed as a number and saved in minutes; 분유 in ml.
  b.eval("openForm('feeding')");
  b.get('#form').values={date:'2026-01-02T09:00',category:'모유',amount:'3',memo:''};
+ await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
+ assert.equal(asked.length,0);assert.ok(b.server.data.records.some(x=>x.amount==='3분'));
+ b.eval("openForm('feeding')");
+ b.get('#form').values={date:'2026-01-02T10:00',category:'분유',amount:'130',memo:''};
+ await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
+ assert.ok(b.server.data.records.some(x=>x.amount==='130ml'));
+ // 기타 stays free text and still asks about a missing unit.
+ b.eval("openForm('feeding')");
+ b.get('#form').values={date:'2026-01-02T11:00',category:'기타',amount:'3',memo:''};
  const before=b.calls.length;
  await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
  assert.equal(asked.length,1);assert.match(asked[0],/단위가 없어요/);
@@ -121,7 +130,9 @@ test('review inputs can be saved from a prefilled form or dismissed on the web',
  const entry=(key,title)=>({key,source:'Calendar',title,when:'2026-11-17T07:12',status:'확인 필요',suggest:{category:'기타',amount:'100ml'}});
  server.googleStatus={auth_state:'ready',review:2,errors:[],services:{},review_items:[entry('calendar:a','수유 100미리 병원'),entry('tasks:b','솜하우스 수유 조금')]};
  const b=browser({server});await b.login();
- assert.match(b.get('#google-status').innerHTML,/data-page="review">확인 필요 2건 정리하기/);
+ assert.equal(b.get('#google-status').hidden,true);
+ b.eval("page='home';render()");
+ assert.match(b.get('#content').innerHTML,/⚠️ 확인할 것 2건<\/h2><h3>저장하지 못한 음성·캘린더 입력 · 2건<\/h3>[^]*data-review-key="calendar:a" data-review-action="save"/);
  b.eval("page='review';render()");
  const html=b.get('#content').innerHTML;
  assert.match(html,/수유 100미리 병원/);assert.match(html,/data-review-key="tasks:b" data-review-action="dismiss"/);
@@ -130,7 +141,7 @@ test('review inputs can be saved from a prefilled form or dismissed on the web',
  assert.equal(b.get('#dialog').open,true);
  assert.match(b.get('#formtitle').textContent,/확인 필요 정정/);
  assert.match(b.get('#fields').innerHTML,/name="date" type="datetime-local" value="2026-11-17T07:12"/);
- assert.match(b.get('#fields').innerHTML,/name="amount" type="text" value="100ml"/);
+ assert.match(b.get('#fields').innerHTML,/name="amount" type="text" inputmode="text" value="100ml"/);
  assert.match(b.get('#fields').innerHTML,/음성 원문: 수유 100미리 병원/);
  b.get('#form').values={date:'2026-11-17T07:12',category:'분유',amount:'100ml',memo:''};
  await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
@@ -153,6 +164,8 @@ test('voice and calendar help appears only when the Calendar intake is connected
  assert.doesNotMatch(plain.get('#content').innerHTML,/voice-help/);
  const server=family();server.sources={calendar:'https://calendar.google.com/calendar/'};
  const b=browser({server});await b.login();b.eval("page='home';render()");
+ assert.doesNotMatch(b.get('#content').innerHTML,/voice-help/);
+ b.eval("page='records';render()");
  assert.match(b.get('#content').innerHTML,/<details class="voice-help">/);
  assert.match(b.get('#content').innerHTML,/수유 100ml/);
 });
@@ -165,7 +178,7 @@ test('unclear feeding kinds are settled with one tap, learned, and can be forgot
   {id:'c',type:'feeding',date:'2026-11-17T10:00',category:'분유',amount:'120ml',memo:''});
  const b=browser({server});await b.login();b.eval("page='home';render()");
  let html=b.get('#content').innerHTML;
- assert.match(html,/종류를 골라 주세요 · 2건/);assert.match(html,/들린 말 ‘부유’/);
+ assert.match(html,/종류만 골라 주세요 · 2건/);assert.match(html,/들린 말 ‘부유’/);
  assert.match(html,/data-confirm-id="a" data-confirm-category="분유"/);
  assert.doesNotMatch(html,/data-confirm-id="c"/);
  const click=dataset=>b.events.get('click')({target:{closest:()=>({dataset})}});
@@ -173,11 +186,12 @@ test('unclear feeding kinds are settled with one tap, learned, and can be forgot
  assert.deepEqual(server.confirms,[{id:'a',category:'분유'}]);
  assert.match(b.get('#connection-status').textContent,/‘부유’는 분유로 기억/);
  html=b.get('#content').innerHTML;
- assert.match(html,/종류를 골라 주세요 · 1건/);assert.match(html,/‘부유’→분유 <button class="plain" data-forget="부유">잊기/);
+ assert.match(html,/종류만 골라 주세요 · 1건/);
+ b.eval("page='records';render()");assert.match(b.get('#content').innerHTML,/‘부유’→분유 <button class="plain" data-forget="부유">잊기/);b.eval("page='home';render()");
  await click({confirmId:'b',confirmCategory:'주스'});
  assert.equal(server.confirms.length,1);
  await click({confirmId:'b',confirmCategory:'기타'});
- assert.doesNotMatch(b.get('#content').innerHTML,/종류를 골라 주세요/);
+ assert.doesNotMatch(b.get('#content').innerHTML,/종류만 골라 주세요/);
  await click({forget:'부유'});
  assert.deepEqual(server.confirms.at(-1),{forget:'부유'});
  assert.doesNotMatch(b.get('#content').innerHTML,/data-forget/);
@@ -223,7 +237,7 @@ test('review cards explain why an input waits and name their buttons by situatio
  assert.match(html,/data-review-key="calendar:c" data-review-action="dismiss">지금 기록 그대로 두기/);
  await b.events.get('click')({target:{closest:()=>({dataset:{reviewKey:'calendar:a',reviewAction:'save'}})}});
  assert.match(b.get('#fields').innerHTML,/<option selected>분유<\/option>/);
- assert.match(b.get('#fields').innerHTML,/name="amount" type="text" value=""/);
+ assert.match(b.get('#fields').innerHTML,/name="amount" type="text" inputmode="decimal" value=""/);
 });
 
 test('the family calendar lives on the schedule page and shows feedings, schedules, dated shopping and Google events',async()=>{
@@ -301,9 +315,12 @@ test('home puts recent feedings under their own heading and the voice help after
  const b=browser({server});await b.login();b.eval("page='home';render()");
  const html=b.get('#content').innerHTML;
  assert.match(html,/<section class="repeat" aria-labelledby="repeat-title"><h2 id="repeat-title">최근 수유 다시 기록<\/h2><div class="quick"><button class="secondary" data-repeat-category="분유"/);
- assert.match(html,/<summary>ⓘ 음성·캘린더 입력 도움말 <span class="caption">기억한 말 관리<\/span><\/summary>/);
- assert.ok(html.indexOf('summary-cards')<html.indexOf('voice-help'));
- assert.ok(html.indexOf('repeat-title')<html.indexOf('summary-cards'));
+ assert.doesNotMatch(html,/voice-help/);
+ assert.ok(html.indexOf('now-card')<html.indexOf('repeat-title'));
+ assert.ok(html.indexOf('repeat-title')<html.indexOf('다가오는 일정'));
+ assert.ok(html.indexOf('다가오는 일정')<html.indexOf('summary-cards'));
+ b.eval("page='records';render()");
+ assert.match(b.get('#content').innerHTML,/<summary>ⓘ 음성·캘린더 입력 도움말 <span class="caption">기억한 말 관리<\/span><\/summary>/);
 });
 
 test('calendar marks Korean holidays and substitutes, and upcoming mixes Somhouse and Google events',async()=>{
@@ -385,10 +402,10 @@ test('home leads with the last feeding and sleep; schedules list the soonest fir
  b.eval("page='schedule';render()");
  html=b.get('#content').innerHTML;
  assert.ok(html.indexOf('가까운 일정')<html.indexOf('먼 일정'));
- assert.match(html,/다가오는 일정 2개/);
+ assert.match(html,/다가오는 2 · 지난 1/);
  assert.match(html,/<details class="past"><summary>지난 일정 1개<\/summary>[^]*지난 일정<\/strong>/);
  server.data.records.find(x=>x.id==='z').end=at(-5);await b.eval('refreshShared(true)');b.eval("page='home';render()");
- assert.match(b.get('#content').innerHTML,/마지막 수면<\/p><strong>25분<\/strong><span>[^<]*낮잠 · 깬 지 5분/);
+ assert.match(b.get('#content').innerHTML,/마지막 수면<\/p><strong>깬 지 5분<\/strong><span>낮잠 25분 · /);
 });
 
 test('sleep start and end buttons, and a feeding ends the open sleep',async()=>{
@@ -415,4 +432,28 @@ test('sleep start and end buttons, and a feeding ends the open sleep',async()=>{
  await b.eval("document.querySelector('#form').onsubmit({preventDefault(){},target:document.querySelector('#form')})");
  assert.equal(server.data.records.find(x=>x.id==='s2').end,b.eval('Somhouse.localDateTime()'));
  assert.match(b.get('#connection-status').textContent,/수유를 기록해서 낮잠을 .*에 끝냈어요 \(1시간 30분\)/);
+});
+
+test('records are grouped by day, cards open the editor, and delete lives in the dialog',async()=>{
+ const server=family(),pad=n=>String(n).padStart(2,'0'),day=n=>{const d=new Date(Date.now()-n*86400000);return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;};
+ for(const n of [0,1,5])server.data.records.push({id:'f'+n,type:'feeding',date:day(n)+'T00:05',category:'분유',amount:'100ml',memo:''});
+ server.data.shopping.push({id:'p1',title:'손수건',quantity:'5장',done:'no'},{id:'p2',title:'분유',quantity:'1통',date:day(-3),done:'no'},{id:'p3',title:'물티슈',quantity:'1',date:day(-1),done:'yes'});
+ const b=browser({server});await b.login();b.eval("page='records';render()");
+ let html=b.get('#content').innerHTML;
+ assert.match(html,/<h3 class="day-head">[^<]+<span>🍼 1회 · 100ml<\/span><\/h3>/);
+ assert.match(html,/data-add="sleep">수면 추가/);
+ assert.doesNotMatch(html,/data-id="f5"/);assert.match(html,/data-more-days="7">이전 기록 더 보기 \(1일 남음\)/);
+ assert.doesNotMatch(html,/data-action="delete"/);
+ const click=dataset=>b.events.get('click')({target:{closest:sel=>sel==='a'?null:({dataset})}});
+ await click({moreDays:'7'});assert.match(b.get('#content').innerHTML,/data-id="f5"/);
+ await click({action:'edit',key:'records',id:'f0'});
+ assert.equal(b.get('#dialog').open,true);assert.equal(b.get('#delete-item').hidden,false);
+ await b.get('#delete-item').onclick();
+ assert.ok(!server.data.records.some(x=>x.id==='f0'));
+ b.eval("openForm('shopping')");assert.match(b.get('#fields').innerHTML,/name="quantity" type="text" value="1"/);assert.equal(b.get('#delete-item').hidden,true);
+ b.get('#dialog').open=false;
+ b.eval("page='shopping';render()");html=b.get('#content').innerHTML;
+ assert.ok(html.indexOf('분유')<html.indexOf('손수건'));
+ assert.match(html,/살 것 2 · 산 것 1/);assert.match(html,/<details class="past"><summary>산 것 1개<\/summary>[^]*다시 사기/);
+ assert.match(html,/✓ 샀어요/);
 });
