@@ -226,7 +226,7 @@ test('review cards explain why an input waits and name their buttons by situatio
  assert.match(b.get('#fields').innerHTML,/name="amount" type="text" value=""/);
 });
 
-test('the family calendar sits above the menu and shows feedings, schedules, dated shopping and Google events',async()=>{
+test('the family calendar lives on the schedule page and shows feedings, schedules, dated shopping and Google events',async()=>{
  const server=family();const today=new Date();const pad=n=>String(n).padStart(2,'0');
  const key=`${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
  server.data.records.push({id:'a',type:'feeding',date:key+'T00:01',category:'분유',amount:'100ml',memo:'음성 원문: 뷰유'});
@@ -238,6 +238,8 @@ test('the family calendar sits above the menu and shows feedings, schedules, dat
  assert.doesNotMatch(html,/cal-grid/);
  for(const label of ['오늘','어제','이번 주','지난주'])assert.match(html,new RegExp(`<p>${label}<span`));
  assert.match(html,/<strong>1회 · 100ml<\/strong>/);
+ assert.equal(b.get('#dashboard').hidden,true);assert.match(html,/now-card/);
+ b.eval("page='schedule';render()");
  html=b.get('#dashboard').innerHTML;assert.equal(b.get('#dashboard').hidden,false);
  assert.match(html,new RegExp(`data-cal-day="${key}" aria-label="${key} 수유 1회 일정 2건 구매 1건 구글 2건"`));
  assert.match(html,/🍼1 100<\/span><span class="mark plan">📅2<\/span><span class="mark shop">🛒1<\/span><span class="mark gcal">📆2/);
@@ -264,7 +266,7 @@ test('the family calendar sits above the menu and shows feedings, schedules, dat
  assert.match(html,new RegExp(`${next.getFullYear()}년 ${next.getMonth()+1}월`));assert.match(html,/이번 달로/);assert.doesNotMatch(html,/cal-detail/);
  // The stats page keeps the summary cards and tables, without the calendar.
  b.eval("page='stats';render()");
- assert.match(b.get('#content').innerHTML,/summary-cards/);assert.match(b.get('#dashboard').innerHTML,/cal-grid/);
+ assert.match(b.get('#content').innerHTML,/summary-cards/);assert.equal(b.get('#dashboard').hidden,true);assert.doesNotMatch(b.get('#dashboard').innerHTML,/cal-grid/);
  // A new shopping item starts without a date; schedule items keep their who.
  b.eval("openForm('shopping')");
  assert.match(b.get('#fields').innerHTML,/name="date" type="date" value=""/);
@@ -287,7 +289,7 @@ test('Google links keep the connected account and reject other addresses',async(
  await b.eval('refreshShared(true)');
  assert.equal(b.get('#raw-sources').innerHTML,'');
  server.calendarEvents=[{id:'g',date:'2026-11-17T21:30',end:'2026-11-17T22:30',allDay:false,title:'엄마약속',link:'javascript:alert(1)'}];
- await b.eval('refreshShared(true)');b.eval("calendarDay='2026-11-17';calendarMonth='2026-11';render()");
+ await b.eval('refreshShared(true)');b.eval("page='schedule';calendarDay='2026-11-17';calendarMonth='2026-11';render()");
  assert.match(b.get('#dashboard').innerHTML,/21:30 · 엄마약속<\/p>/);
  b.eval("page='home';render()");
  assert.match(b.get('#content').innerHTML,/<button class="secondary" data-add="feeding">수유 기록<\/button>/);
@@ -312,7 +314,7 @@ test('calendar marks Korean holidays and substitutes, and upcoming mixes Somhous
  server.calendarEvents=[{id:'g',date:fkey+'T19:00',end:fkey+'T21:00',allDay:false,title:'아빠 저녁',link:'https://www.google.com/calendar/event?eid=a'},
                         {id:'old',date:'2000-01-01T09:00',end:'2000-01-01T10:00',allDay:false,title:'지난 일정',link:''}];
  server.data.schedule.push({id:'s',date:fkey+'T08:00',title:'소아과',who:'엄마',memo:''});
- const b=browser({server});await b.login();b.eval("page='home';render()");
+ const b=browser({server});await b.login();b.eval("page='schedule';render()");
  const board=b.get('#dashboard').innerHTML;
  assert.match(board,new RegExp(`class="cal-day red[^"]*" data-cal-day="${day(3)}" aria-label="[^"]* 개천절"><span class="num">3</span><span class="holiday">개천절</span>`));
  assert.match(board,new RegExp(`data-cal-day="${day(5)}"[^>]*><span class="num">5</span><span class="holiday">대체공휴일\\(개천절\\)</span>`));
@@ -320,6 +322,7 @@ test('calendar marks Korean holidays and substitutes, and upcoming mixes Somhous
  assert.match(board,new RegExp(`class="cal-day red[^"]*" data-cal-day="${day(sunday)}"`));
  await b.events.get('click')({target:{closest:()=>({dataset:{calDay:day(5)}})}});
  assert.match(b.get('#dashboard').innerHTML,new RegExp(`<h3>${day(5)} · <span class="holiday-name">대체공휴일\\(개천절\\)</span></h3>`));
+ b.eval("page='home';render()");
  const html=b.get('#content').innerHTML;
  const upcoming=html.slice(html.indexOf('다가오는 일정'),html.indexOf('구매 예정</h2>'));
  assert.ok(upcoming.indexOf('소아과')<upcoming.indexOf('아빠 저녁'));
@@ -338,6 +341,7 @@ test('sleep records are entered, confirmed, totalled and shown on the calendar',
  assert.match(html,/😴 [0-9-]+ 00:30 · 깬 시각 미입력<\/strong> · 시각으로 추정: 밤잠/);
  assert.match(html,/data-confirm-id="g" data-confirm-category="낮잠">낮잠/);
  assert.match(html,/<span class="sleep-line">😴 2회 · 1시간 30분<\/span>/);
+ b.eval("page='schedule';render()");
  assert.match(b.get('#dashboard').innerHTML,/<span class="mark sleep">😴1h 30m<\/span>/);
  const click=dataset=>b.events.get('click')({target:{closest:()=>({dataset})}});
  await click({confirmId:'g',confirmCategory:'낮잠'});
@@ -365,4 +369,24 @@ test('one record of an unknown type still blocks a broken payload, but every kno
  assert.equal(b.eval('sharedReady'),true);assert.equal(b.eval('data.records.length'),3);
  assert.equal(b.eval("valid({records:[{id:'x',type:'nap',date:'d'}],schedule:[],shopping:[]})"),false);
  assert.equal(b.eval("valid({records:[{id:'x',type:'sleep',date:'d'}],schedule:[],shopping:[]})"),false);
+});
+
+test('home leads with the last feeding and sleep; schedules list the soonest first and fold the past',async()=>{
+ const server=family(),pad=n=>String(n).padStart(2,'0'),stamp=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+ const at=minutes=>stamp(new Date(Date.now()+minutes*60000));
+ server.data.records.push({id:'f1',type:'feeding',date:at(-200),category:'분유',amount:'100ml'},{id:'f2',type:'feeding',date:at(-65),category:'모유',amount:'15분'},
+  {id:'z',type:'sleep',date:at(-30),category:'낮잠',end:''});
+ server.data.schedule.push({id:'far',date:at(60*24*20),title:'먼 일정'},{id:'soon',date:at(60*24),title:'가까운 일정'},{id:'old',date:at(-60*24*3),title:'지난 일정'});
+ const b=browser({server});await b.login();b.eval("page='home';render()");
+ let html=b.get('#content').innerHTML;
+ assert.match(html,/마지막 수유<\/p><strong>1시간 5분 전<\/strong><span>[^<]* · 모유 15분/);
+ assert.match(html,/마지막 수면<\/p><strong>자는 중 · 30분째<\/strong>/);
+ assert.ok(html.indexOf('now-card')<html.indexOf('class="quick"'));
+ b.eval("page='schedule';render()");
+ html=b.get('#content').innerHTML;
+ assert.ok(html.indexOf('가까운 일정')<html.indexOf('먼 일정'));
+ assert.match(html,/다가오는 일정 2개/);
+ assert.match(html,/<details class="past"><summary>지난 일정 1개<\/summary>[^]*지난 일정<\/strong>/);
+ server.data.records.find(x=>x.id==='z').end=at(-5);await b.eval('refreshShared(true)');b.eval("page='home';render()");
+ assert.match(b.get('#content').innerHTML,/마지막 수면<\/p><strong>25분<\/strong><span>[^<]*낮잠 · 깬 지 5분/);
 });

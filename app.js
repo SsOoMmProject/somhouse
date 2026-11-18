@@ -158,7 +158,7 @@ function googleItem(x){
 }
 function sorted(k){return [...data[k]].sort((a,b)=>(b.date||b.id).localeCompare(a.date||a.id))}
 const pageTitles={home:'홈',records:'육아 기록',stats:'수유 통계',schedule:'일정',shopping:'구매 목록',ai:'AI 대화',review:'확인 필요'};
-let reviewKey='';
+let reviewKey='',schedulePastOpen=false;
 function reviewItems(){return Array.isArray(shared?.googleStatus?.review_items)?shared.googleStatus.review_items:[];}
 // Inputs that were not saved automatically, or that differ from a web edit. The Google Task or event is never changed here.
 function reviewCard(x){
@@ -200,15 +200,28 @@ function repeatButtons(){
  if(!recent.length)return '';
  return `<section class="repeat" aria-labelledby="repeat-title"><h2 id="repeat-title">최근 수유 다시 기록</h2><div class="quick">${recent.map(x=>`<button class="secondary" data-repeat-category="${esc(x.category)}" data-repeat-amount="${esc(x.amount)}">${esc(x.category)} ${esc(x.amount)}</button>`).join('')}</div></section>`;
 }
-function latestFeeding(){
- const latest=Somhouse.summary(data.records).latest;
- return `<p class="caption latest">가장 최근 수유: ${latest?esc(latest.replace('T',' ')):'아직 없어요'} · 용량은 ‘80ml’처럼 단위가 있는 기록만, 직수는 ‘15분’처럼 분으로 적은 기록만 합산해요.</p>`;
+// "3시간 5분 전" from two local "YYYY-MM-DDTHH:MM" stamps.
+function ago(from,now){
+ const minutes=Somhouse.sleepMinutes({date:from,end:now});
+ return minutes===null?'방금':minutes<1?'방금':Somhouse.duration(minutes)+' 전';
+}
+// The first thing a parent needs: when the baby last ate and slept.
+function nowCard(){
+ const now=Somhouse.localDateTime(),past=x=>x.date<=now;
+ const feed=data.records.filter(x=>x.type==='feeding'&&past(x)).sort((a,b)=>b.date.localeCompare(a.date))[0];
+ const sleep=data.records.filter(x=>x.type==='sleep'&&past(x)).sort((a,b)=>b.date.localeCompare(a.date))[0];
+ const day=v=>v.slice(0,10)===now.slice(0,10)?v.slice(11):v.slice(5).replace('-','/').replace('T',' ');
+ const feedHtml=feed?`<strong>${esc(ago(feed.date,now))}</strong><span>${esc(day(feed.date))} · ${esc(feed.category)} ${esc(feed.amount)}</span>`:'<strong>기록 없음</strong><span>수유를 기록해 보세요</span>';
+ let sleepHtml='<strong>기록 없음</strong><span>수면을 기록해 보세요</span>';
+ if(sleep&&!sleep.end&&Somhouse.sleepMinutes({date:sleep.date,end:now})<=16*60)sleepHtml=`<strong>자는 중 · ${esc(ago(sleep.date,now).replace(' 전','째'))}</strong><span>${esc(day(sleep.date))}부터 · ${esc(sleep.category)}</span>`;
+ else if(sleep){const m=Somhouse.sleepMinutes(sleep);sleepHtml=`<strong>${m!==null?esc(Somhouse.duration(m)):'깬 시각 미입력'}</strong><span>${esc(day(sleep.date))}${sleep.end?`~${esc(day(sleep.end))}`:''} · ${esc(sleep.category)}${sleep.end&&sleep.end<=now?` · ${ago(sleep.end,now)==='방금'?'방금 깸':`깬 지 ${esc(ago(sleep.end,now).replace(' 전',''))}`}`:''}</span>`;}
+ return `<section class="now-card" aria-label="지금 아기 상태"><div><p>🍼 마지막 수유</p>${feedHtml}</div><div><p>😴 마지막 수면</p>${sleepHtml}</div></section>`;
 }
 function homeView(){
   const now=Somhouse.localDateTime();
   const upcoming=[...data.schedule.filter(x=>x.date>=now).map(x=>({...x,source:'web'})),...googleEvents().filter(x=>(x.allDay?x.date>=now.slice(0,10):x.date>=now)).map(x=>({...x,source:'google'}))].sort((a,b)=>a.date.localeCompare(b.date));
-  return `<h1>우리 가족의 오늘</h1><p class="intro">${esc(now.slice(0,10))} · 작은 순간을 차곡차곡 남겨요.</p>${quickButtons()}${repeatButtons()}${confirmBox()}
-    ${summaryCards()}${latestFeeding()}${voiceHelp()}
+  return `<h1>우리 가족의 오늘</h1><p class="intro">${esc(now.slice(0,10))} · 작은 순간을 차곡차곡 남겨요.</p>${nowCard()}${quickButtons()}${repeatButtons()}${confirmBox()}
+    ${summaryCards()}<p class="caption">용량은 ‘80ml’처럼 단위가 있는 기록만, 직수는 ‘15분’처럼 분으로 적은 기록만 합산해요.</p>${voiceHelp()}
     <div class="grid">${[['최근 육아 기록',sorted('records').slice(0,3),'records','첫 수유나 병원 방문을 기록해보세요.'],['다가오는 일정',upcoming.slice(0,3),'schedule','예정된 일정이 없어요.'],['구매 예정',data.shopping.filter(x=>x.done!=='yes').slice(0,3),'shopping','필요한 물품을 추가해보세요.']].map(([title,items,k,msg])=>`<section class="card"><h2>${title}</h2>${items.length?items.map(x=>x.source==='google'?googleItem(x):item(x,k,true)).join(''):`<p class="empty">${msg}</p>`}<button class="plain" data-page="${k}">전체 보기 →</button></section>`).join('')}</div>`;
 }
 let statsDays=7,calendarMonth='',calendarDay='';
@@ -272,7 +285,12 @@ function statsView(){
  return `<h1>수유 통계</h1>${summaryCards()}<div class="quick stats-period" aria-label="조회 기간">${periods}</div><section class="card"><h2>최근 ${statsDays}일</h2><p class="caption">횟수에는 모든 수유를, 용량에는 ml·cc·밀리리터·미리·씨씨 단위가 있는 기록만 집계해요. 직수 시간과 단위 없는 값은 용량에 합산하지 않아요.</p><table class="stats-table"><thead><tr><th scope="col">날짜</th><th scope="col">수유 횟수</th><th scope="col">합계 용량</th><th scope="col">용량 비교</th></tr></thead><tbody>${table}</tbody></table></section>`;
 }
 function filterView(k){const f=filters[k];return `<form id="filter-form" class="filters" aria-label="목록 검색"><label>검색<input name="query" type="search" placeholder="메모, 병원, 품목 검색" value="${esc(f.query||'')}"></label>${k==='records'?`<label>기록 종류<select name="type"><option value="">전체</option><option value="feeding" ${f.type==='feeding'?'selected':''}>수유</option><option value="sleep" ${f.type==='sleep'?'selected':''}>수면</option><option value="hospital" ${f.type==='hospital'?'selected':''}>병원</option></select></label>`:''}${k==='shopping'?`<label>구매 상태<select name="status"><option value="">전체</option><option value="pending" ${f.status==='pending'?'selected':''}>구매 예정</option><option value="done" ${f.status==='done'?'selected':''}>구매 완료</option></select></label>`:`<label>시작 날짜<input name="from" type="date" value="${esc(f.from||'')}"></label><label>마지막 날짜<input name="to" type="date" value="${esc(f.to||'')}"></label>`}<button type="submit" class="secondary">검색</button><button type="button" class="plain" data-reset="${k}">초기화</button></form>`}
-function listView(k){const names={records:'소중한 하루를 간단히 남겨보세요.',schedule:'병원 예약과 가족 일정을 관리해요.',shopping:'필요한 물품을 정리해요. Google 음성 장보기는 관리자가 상품 규격과 가격 검색을 설정한 경우에만 가격 비교 링크를 남겨요. 구매는 링크에서 직접 진행해 주세요.'};const items=Somhouse.filter(sorted(k),filters[k]);return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p><div class="heading"><h2>기록 ${items.length}개</h2><div class="quick">${k==='records'?'<button data-add="feeding">수유 추가</button><button class="secondary" data-add="hospital">병원 추가</button>':`<button data-add="${k}">추가하기</button>`}</div></div>${filterView(k)}${items.map(x=>item(x,k)).join('')||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}`}
+function listView(k){const names={records:'소중한 하루를 간단히 남겨보세요.',schedule:'병원 예약과 가족 일정을 관리해요.',shopping:'필요한 물품을 정리해요. Google 음성 장보기는 관리자가 상품 규격과 가격 검색을 설정한 경우에만 가격 비교 링크를 남겨요. 구매는 링크에서 직접 진행해 주세요.'};const items=Somhouse.filter(sorted(k),filters[k]);return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p><div class="heading"><h2>${k==='schedule'?'일정':'기록'} ${items.length}개</h2><div class="quick">${k==='records'?'<button data-add="feeding">수유 추가</button><button class="secondary" data-add="hospital">병원 추가</button>':`<button data-add="${k}">추가하기</button>`}</div></div>${filterView(k)}${(k==='schedule'?scheduleItems(items):items.map(x=>item(x,k)).join(''))||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}`}
+function scheduleItems(items){
+ const now=Somhouse.localDateTime(),upcoming=items.filter(x=>x.date>=now).reverse(),past=items.filter(x=>x.date<now);
+ if(!items.length)return '';
+ return `<h3 class="list-head">다가오는 일정 ${upcoming.length}개</h3>${upcoming.map(x=>item(x,'schedule')).join('')||'<p class="empty">다가오는 일정이 없어요.</p>'}${past.length?`<details class="past"${schedulePastOpen?' open':''}><summary>지난 일정 ${past.length}개</summary>${past.map(x=>item(x,'schedule')).join('')}</details>`:''}`;
+}
 async function checkAI(){
  const state=ai;
  if(state.checking||state.pending)return;
@@ -327,7 +345,10 @@ function render(){
   if(openingAI)checkAI();
   return;
  }
- const dashboard=$('#dashboard'),board=calendarView();if(dashboardHtml!==board){dashboard.innerHTML=board;dashboardHtml=board;}dashboard.hidden=false;
+ const dashboard=$('#dashboard');
+ if(page==='schedule'){const board=calendarView();if(dashboardHtml!==board){dashboard.innerHTML=board;dashboardHtml=board;}dashboard.hidden=false;}
+ else{dashboard.hidden=true;if(dashboardHtml){dashboard.innerHTML='';dashboardHtml='';}}
+ const past=document.querySelector('details.past');if(past)schedulePastOpen=past.open;
  $('#content').innerHTML=page==='home'?homeView():page==='stats'?statsView():page==='review'?reviewView():listView(page);
  connectionView();
  const form=$('#filter-form');if(form)form.onsubmit=e=>{e.preventDefault();const next=Object.fromEntries(new FormData(form));if(next.from&&next.to&&next.from>next.to){alert('시작 날짜는 마지막 날짜보다 늦을 수 없어요.');return}filters[page]=next;render()};
@@ -341,7 +362,7 @@ document.addEventListener('click',async e=>{
  if(['7','30'].includes(b.dataset.statsDays)){statsDays=Number(b.dataset.statsDays);render();return;}
  if(['schedule','shopping'].includes(b.dataset.addOn)&&calendarDay){openForm(b.dataset.addOn,null,{date:b.dataset.addOn==='schedule'?calendarDay+'T09:00':calendarDay});return;}
  if(/^\d{4}-\d{2}$/.test(b.dataset.calMonth||'')){calendarMonth=b.dataset.calMonth;calendarDay='';render();return;}
- if(/^\d{4}-\d{2}-\d{2}$/.test(b.dataset.calDay||'')){calendarDay=calendarDay===b.dataset.calDay?'':b.dataset.calDay;render();return;}
+ if(/^\d{4}-\d{2}-\d{2}$/.test(b.dataset.calDay||'')){calendarDay=calendarDay===b.dataset.calDay?'':b.dataset.calDay;render();if(calendarDay)document.querySelector('.cal-detail')?.scrollIntoView?.({block:'nearest',behavior:'smooth'});return;}
  if(b.dataset.add){if(mode==='shared'&&!sharedReady)return;openForm(b.dataset.add);}
  if(b.dataset.repeatCategory&&b.dataset.repeatAmount){openForm('feeding',null,{category:b.dataset.repeatCategory,amount:b.dataset.repeatAmount});return;}
  if(b.dataset.confirmId&&[...feedingKinds,...sleepKinds].includes(b.dataset.confirmCategory)){
@@ -455,5 +476,6 @@ if(shared){
  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshShared();});
  $('#dialog').addEventListener('close',()=>{reviewKey='';refreshShared();});
  setInterval(()=>{if(!document.hidden)refreshShared();},2000);
+ setInterval(()=>{if(!document.hidden&&page==='home'&&mode==='shared'&&sharedReady&&!editingScreen())render();},60000);
  if(mode==='shared'){message('가족의 기록을 불러오고 있어요…');refreshShared(true);}
 }else message('화면을 불러오지 못했어요. 잠시 후 다시 열어주세요.');
