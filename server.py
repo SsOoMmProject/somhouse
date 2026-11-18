@@ -321,6 +321,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", self.headers["Origin"])
             self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+            # Let the browser reuse one preflight for 10 minutes: each one costs seconds over the public relay.
+            self.send_header("Access-Control-Max-Age", "600")
         if status == 429:
             self.send_header("Retry-After", "60")
         self.end_headers()
