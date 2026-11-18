@@ -1,5 +1,5 @@
 'use strict';
-const KEY='somhouse-v1', empty=()=>({records:[],schedule:[],shopping:[]});
+const KEY='somhouse-v1', READ_ONLY='게스트 계정은 볼 수만 있어요. 추가·수정·삭제는 가족 계정에서 할 수 있어요.', empty=()=>({records:[],schedule:[],shopping:[]});
 let data=empty(), page='home', editing=null, kind='', draftId='';
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function valid(d){
@@ -41,8 +41,8 @@ function showSources(connected){
 }
 function connectionView(){
  const connected=mode==='shared'&&Boolean(shared?.token);
- $('#connection-title').textContent=connected?'가족 기록 · '+shared.username:'가족 로그인';
- $('#login-form').hidden=connected;$('#logout').hidden=!connected;$('#change-password').hidden=!connected;
+ $('#connection-title').textContent=connected?(shared.readOnly?'게스트 보기 · 예시 기록':'가족 기록 · '+shared.username):'가족 로그인';
+ $('#login-form').hidden=connected;$('#logout').hidden=!connected;$('#change-password').hidden=!connected||shared.readOnly;
  $('nav').hidden=!connected||!sharedReady;
  showSources(connected);
  showGoogleStatus(connected);
@@ -81,6 +81,8 @@ function showLogin(text){
 function editingScreen(){return $('#dialog').open||$('#password-dialog').open||Boolean(document.activeElement?.closest?.('#filter-form'));}
 async function loadFamilyData(){
  let raw, original;
+ // The guest sees made-up records only; this device's old family records are never sent with a guest login.
+ if(shared.readOnly)return shared.load();
  try{
   raw=localStorage.getItem(KEY);original=raw===null?empty():JSON.parse(raw);
   if(!valid(original))throw Error();
@@ -111,7 +113,7 @@ function refreshShared(force=false){
    if(!valid(next))throw Error('기록을 확인하지 못했어요. 다시 연결하고 있습니다.');
    const changed=JSON.stringify(next)!==JSON.stringify(data)||(page==='review'&&JSON.stringify(reviewItems())!==reviewBefore),wasReady=sharedReady;
    data=next;sharedReady=true;if(changed)needsRender=true;
-   message('기록은 자동으로 저장되고 가족과 함께 업데이트돼요.'+legacyWarning);
+   message(shared.readOnly?'게스트 보기예요. 실제 가족 기록이 아닌 예시 기록이에요. 입력창은 열어 볼 수 있지만 저장·수정·삭제는 되지 않아요.':'기록은 자동으로 저장되고 가족과 함께 업데이트돼요.'+legacyWarning);
    if((needsRender||!wasReady)&&(!editingScreen()||!wasReady))render();else connectionView();
   }catch(error){
    if(shared.token!==token)return;
@@ -122,6 +124,7 @@ function refreshShared(force=false){
 }
 async function sharedChange(operation){
  if(busy||mode!=='shared'||!shared?.token)return false;
+ if(shared.readOnly){alert(READ_ONLY);return false;}
  const token=shared.token;
  busy=true;connectionView();
  try{
@@ -281,7 +284,7 @@ async function checkAI(){
   state.config=config;
   $('#ai-scope-field').hidden=!config.recordSummaries;
   if(!config.recordSummaries)$('#ai-scope').value='none';
-  $('#ai-status').textContent=config.enabled?'질문마다 새로 답해요.':'관리자가 맥미니에 Antigravity CLI를 연결하면 질문할 수 있어요.';
+  $('#ai-status').textContent=config.readOnly?'게스트 보기에서는 질문할 수 없어요. 가족 계정으로 로그인하면 질문을 보낼 수 있어요.':config.enabled?'질문마다 새로 답해요.':'관리자가 맥미니에 Antigravity CLI를 연결하면 질문할 수 있어요.';
  }catch(error){
   if(ai!==state)return;
   state.config=null;
