@@ -469,6 +469,31 @@ class GoogleRegression(unittest.TestCase):
             self.assertEqual(self.rows("SELECT action,status FROM google_record_events WHERE action='calendar-writeback'"),
                              [('calendar-writeback', '캘린더 반영')])
 
+    def test_second_tap_before_calendar_is_reread_writes_nothing(self):
+        bridge, calendar, remote, calls, api, item_id = self.writeback_setup()
+        with patch.object(bridge.api, 'request', side_effect=api):
+            with self.store.connect() as db:
+                status = bridge.status(db)
+                self.assertEqual((status['writeback_ready'], status['writeback_pending']), ([item_id], []))
+                calendar.request_writeback(db, item_id)
+                # Waiting: a label, no button, and a repeated request is refused.
+                status = bridge.status(db)
+                self.assertEqual((status['writeback_ready'], status['writeback_pending']), ([], [item_id]))
+                with self.assertRaisesRegex(ValueError, '이미 캘린더 반영을 요청'):
+                    calendar.request_writeback(db, item_id)
+            calendar.flush_writebacks()
+            # Written, but Calendar has not been read again yet (what happened on 2026-11-19): still nothing to do.
+            with self.store.connect() as db:
+                status = bridge.status(db)
+                self.assertEqual((status['writeback_ready'], status['writeback_pending']), ([], []))
+                with self.assertRaisesRegex(ValueError, '이미 같은 내용'):
+                    calendar.request_writeback(db, item_id)
+            self.assertEqual(self.writes(), 1)
+            # The echo read afterwards changes nothing either.
+            before = self.rows("SELECT COUNT(*) FROM google_record_events")[0][0]
+            calendar.record(dict(remote))
+            self.assertEqual(self.rows("SELECT COUNT(*) FROM google_record_events")[0][0], before)
+
     def test_writeback_never_overwrites_a_newer_calendar_edit(self):
         bridge, calendar, remote, calls, api, item_id = self.writeback_setup()
         with patch.object(bridge.api, 'request', side_effect=api):

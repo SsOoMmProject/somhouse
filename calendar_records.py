@@ -533,9 +533,33 @@ class CalendarRecords:
     def request_writeback(self, db, item_id):
         """Safeguard 3: only an explicit tap queues a writeback, once."""
         event_id, _, title = self.writeback_check(db, item_id)
+        if db.execute("SELECT 1 FROM google_calendar_writebacks WHERE binding=? AND event_id=?",
+                      (self.binding, event_id)).fetchone():
+            raise WritebackRefused("이미 캘린더 반영을 요청했어요. 잠시만 기다려 주세요.")
         db.execute("INSERT OR REPLACE INTO google_calendar_writebacks VALUES (?,?,?,?)",
                    (self.binding, event_id, item_id, time.time()))
         return title
+
+    def writeback_state(self, db, limit=200):
+        """Which Calendar-input feedings would change if written back now, and which are waiting to be written.
+        Only the most recent inputs are checked, so the every-poll status stays cheap."""
+        if not self.can_write:
+            return [], []
+        pending = [row[0] for row in db.execute("SELECT item_id FROM google_calendar_writebacks WHERE binding=?",
+                                                (self.binding,))]
+        ready = []
+        for (item_id,) in db.execute("""SELECT i.item_id FROM google_calendar_inputs i JOIN items r
+                ON r.kind='records' AND r.id=i.item_id WHERE i.binding=? AND i.inbox=?
+                AND json_extract(r.body,'$.type')='feeding' ORDER BY i.rowid DESC LIMIT ?""",
+                                     (self.binding, self.inbox, limit)).fetchall():
+            if item_id in pending:
+                continue
+            try:
+                self.writeback_check(db, item_id)
+            except WritebackRefused:
+                continue
+            ready.append(item_id)
+        return ready, pending
 
     def flush_writebacks(self):
         with self.store.connect() as db:
@@ -587,8 +611,11 @@ class CalendarRecords:
         with self.store.lock, self.store.connect() as db:
             db.execute("INSERT INTO google_calendar_writes VALUES (?,?,?,?)", (self.binding, event_id, time.time(), mark))
             db.execute("DELETE FROM google_calendar_writebacks WHERE binding=? AND event_id=?", (self.binding, event_id))
-            db.execute("UPDATE google_calendar_inputs SET etag=? WHERE binding=? AND inbox=? AND event_id=?",
-                       (result.get("etag") or "", self.binding, self.inbox, event_id))
+            # Calendar now holds the new title: remember it right away (as the echo read would), so a second tap
+            # before the next read is refused as "already the same" instead of writing again.
+            db.execute("UPDATE google_calendar_inputs SET etag=?, fingerprint=? WHERE binding=? AND inbox=? AND event_id=?",
+                       (result.get("etag") or "", encode([False, title, remote.get("start")]),
+                        self.binding, self.inbox, event_id))
             # Safeguard 6: the Sheets history records the change next to the original input.
             queue_event(db, self.binding, "records", item_id,
                         {"event_id": event_id, "from": remote.get("summary", ""), "to": title},

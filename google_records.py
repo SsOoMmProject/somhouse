@@ -456,6 +456,8 @@ class GoogleRecords:
             (self.binding,))]
         result = {"auth_state": self.auth_state, "services": pending, "review": review, "errors": imports,
                   "calendar_write": bool(self.calendar and self.calendar.can_write)}
+        if result["calendar_write"]:
+            result["writeback_ready"], result["writeback_pending"] = self.calendar.writeback_state(db)
         if review:
             result["review_items"] = self.review_items(db)
         return result
