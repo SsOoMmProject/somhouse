@@ -1,4 +1,6 @@
 'use strict';
+// The display name of this deployment (config.js); the header, page titles and texts follow it.
+const BRAND=(typeof window!=='undefined'&&typeof window.SOMHOUSE_BRAND==='string'&&/^[0-9A-Za-z가-힣 ]{1,20}$/.test(window.SOMHOUSE_BRAND.trim()))?window.SOMHOUSE_BRAND.trim():'솜하우스';
 const KEY='somhouse-v1', READ_ONLY='게스트 계정은 볼 수만 있어요. 추가·수정·삭제는 가족 계정에서 할 수 있어요.', empty=()=>({records:[],schedule:[],shopping:[]});
 let data=empty(), page='home', editing=null, kind='', draftId='';
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -315,7 +317,7 @@ function calendarView(){
   const holiday=holidayOn(calendarDay);
   detail=`<div class="cal-detail"><h3>${esc(calendarDay)}${holiday?` · <span class="holiday-name">${esc(holidayName(holiday))}</span>`:''}</h3>${body||'<p class="empty">이 날의 기록이 없어요.</p>'}<div class="quick"><button class="secondary" data-add-on="schedule">이 날 일정 추가</button><button class="secondary" data-add-on="shopping">이 날 구매 추가</button></div></div>`;
  }
- return `<section class="card dashboard-calendar" aria-label="가족 달력"><div class="cal-nav"><button class="plain" data-cal-month="${shift(-1)}" aria-label="이전 달">‹</button><h2>${year}년 ${mon}월</h2><button class="plain" data-cal-month="${shift(1)}" aria-label="다음 달">›</button></div><p class="caption legend">🍼 수유 횟수·ml · 📅 솜하우스 일정 · 📆 Google 캘린더 · 🛒 구매 예정 — 날짜를 누르면 자세히 보여요.</p><div class="cal-grid">${head}${cells}</div>${month!==today.slice(0,7)?`<button class="plain" data-cal-month="${today.slice(0,7)}">이번 달로</button>`:''}${detail}</section>`;
+ return `<section class="card dashboard-calendar" aria-label="가족 달력"><div class="cal-nav"><button class="plain" data-cal-month="${shift(-1)}" aria-label="이전 달">‹</button><h2>${year}년 ${mon}월</h2><button class="plain" data-cal-month="${shift(1)}" aria-label="다음 달">›</button></div><p class="caption legend">🍼 수유 횟수·ml · 📅 ${esc(BRAND)} 일정 · 📆 Google 캘린더 · 🛒 구매 예정 — 날짜를 누르면 자세히 보여요.</p><div class="cal-grid">${head}${cells}</div>${month!==today.slice(0,7)?`<button class="plain" data-cal-month="${today.slice(0,7)}">이번 달로</button>`:''}${detail}</section>`;
 }
 function statsView(){
  const rows=Somhouse.dailyFeeding(data.records,statsDays);
@@ -416,7 +418,7 @@ async function askAI(e){
 function render(){
  needsRender=false;
  document.querySelectorAll('nav button').forEach(b=>{const active=b.dataset.page===page;b.classList.toggle('active',active);if(active)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
- document.title=`${pageTitles[page]} · 솜하우스`;
+ document.title=`${pageTitles[page]} · ${BRAND}`;
  const connected=mode==='shared'&&sharedReady,showAI=connected&&page==='ai';
  const aiPanel=$('#ai-panel'),openingAI=aiPanel.hidden&&showAI;
  aiPanel.hidden=!showAI;
@@ -551,6 +553,7 @@ $('#form').onsubmit=async e=>{
  const review=reviewKey,remembered=JSON.stringify(shared.aliases||{}),asleep=kind==='feeding'?openSleep(x.date,false):null;
  try{if(await (review?sharedChange(()=>shared.resolveReview(review,'save',k,x)):changeItem(k,x))){$('#dialog').close();const word=Object.keys(shared.aliases||{}).find(w=>shared.aliases[w]===x.category&&JSON.parse(remembered)[w]!==x.category);if(word)message(`저장했어요. 앞으로 ‘${word}’는 ${x.category}로 기억할게요.`);const woke=asleep&&data.records.find(r=>r.id===asleep.id&&r.end);if(woke)message(`수유를 기록해서 ${woke.category}을 ${woke.end.slice(11)}에 끝냈어요 (${Somhouse.duration(Somhouse.sleepMinutes(woke))}).`);render();}}finally{submit.disabled=false;}
 };
+{const brand=document.querySelector('header strong');if(brand)brand.textContent=BRAND;}
 window.addEventListener('hashchange',route);
 route();
 if(shared){

@@ -11,6 +11,7 @@ from google_records import (GoogleAPI, GoogleError, HEADERS, SCOPES, SHEETS, TAB
                             load_config, read_config, save_config)
 from calendar_records import CALENDAR, CALENDAR_NAME, CALENDAR_SCOPES, CALENDAR_WEB, WRITE_SCOPE, event_pages
 from server import DEFAULT_DATA
+from brand import NAME as BRAND
 
 
 def authorize(client_file, calendar=False, *, open_browser=True):
@@ -30,7 +31,7 @@ def authorize(client_file, calendar=False, *, open_browser=True):
         host="127.0.0.1", port=0, timeout_seconds=300, open_browser=open_browser,
         prompt="consent select_account", access_type="offline",
         authorization_prompt_message="네스트가 쓰는 계정으로 로그인해 주세요. 창이 열리지 않으면 이 맥에서 {url}을 여세요.",
-        success_message="Google 동의가 완료되었습니다. 솜하우스 터미널에서 연결 확인이 진행됩니다.",
+        success_message=f"Google 동의가 완료되었습니다. {BRAND} 터미널에서 연결 확인이 진행됩니다.",
     )
     if not credentials.refresh_token:
         raise SystemExit("Google이 오프라인 연결 권한을 주지 않았습니다. 다시 연결해 주세요.")
@@ -64,14 +65,14 @@ def configure(directory, client_file, inbox=None, calendar=False, *, open_browse
     if not config.get("ready"):
         save_config(directory, config)
     if not config.get("task_list"):
-        task_list = api.request(TASKS + "users/@me/lists", "POST", {"title": "솜하우스 웹 기록"}, "Tasks")
+        task_list = api.request(TASKS + "users/@me/lists", "POST", {"title": f"{BRAND} 웹 기록"}, "Tasks")
         config["task_list"] = task_list["id"]
         save_config(directory, config)
     else:
         next(iter(api.tasks(config["task_list"])), None)
     if not config.get("spreadsheet"):
         spreadsheet = api.request(SHEETS, "POST", {
-            "properties": {"title": "솜하우스 원본 기록", "locale": "ko_KR", "timeZone": "Asia/Seoul"},
+            "properties": {"title": f"{BRAND} 원본 기록", "locale": "ko_KR", "timeZone": "Asia/Seoul"},
             "sheets": [{"properties": {"title": TAB, "gridProperties": {
                 "frozenRowCount": 1, "rowCount": 1000, "columnCount": 20}}}],
         }, "Sheets")
@@ -97,7 +98,7 @@ def configure(directory, client_file, inbox=None, calendar=False, *, open_browse
     print(f"원본 시트 https://docs.google.com/spreadsheets/d/{config['spreadsheet']}/edit")
     if calendar:
         print(f"수유 캘린더 {CALENDAR_NAME} · {CALENDAR_WEB}")
-    print("솜하우스 서버를 다시 시작하면 동기화가 시작됩니다.")
+    print(f"{BRAND} 서버를 다시 시작하면 동기화가 시작됩니다.")
 
 
 def main():

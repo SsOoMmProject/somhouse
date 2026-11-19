@@ -26,6 +26,7 @@ from calendar_records import FEEDING_KINDS, SLEEP_KINDS, SCHEMA as CALENDAR_SCHE
 from shopping_records import SCHEMA as SHOPPING_SCHEMA
 from google_delivery import SCHEMA as DELIVERY_SCHEMA
 from holidays import HolidayFeed, SCHEMA as HOLIDAY_SCHEMA, listing as holiday_listing
+from brand import NAME as BRAND
 from demo import GUEST, READ_ONLY_MESSAGE, demo_payload
 from sleep_wake import end_sleep_on_feeding
 import google_web
@@ -78,7 +79,7 @@ def validate_item(kind, item):
 
 def validate_data(data):
     if not isinstance(data, dict) or any(not isinstance(data.get(k), list) for k in KINDS):
-        raise Problem(400, "올바른 솜하우스 백업 파일이 아닙니다.")
+        raise Problem(400, f"올바른 {BRAND} 백업 파일이 아닙니다.")
     if sum(len(data[k]) for k in KINDS) > 50000:
         raise Problem(400, "한 번에 이전할 수 있는 기록 수를 초과했습니다.")
     for kind in KINDS:
@@ -399,7 +400,7 @@ class Handler(BaseHTTPRequestHandler):
         except (GoogleError, KeyError, TypeError):
             return fail("Google 로그인을 확인하지 못했어요. 잠시 후 다시 시도해 주세요.")
         if not connected.get("subject") or who.get("sub") != connected["subject"] or who.get("email_verified") is not True:
-            return fail("솜하우스에 연결된 가족 Google 계정으로 로그인해 주세요.")
+            return fail(f"{BRAND}에 연결된 가족 Google 계정으로 로그인해 주세요.")
         if state["mode"] == "login":
             with store.lock, store.connect() as db:
                 token = store.new_session(db, google_web.FAMILY_USER)
@@ -683,7 +684,7 @@ def keep_status(directory):
         return
     path = directory / "somhouse.sqlite3"
     if not path.is_file():
-        raise SystemExit("Google Keep 설정은 있지만 솜하우스 SQLite 파일을 찾지 못했습니다.")
+        raise SystemExit(f"Google Keep 설정은 있지만 {BRAND} SQLite 파일을 찾지 못했습니다.")
     with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
         exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='keep_pending'").fetchone()
         pending = db.execute("SELECT COUNT(*) FROM keep_pending WHERE email=?", (email,)).fetchone()[0] if exists else 0
@@ -698,7 +699,7 @@ def google_status(directory):
         return
     path = directory / "somhouse.sqlite3"
     if not path.is_file():
-        raise SystemExit("Google 설정은 있지만 솜하우스 SQLite 파일을 찾지 못했습니다.")
+        raise SystemExit(f"Google 설정은 있지만 {BRAND} SQLite 파일을 찾지 못했습니다.")
     store = Store(directory)
     bridge = GoogleRecords(store, config)
     with store.connect() as db:
@@ -802,7 +803,7 @@ def main():
         try:
             if args.command == "keep-config":
                 keep.configure()
-                print(f"{KEEP_CONFIG_NAME}에 저장했습니다. 솜하우스 서버를 다시 시작해 주세요.")
+                print(f"{KEEP_CONFIG_NAME}에 저장했습니다. {BRAND} 서버를 다시 시작해 주세요.")
             else:
                 keep.probe()
                 print("Google Keep에서 분유 120ml 시험 메모를 다시 읽고 휴지통으로 보냈습니다.")
@@ -814,12 +815,12 @@ def main():
             parser.error("--agy로 실행 가능한 Antigravity CLI 경로를 지정해 주세요.")
         provider = Antigravity(store.directory, binary)
         try:
-            result = provider.generate("한국어로 솜하우스 연결 확인이라고 한 줄로 답해 주세요.", "none", None)
+            result = provider.generate(f"한국어로 {BRAND} 연결 확인이라고 한 줄로 답해 주세요.", "none", None)
         except AntigravityError as error:
             parser.exit(1, f"{error.message}\n")
         if args.command == "antigravity-config":
             save_config(store.directory, binary, args.allow_record_summaries)
-            print(f"{CONFIG_NAME}에 저장했습니다. 솜하우스 서버를 다시 시작해 주세요.")
+            print(f"{CONFIG_NAME}에 저장했습니다. {BRAND} 서버를 다시 시작해 주세요.")
         else:
             print(result["answer"])
     elif args.command == "init":
@@ -829,7 +830,7 @@ def main():
         accounts = [(name, secrets.token_urlsafe(18)) for name in ("family1", "family2")]
         path = store.directory / "initial-accounts.txt"
         with path.open("x", encoding="utf-8") as file:
-            file.write("솜하우스 가족 로그인 정보 — 공개하거나 Git에 올리지 마세요.\n\n")
+            file.write(f"{BRAND} 가족 로그인 정보 — 공개하거나 Git에 올리지 마세요.\n\n")
             for name, password in accounts:
                 store.password(name, password)
                 file.write(f"아이디: {name}\n비밀번호: {password}\n\n")
@@ -867,7 +868,7 @@ def main():
             if db.execute("SELECT COUNT(*) FROM users WHERE username<>?", (GUEST,)).fetchone()[0] != 2:
                 parser.error("먼저 python3 server.py init 명령으로 두 계정을 생성해 주세요.")
         server = FamilyServer(("127.0.0.1", args.port), store, args.origin, holidays=True)
-        print(f"솜하우스: http://127.0.0.1:{server.server_port}/", flush=True)
+        print(f"{BRAND}: http://127.0.0.1:{server.server_port}/", flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:

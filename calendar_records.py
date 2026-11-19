@@ -14,7 +14,8 @@ from google_delivery import eligible
 
 CALENDAR = "https://www.googleapis.com/calendar/v3/calendars"
 CALENDAR_WEB = "https://calendar.google.com/calendar/"
-CALENDAR_NAME = "솜하우스 수유"
+from brand import NAME as BRAND
+CALENDAR_NAME = f"{BRAND} 수유"
 # Read/write on calendars the user owns: needed only to write a web correction back to the original
 # event, and only through the guarded writeback below (docs/CALENDAR_WRITEBACK_PLAN.md).
 WRITE_SCOPE = "https://www.googleapis.com/auth/calendar.events.owned"
@@ -732,7 +733,7 @@ class CalendarRecords:
         start = start.replace(tzinfo=SEOUL) if start.tzinfo is None else start.astimezone(SEOUL)
         end = start + timedelta(minutes=5)
         payload = {
-            "summary": ("솜하우스 수유 · " + item["category"] + " " + item["amount"])[:250],
+            "summary": (f"{BRAND} 수유 · " + item["category"] + " " + item["amount"])[:250],
             "start": {"dateTime": start.isoformat(), "timeZone": "Asia/Seoul"},
             "end": {"dateTime": end.isoformat(), "timeZone": "Asia/Seoul"},
             "transparency": "transparent", "reminders": {"useDefault": False},
