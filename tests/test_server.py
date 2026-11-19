@@ -262,6 +262,32 @@ class FamilyAPI(unittest.TestCase):
         finally:
             (Path(self.temp.name) / "google-records.json").unlink(missing_ok=True)
 
+    def test_children_names_are_shared_and_a_rename_moves_their_schedules(self):
+        token = self.login()
+        put = lambda body, t=token: self.request("/api/settings", "PUT", body, t)
+        self.assertEqual(self.request("/api/data", token=token)[1]["settings"], {"children": []})
+        plan = {"id": "s1", "date": "2026-11-20T10:00", "title": "검진", "who": "아기"}
+        self.request("/api/items/schedule/s1", "PUT", plan, token)
+        for bad in ({"children": ["엄마"]}, {"children": ["솜이", "솜이"]}, {"children": [""]}, {"children": ["a,b"]},
+                    {"children": "솜이"}, {"children": ["솜이"], "rename": {"아기": "하늘"}}):
+            self.assertEqual(put(bad)[0], 400, bad)
+        code, body, _ = put({"children": ["솜이"], "rename": {"아기": "솜이"}})
+        self.assertEqual((code, body["settings"], body["moved"]), (200, {"children": ["솜이"]}, 1))
+        self.assertEqual(body["data"]["schedule"][0]["who"], "솜이")
+        code, body, _ = put({"children": ["솜솜이", "하늘"], "rename": {"솜이": "솜솜이"}})
+        self.assertEqual((body["data"]["schedule"][0]["who"], body["moved"]), ("솜솜이", 1))
+        second = self.login(2)  # the other phone sees the same names
+        self.assertEqual(self.request("/api/data", token=second)[1]["settings"], {"children": ["솜솜이", "하늘"]})
+        self.store.password("guest", "guest-password-1")
+        try:
+            guest = self.request("/api/login", "POST", {"username": "guest", "password": "guest-password-1"})[1]["token"]
+            self.assertEqual(put({"children": ["x"]}, guest)[0], 403)
+            self.assertEqual(self.request("/api/data", token=guest)[1]["settings"], {"children": ["하늘"]})  # demo name
+        finally:
+            with self.store.connect() as db:
+                db.execute("DELETE FROM users WHERE username='guest'")
+                db.execute("DELETE FROM family_settings")
+
     def test_login_stays_active_until_logout_and_stores_hashes(self):
         self.assertEqual(self.request("/api/data")[0], 401)
         self.assertEqual(self.request("/api/login", "POST", {"username": "family1", "password": "wrong"})[0], 401)

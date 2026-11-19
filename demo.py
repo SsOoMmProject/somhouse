@@ -49,8 +49,8 @@ def demo_payload(now=None):
                         "hospital": "예시소아과", "reason": reason, "memo": memo})
 
     for offset, hour, who, title, memo in ((-3, 15, "엄마", "산후 검진", ""), (0, 19, "가족", "할머니댁 영상통화", ""),
-                                           (1, 10, "아기", "영유아 검진 예약", "건강수첩 챙기기"),
-                                           (4, 14, "아빠", "카시트 설치 점검", ""), (12, 11, "아기", "예방접종", "")):
+                                           (1, 10, "하늘", "영유아 검진 예약", "건강수첩 챙기기"),
+                                           (4, 14, "아빠", "카시트 설치 점검", ""), (12, 11, "하늘", "예방접종", "")):
         schedule.append({"id": f"demo-plan-{offset}", "date": stamp(today + timedelta(days=offset, hours=hour)),
                          "who": who, "title": title, "memo": memo})
 
@@ -75,6 +75,6 @@ def demo_payload(now=None):
         {"key": "demo:review-1", "source": "Tasks", "title": "솜하우스 수유 분유", "when": stamp(now - timedelta(hours=1)),
          "status": "확인 필요", "suggest": {"category": "분유", "amount": ""}}]}
     return {"data": {"records": records, "schedule": schedule, "shopping": shopping},
-            "aliases": {"부유": "분유"}, "calendar_events": calendar_events,
+            "aliases": {"부유": "분유"}, "settings": {"children": ["하늘"]}, "calendar_events": calendar_events,
             # No Google links: on a phone they would open whatever Google account that phone is signed in to.
             "google_status": google_status, "read_only": True}

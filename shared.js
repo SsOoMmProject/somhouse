@@ -12,7 +12,7 @@
   }
   class Client {
     constructor() {
-      this.base = ''; this.token = ''; this.username = ''; this.readOnly = false; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = [];
+      this.base = ''; this.token = ''; this.username = ''; this.readOnly = false; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = []; this.settings = {children: []};
       try {this.base = serverURL(root.SOMHOUSE_API_URL);} catch {}
       if (['localhost', '127.0.0.1'].includes(location.hostname)) this.base = 'http://127.0.0.1:8787';
       try { this.base = serverURL(localStorage.getItem(SERVER)); } catch {}
@@ -114,7 +114,7 @@
     }
     async load() {
       const token = this.token, result = await this.request('/api/data');
-      if (token === this.token) {if (this.readOnly !== (result.read_only === true)) {this.readOnly = result.read_only === true; this.remember();} this.sources = result.sources || null; this.googleStatus = result.google_status || null; this.aliases = result.aliases || {}; this.calendarEvents = Array.isArray(result.calendar_events) ? result.calendar_events : []; this.holidays = Array.isArray(result.holidays) ? result.holidays : [];}
+      if (token === this.token) {if (this.readOnly !== (result.read_only === true)) {this.readOnly = result.read_only === true; this.remember();} this.sources = result.sources || null; this.googleStatus = result.google_status || null; this.aliases = result.aliases || {}; this.calendarEvents = Array.isArray(result.calendar_events) ? result.calendar_events : []; this.holidays = Array.isArray(result.holidays) ? result.holidays : []; this.settings = result.settings && Array.isArray(result.settings.children) ? result.settings : {children: []};}
       return result.data;
     }
     async put(kind, item) {
@@ -142,6 +142,12 @@
     async calendarWriteback(id) {
       const token = this.token, result = await this.request('/api/calendar-writeback', 'POST', {id});
       if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null; this.aliases = result.aliases || {};}
+      return result;
+    }
+    // Children's names for '누구 일정'; rename maps an old name to a new one so existing schedules follow.
+    async saveSettings(children, rename) {
+      const token = this.token, result = await this.request('/api/settings', 'PUT', {children, rename});
+      if (token === this.token) this.settings = result.settings;
       return result;
     }
     async merge(data) {

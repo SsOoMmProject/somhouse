@@ -153,11 +153,16 @@ async function sharedChange(operation){
 }
 async function changeItem(k,x,remove=false){return sharedChange(()=>remove?shared.remove(k,x.id):shared.put(k,x));}
 const schemas={sleep:[['date','잠든 시각','datetime-local',1],['end','깬 시각 (선택)','datetime-local',0],['category','종류','select',1],['memo','메모','textarea',0]],feeding:[['date','날짜와 시간','datetime-local',1],['category','수유 종류','select',1],['amount','양','text',1],['memo','메모','textarea',0]],hospital:[['date','날짜와 시간','datetime-local',1],['hospital','병원','text',1],['reason','방문 이유','text',1],['memo','메모','textarea',0]],schedule:[['date','날짜와 시간','datetime-local',1],['who','누구 일정','select',0],['title','일정 이름','text',1],['place','장소 (선택)','text',0],['memo','메모','textarea',0]],shopping:[['title','품목','text',1],['quantity','수량','text',1],['date','구매 예정일 (선택)','date',0],['memo','메모','textarea',0],['url','상품 링크 (선택)','url',0]]};
-const choices={category:['모유','분유','혼합','기타'],'sleep.category':['낮잠','밤잠'],who:['가족','엄마','아빠','아기']};
+const choices={category:['모유','분유','혼합','기타'],'sleep.category':['낮잠','밤잠']};
+// '누구 일정': family, parents and each registered child; '아기' only until a name is registered (or on old items).
+function children(){return Array.isArray(shared?.settings?.children)?shared.settings.children:[];}
+function whoChoices(current){const list=['가족','엄마','아빠',...children()];if(!children().length)list.push('아기');if(current&&!list.includes(current))list.push(current);return list;}
+function whoClass(w){return ['가족','엄마','아빠'].includes(w)?w:'아기';}
+const ADD_CHILD='__add_child__';
 function link(url){try{let u=new URL(url);return ['http:','https:'].includes(u.protocol)?`<a href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">상품 링크 ↗</a>`:''}catch{return ''}}
 function sleepText(x){const m=Somhouse.sleepMinutes(x);return `${x.date.slice(11)}${x.end?`~${x.end.slice(x.end.slice(0,10)===x.date.slice(0,10)?11:5).replace('T',' ')}`:''}${m!==null?` (${Somhouse.duration(m)})`:' · 깬 시각 미입력'}`;}
 const icons={분유:'🍼',혼합:'🍼',모유:'🤱',기타:'🍼'};
-function desc(x,k){if(k==='records'&&x.type==='sleep')return `😴 수면 · ${esc(x.category)} · ${esc(sleepText(x))}`;if(k==='records')return x.type==='feeding'?`${icons[x.category]||'🍼'} ${esc(x.category)} · ${esc(x.amount)}`:`🏥 ${esc(x.hospital)} · ${esc(x.reason)}`;return (k==='schedule'&&x.who?`<span class="who who-${esc(x.who)}">${esc(x.who)}</span> `:'')+esc(x.title)+(k==='shopping'?` · ${esc(x.quantity)}`:'')}
+function desc(x,k){if(k==='records'&&x.type==='sleep')return `😴 수면 · ${esc(x.category)} · ${esc(sleepText(x))}`;if(k==='records')return x.type==='feeding'?`${icons[x.category]||'🍼'} ${esc(x.category)} · ${esc(x.amount)}`:`🏥 ${esc(x.hospital)} · ${esc(x.reason)}`;return (k==='schedule'&&x.who?`<span class="who who-${whoClass(x.who)}">${esc(x.who)}</span> `:'')+esc(x.title)+(k==='shopping'?` · ${esc(x.quantity)}`:'')}
 // The whole card opens the edit form (delete is inside it); only shopping keeps a one-tap done button.
 function dday(date){
  const today=Somhouse.localDateTime().slice(0,10),n=Math.round((new Date(date.slice(0,10)+'T12:00')-new Date(today+'T12:00'))/86400000);
@@ -358,9 +363,10 @@ function listView(k){
  const names={records:'기록을 누르면 고치거나 지울 수 있어요.',schedule:'병원 예약과 가족 일정을 관리해요. 일정을 누르면 고치거나 지울 수 있어요.',shopping:'‘✓ 샀어요’로 바로 완료하고, 항목을 누르면 고치거나 지울 수 있어요. Google 음성 장보기는 관리자가 상품 규격과 가격 검색을 설정한 경우에만 가격 비교 링크를 남겨요.'};
  const items=Somhouse.filter(sorted(k),filters[k]),now=Somhouse.localDateTime();
  const head=k==='schedule'?`다가오는 ${items.filter(x=>x.date>=now).length} · 지난 ${items.filter(x=>x.date<now).length}`:k==='shopping'?`살 것 ${items.filter(x=>x.done!=='yes').length} · 산 것 ${items.filter(x=>x.done==='yes').length}`:`기록 ${items.length}개`;
+  const kids=k==='schedule'?`<p class="caption kids">👶 아기: ${children().map(esc).join(', ')||'아직 등록하지 않았어요'} <button class="plain small" data-manage-children="1">${children().length?'아기 이름 관리':'＋ 아기 등록'}</button></p>`:'';
  const add=k==='records'?'<button data-add="feeding">수유 추가</button><button class="secondary" data-add="sleep">수면 추가</button><button class="secondary" data-add="hospital">병원 추가</button>':`<button data-add="${k}">추가하기</button>`;
  const body=k==='schedule'?scheduleItems(items):k==='shopping'?shoppingItems(items):items.length?recordGroups(items):'';
- return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p><div class="heading"><h2>${head}</h2><div class="quick">${add}</div></div>${filterView(k)}${body||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}${k==='records'?voiceHelp():''}`;
+ return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p>${kids}<div class="heading"><h2>${head}</h2><div class="quick">${add}</div></div>${filterView(k)}${body||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}${k==='records'?voiceHelp():''}`;
 }
 function shoppingItems(items){
  if(!items.length)return '';
@@ -371,6 +377,30 @@ function scheduleItems(items){
  const now=Somhouse.localDateTime(),upcoming=items.filter(x=>x.date>=now).reverse(),past=items.filter(x=>x.date<now);
  if(!items.length)return '';
  return `${upcoming.map(x=>item(x,'schedule')).join('')||'<p class="empty">다가오는 일정이 없어요.</p>'}${past.length?`<details class="past"${schedulePastOpen?' open':''}><summary>지난 일정 ${past.length}개</summary>${past.map(x=>item(x,'schedule')).join('')}</details>`:''}`;
+}
+// Register a child's name (shared by every phone). With no names yet, schedules saved as '아기' can follow.
+async function addChild(){
+ if(shared.readOnly){alert(READ_ONLY);return '';}
+ const name=(prompt('아기 이름을 입력해 주세요. 예: 솜이')||'').trim();
+ if(!name)return '';
+ const first=!children().length,old=data.schedule.filter(x=>x.who==='아기').length;
+ const rename=first&&old&&confirm(`‘아기’로 저장된 일정 ${old}개를 ‘${name}’ 일정으로 바꿀까요?`)?{'아기':name}:undefined;
+ return await saveChildren([...children(),name],rename)?name:'';
+}
+async function saveChildren(list,rename){
+ if(busy)return false;busy=true;connectionView();
+ try{const result=await shared.saveSettings(list,rename);data=result.data;message(`아기 이름을 저장했어요: ${children().join(', ')||'없음'}${result.moved?` · 일정 ${result.moved}개를 옮겼어요`:''}`);return true;}
+ catch(error){alert(error.message);return false;}
+ finally{busy=false;connectionView();}
+}
+// One line to rename, add or remove: '솜이, 하늘'. Same count keeps positions, so a changed name is a rename.
+async function manageChildren(){
+ if(shared.readOnly){alert(READ_ONLY);return;}
+ const before=children(),text=prompt('아기 이름을 쉼표(,)로 구분해 적어 주세요. 이름을 바꾸면 그 아기의 일정도 함께 바뀌어요.',before.join(', '));
+ if(text===null)return;
+ const after=text.split(',').map(x=>x.trim()).filter(Boolean),rename={};
+ if(after.length===before.length)before.forEach((old,i)=>{if(old!==after[i])rename[old]=after[i];});
+ if(await saveChildren(after,Object.keys(rename).length?rename:undefined))render();
 }
 async function checkAI(){
  const state=ai;
@@ -449,7 +479,16 @@ function amountField(category,amount){
  const unit=units[category];
  return `<div class="amount-row"><button type="button" class="secondary step" data-step="-1" aria-label="줄이기"${unit?'':' hidden'}>−${unit?unit[1]:''}</button><input name="amount" type="text" inputmode="${unit?'decimal':'text'}" value="${esc(amountParts(category,amount))}" required placeholder="${unit?'':'예: 120ml 또는 15분'}"><span class="unit">${unit?unit[0]:''}</span><button type="button" class="secondary step" data-step="1" aria-label="늘리기"${unit?'':' hidden'}>+${unit?unit[1]:''}</button></div>`;
 }
-function openForm(type,x,preset={},review=''){reviewKey=review;kind=type;editing=x||null;draftId=x?.id||newId();const values=x||{...preset,date:preset.date||(type==='shopping'?'':Somhouse.localDateTime()),...(type==='shopping'&&!preset.quantity?{quantity:'1'}:{}),...(type==='feeding'?{category:preset.category||'분유',amount:preset.amount||(review?'':lastAmount(preset.category||'분유'))}:{})};$('#delete-item').hidden=!x||Boolean(review);$('#formtitle').textContent=(review?'확인 필요 정정 · ':x?'수정 · ':'추가 · ')+({feeding:'수유 기록',sleep:'수면 기록',hospital:'병원 방문',schedule:'일정',shopping:'구매 목록'}[type]);$('#fields').innerHTML=schemas[type].map(([name,label,t,required])=>`<label class="field">${label}${required?' *':''}${t==='select'?`<select name="${name}" required>${(choices[type+'.'+name]||choices[name]).map(v=>`<option ${values[name]===v?'selected':''}>${v}</option>`).join('')}</select>`:t==='textarea'?`<textarea name="${name}">${esc(values[name]||'')}</textarea>`:type==='feeding'&&name==='amount'?amountField(values.category,values.amount):`<input name="${name}" type="${t}" value="${esc(values[name]||'')}" ${required?'required':''}${name==='amount'?' placeholder="예: 120ml 또는 15분"':''}>`}</label>`).join('');
+function openForm(type,x,preset={},review=''){reviewKey=review;kind=type;editing=x||null;draftId=x?.id||newId();const values=x||{...preset,date:preset.date||(type==='shopping'?'':Somhouse.localDateTime()),...(type==='shopping'&&!preset.quantity?{quantity:'1'}:{}),...(type==='feeding'?{category:preset.category||'분유',amount:preset.amount||(review?'':lastAmount(preset.category||'분유'))}:{})};$('#delete-item').hidden=!x||Boolean(review);$('#formtitle').textContent=(review?'확인 필요 정정 · ':x?'수정 · ':'추가 · ')+({feeding:'수유 기록',sleep:'수면 기록',hospital:'병원 방문',schedule:'일정',shopping:'구매 목록'}[type]);$('#fields').innerHTML=schemas[type].map(([name,label,t,required])=>`<label class="field">${label}${required?' *':''}${t==='select'?`<select name="${name}" required>${(name==='who'?whoChoices(values.who):choices[type+'.'+name]||choices[name]).map(v=>`<option ${values[name]===v?'selected':''}>${esc(v)}</option>`).join('')}${name==='who'?`<option value="${ADD_CHILD}">＋ 아기 추가…</option>`:''}</select>`:t==='textarea'?`<textarea name="${name}">${esc(values[name]||'')}</textarea>`:type==='feeding'&&name==='amount'?amountField(values.category,values.amount):`<input name="${name}" type="${t}" value="${esc(values[name]||'')}" ${required?'required':''}${name==='amount'?' placeholder="예: 120ml 또는 15분"':''}>`}</label>`).join('');
+ if(type==='schedule'){
+  const select=document.querySelector('#fields select[name="who"]');
+  if(select){let last=select.value;select.onchange=async()=>{
+   if(select.value!==ADD_CHILD){last=select.value;return;}
+   const name=await addChild();
+   select.innerHTML=whoChoices(name||last).map(v=>`<option ${v===(name||last)?'selected':''}>${esc(v)}</option>`).join('')+`<option value="${ADD_CHILD}">＋ 아기 추가…</option>`;
+   select.value=name||last;last=select.value;
+  };}
+ }
  if(type==='feeding'){
   const select=document.querySelector('#fields select[name="category"]');
   if(select)select.onchange=()=>{
@@ -478,6 +517,7 @@ document.addEventListener('click',async e=>{
   try{location.href=await shared.googleStart('connect',location.origin+location.pathname);}catch(error){message(error.message);}finally{busy=false;connectionView();}
   return;
  }
+ if(b.dataset.manageChildren){await manageChildren();return;}
  if(b.dataset.moreDays){recordDays+=Number(b.dataset.moreDays);render();return;}
  if(['7','30'].includes(b.dataset.statsDays)){statsDays=Number(b.dataset.statsDays);render();return;}
  if(['schedule','shopping'].includes(b.dataset.addOn)&&calendarDay){openForm(b.dataset.addOn,null,{date:b.dataset.addOn==='schedule'?calendarDay+'T09:00':calendarDay});return;}
