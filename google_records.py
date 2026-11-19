@@ -30,7 +30,8 @@ TAB = "원본 기록"
 HEADERS = ["이벤트 ID", "수집 시각 (서울)", "출처", "동작", "유형", "기록 ID",
            "음성 Task ID", "처리 상태", "원본 제목", "원본 데이터 (JSON)"]
 SEOUL = ZoneInfo("Asia/Seoul")
-PREFIX = re.compile(r"^솜\s*하우스(?=$|[\s:：,])\s*[:：,]?\s*")
+from brand import DEFAULT as BRAND_DEFAULT, NAME as BRAND, prefix_pattern
+PREFIX = prefix_pattern(BRAND_DEFAULT, BRAND)
 VOLUME_UNIT = r"(?:ml|밀리\s*리터|미리|cc|씨씨)"
 SPOKEN_TIME = re.compile(r"(?:(오전|오후)\s*)?(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분)?")
 SCHEMA = """
