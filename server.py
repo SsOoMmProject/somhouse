@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from antigravity import (CONFIG_NAME, SCOPES, Antigravity, AntigravityError,
                          executable, parse_question, save_config, summarize_records)
-from google_records import (GoogleError, GoogleRecords, SCHEMA as GOOGLE_SCHEMA, SCOPES as GOOGLE_SCOPES,
+from google_records import (GoogleAPI, GoogleError, GoogleRecords, SCHEMA as GOOGLE_SCHEMA, SCOPES as GOOGLE_SCOPES,
                             load_config as load_google_config, read_config as read_google_config)
 from calendar_records import FEEDING_KINDS, SLEEP_KINDS, SCHEMA as CALENDAR_SCHEMA, WritebackRefused, load_aliases, relearn
 from shopping_records import SCHEMA as SHOPPING_SCHEMA
@@ -31,6 +31,7 @@ from holidays import HolidayFeed, SCHEMA as HOLIDAY_SCHEMA, listing as holiday_l
 from demo import GUEST, READ_ONLY_MESSAGE, demo_payload
 from sleep_wake import end_sleep_on_feeding
 import google_web
+from google_setup import provision
 import families
 from families import HOME, Refused, Registry, family_of_token, session_prefix
 from calendar_records import CALENDAR_SCOPES, WRITE_SCOPE
@@ -324,6 +325,40 @@ class FamilyServer(ThreadingHTTPServer):
         self.registry = Registry(store)
         self.family_stores = {}
         self.family_lock = threading.Lock()
+        # Each other family may connect its own Google account; its bridge works only on that family's folder.
+        self.family_bridges = {}
+        self.workers = []
+        self.running = False
+        with store.connect() as db:
+            others = [family for family, _ in self.registry.families(db) if family != HOME]
+        for family in others:
+            bridge = GoogleRecords.load(self.family_store(family))
+            if bridge is not None:
+                self.family_bridges[family] = bridge
+
+    def start_bridge(self, family, bridge):
+        """Use a family's newly connected Google bridge, and start its worker when the server is running."""
+        with self.family_lock:
+            self.family_bridges[family] = bridge
+            running = self.running
+        if running:
+            self.run_worker(bridge)
+
+    def run_worker(self, bridge):
+        thread = threading.Thread(target=bridge.run, daemon=True)
+        with self.family_lock:
+            self.workers.append(bridge)
+        thread.start()
+
+    def google_subject_in_use(self, subject, family):
+        """True when another family (or the home family) already connected this Google account."""
+        home = read_google_config(self.store.directory) or {}
+        if family != HOME and home.get("subject") == subject:
+            return True
+        with self.store.connect() as db:
+            others = [f for f, _ in self.registry.families(db) if f not in (HOME, family)]
+        return any((read_google_config(self.store.directory / "families" / f) or {}).get("subject") == subject
+                   for f in others)
 
     def family_store(self, family):
         with self.family_lock:
@@ -334,7 +369,7 @@ class FamilyServer(ThreadingHTTPServer):
     def family(self, family):
         if family == HOME:
             return Family(HOME, self.store, self.google, self.keep)
-        return Family(family, self.family_store(family))
+        return Family(family, self.family_store(family), self.family_bridges.get(family))
 
     def family_for(self, token):
         """The family a session token opens. Unknown or removed families need a new sign-in."""
@@ -351,6 +386,9 @@ class FamilyServer(ThreadingHTTPServer):
         if family == HOME:
             return False
         store = self.family_store(family)
+        # A family with a Google connection (even a half-finished one) is never set aside automatically.
+        if (store.directory / "google-records.json").exists():
+            return False
         with store.lock, store.connect() as db:
             return db.execute("SELECT 1 FROM items LIMIT 1").fetchone() is None
 
@@ -381,6 +419,11 @@ class FamilyServer(ThreadingHTTPServer):
         sync = self.google or self.keep
         if sync is not None:
             threading.Thread(target=sync.run, daemon=True).start()
+        with self.family_lock:
+            self.running = True
+            bridges = list(self.family_bridges.values())
+        for bridge in bridges:
+            self.run_worker(bridge)
         holidays = HolidayFeed(self.store) if self.holiday_feed else None
         if holidays is not None:
             threading.Thread(target=holidays.run, daemon=True).start()
@@ -392,6 +435,9 @@ class FamilyServer(ThreadingHTTPServer):
             if sync is not None:
                 sync.stop.set()
                 sync.wake.set()
+            for bridge in self.workers:
+                bridge.stop.set()
+                bridge.wake.set()
 
     @contextmanager
     def credential_attempt(self, failure_status):
@@ -465,12 +511,13 @@ class Handler(BaseHTTPRequestHandler):
             with family.store.lock, family.store.connect() as db:
                 if family.store.user(db, auth[7:]) == GUEST:
                     raise Problem(403, READ_ONLY_MESSAGE)
-            if not family.home:
-                raise Problem(409, "이 가족은 아직 Google 기록 연동이 없어요. 웹 기록은 그대로 저장돼요.")
-            if self.server.google is None:
+            if family.home and family.google is None:
                 raise Problem(409, "처음 연결은 관리자가 맥에서 해야 해요. 연결된 뒤부터 여기서 다시 연결할 수 있어요.")
             state["session"] = hashlib.sha256(auth[7:].encode()).hexdigest()
-            scopes = GOOGLE_SCOPES + (CALENDAR_SCOPES if self.server.google.calendar else ())
+            state["family"] = family.id
+            # Another family's first connection asks for Calendar too: Nest voice usually lands there.
+            calendar = family.google.calendar if family.google is not None else True
+            scopes = GOOGLE_SCOPES + (CALENDAR_SCOPES if calendar else ())
         elif mode == "login":
             scopes = google_web.LOGIN_SCOPES
             invite = body.get("invite")
@@ -523,14 +570,24 @@ class Handler(BaseHTTPRequestHandler):
             code = self.server.login_codes.add({"token": token, "username": username, "outcome": outcome,
                                                 "family": {"home": family == HOME, "name": name}})
             return self.redirect(back + "#google=" + code)
-        if not connected.get("subject") or who["sub"] != connected["subject"]:
-            return fail("솜하우스에 연결된 가족 Google 계정으로 다시 연결해 주세요.")
-        # Reconnect: the person who started it must still be signed in, and the new grant must reach every resource.
+        # Connect or reconnect: the person who started it must still be signed in to that family.
+        family_id = state.get("family", HOME)
         with store.lock, store.connect() as db:
-            row = db.execute("SELECT username FROM sessions WHERE token=?", (state["session"],)).fetchone()
-        google = self.server.google
-        if not row or row[0] == GUEST or google is None:
+            known = self.server.registry.exists(db, family_id)
+        family = self.server.family(family_id) if known else None
+        row = None
+        if family is not None:
+            with family.store.lock, family.store.connect() as db:
+                row = db.execute("SELECT username FROM sessions WHERE token=?", (state["session"],)).fetchone()
+        if not row or row[0] == GUEST:
             return fail("다시 로그인한 뒤 Google 연결을 다시 시도해 주세요.")
+        if not family.home:
+            connected = read_google_config(family.store.directory) or {}
+        if family.google is None:
+            return self.first_connect(family, client, tokens, who, connected, fail, back)
+        if not connected.get("subject") or who["sub"] != connected["subject"]:
+            return fail("이 가족에 연결된 Google 계정으로 다시 연결해 주세요.")
+        google = family.google
         if not tokens.get("refresh_token"):
             return fail("Google이 계속 연결 권한을 주지 않았어요. 모든 권한에 체크하고 다시 시도해 주세요.")
         trial = {**google.config, "client_id": client["client_id"], "client_secret": client["client_secret"],
@@ -544,6 +601,36 @@ class Handler(BaseHTTPRequestHandler):
         google.adopt_credentials(client["client_id"], client["client_secret"], tokens["refresh_token"],
                                  tokens["access_token"], extra)
         return self.redirect(back + "#google-connected=1")
+
+    def first_connect(self, family, client, tokens, who, previous, fail, back):
+        """Another family's first Google connection from a phone: its own Tasks list, source sheet and calendar.
+
+        The bridge then reads that account's voice inputs (Tasks @default, primary calendar) into this family only.
+        """
+        if family.home:
+            return fail("처음 연결은 관리자가 맥에서 해야 해요.")
+        if previous.get("subject") and previous["subject"] != who["sub"]:
+            return fail("처음 연결하던 Google 계정과 같은 계정으로 다시 시도해 주세요.")
+        if self.server.google_subject_in_use(who["sub"], family.id):
+            return fail("이 Google 계정은 이미 다른 가족에 연결돼 있어요. 이 가족이 쓰는 Google 계정으로 연결해 주세요.")
+        if not tokens.get("refresh_token"):
+            return fail("Google이 계속 연결 권한을 주지 않았어요. 모든 권한에 체크하고 다시 시도해 주세요.")
+        granted = set(str(tokens.get("scope", "")).split())
+        if not set(GOOGLE_SCOPES[2:]) <= granted:
+            return fail("Google Tasks와 Drive(솜하우스가 만든 파일만) 권한이 필요해요. 모든 권한에 체크하고 다시 시도해 주세요.")
+        calendar = set(CALENDAR_SCOPES) <= granted  # unticked Calendar: Tasks and the sheet still work
+        config = {**previous, "binding": previous.get("binding") or secrets.token_hex(16),
+                  "client_id": client["client_id"], "client_secret": client["client_secret"],
+                  "refresh_token": tokens["refresh_token"], "inbox": previous.get("inbox", "@default"),
+                  "subject": who["sub"]}
+        if calendar:
+            config["calendar_write"] = True
+        try:
+            provision(family.store.directory, GoogleAPI(config, tokens["access_token"]), config, calendar)
+        except (GoogleError, KeyError, TypeError, ValueError, OSError):
+            return fail("Google에 솜하우스 시트·Tasks·캘린더를 만들지 못했어요. 다시 연결하면 만든 것까지 이어서 진행해요.")
+        self.server.start_bridge(family.id, GoogleRecords(family.store, config))
+        return self.redirect(back + "#google-connected=" + ("new" if calendar else "new-no-calendar"))
 
     def body(self, max_size=MAX_BODY):
         if self.headers.get("Transfer-Encoding"):
@@ -621,6 +708,10 @@ class Handler(BaseHTTPRequestHandler):
             server.end_sessions(family.id, removed)
         if gone:
             server.retire_family(family.id)
+        else:
+            bridge = family.google
+            result["google"] = {"connected": bridge is not None, "email": getattr(bridge, "email", ""),
+                                "calendar": bool(bridge and bridge.calendar)}
         return {**result, **extra, "signed_out": removed == username or gone}
 
     def handle_request(self):
@@ -842,7 +933,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     raise Problem(404, "API를 찾을 수 없습니다.")
             # Only acknowledge a change after the SQLite context has committed it.
-            if (path in ("/api/data", "/api/merge") and google is None
+            if (path in ("/api/data", "/api/merge") and google is None and family.home
                     and (store.directory / "google-records.json").exists()):
                 result["google_status"] = {"auth_state": "configuration_error", "services": {}, "review": 0, "errors": []}
             sync = google or keep

@@ -615,13 +615,18 @@ function familyView(){
  const members=f.members.map(m=>`<li><span>${esc(m.email)}${m.you?' <span class="badge">나</span>':''}${m.anchor?' <span class="badge">연결 계정</span>':''}</span>${m.anchor?'':`<button type="button" class="secondary" data-family-remove="${esc(m.email)}">${m.you?'나가기':'내보내기'}</button>`}</li>`).join('');
  const emails=f.emails.map(e=>`<li><span>${esc(e)} <span class="badge">로그인 대기</span></span><button type="button" class="secondary" data-family-unregister="${esc(e)}">취소</button></li>`).join('');
  const link=familyLink?`<div class="invite-link"><input readonly value="${esc(familyLink)}" aria-label="초대 링크"><button type="button" data-family-share="1">${navigator.share?'공유':'복사'}</button></div>`:'';
- $('#family-body').innerHTML=`<p class="caption">같은 가족은 같은 기록을 봐요. 다른 가족의 기록은 서로 보이지 않아요.${f.home?'':' 이 가족은 아직 Google 연동(음성 입력·시트) 없이 웹 기록만 저장돼요.'}</p>
+ $('#family-body').innerHTML=`<p class="caption">같은 가족은 같은 기록을 봐요. 다른 가족의 기록은 서로 보이지 않아요.</p>${f.home?'':googleSection(f.google||{})}
   <h3>구성원</h3><ul>${members||'<li>아직 없어요</li>'}</ul>
   <h3>이메일로 미리 등록</h3><p class="caption">등록한 Google 계정으로 로그인하면 바로 이 가족이 돼요.</p>
   ${emails?`<ul>${emails}</ul>`:''}<form id="family-email-form"><label class="field" style="flex:1;margin:0">Google 계정 이메일<input name="email" type="email" required maxlength="254" placeholder="name@gmail.com" autocomplete="off"></label><button type="submit">등록</button></form>
   <h3>초대 링크</h3><p class="caption">${f.invite?`초대 링크가 켜져 있어요 (${esc(f.invite.expires.replace('T',' '))}까지). 링크를 연 사람은 Google로 로그인하면 이 가족이 돼요.`:'링크를 받은 사람은 Google로 로그인하면 이 가족이 돼요. 7일 동안 쓸 수 있어요.'}</p>
   <div class="actions" style="justify-content:flex-start;margin-top:8px"><button type="button" class="secondary" data-family-invite="1">${f.invite?'새 링크 만들기':'초대 링크 만들기'}</button>${f.invite?'<button type="button" class="plain" data-family-stop="1">링크 끄기</button>':''}</div>${link}
   <p class="caption">앱을 정식 게시하기 전에는 새 Google 계정을 관리자가 Google Cloud 테스트 사용자로 추가해야 로그인할 수 있어요.</p>`;
+}
+// Another family connects its own Google account: its Tasks list, source sheet and feeding calendar are made there.
+function googleSection(g){
+ if(g.connected)return `<h3>Google 연동</h3><p class="caption">🟢 ${esc(g.email||'이 가족의 Google 계정')}에 연결돼 있어요. 그 계정의 음성 입력을 가져오고, 웹 기록을 그 계정의 원본 시트·Tasks${g.calendar?'·수유 캘린더':''}에 남겨요.</p><div class="actions" style="justify-content:flex-start;margin-top:8px"><button type="button" class="secondary" data-family-google="1">다시 연결</button></div>`;
+ return `<h3>Google 연동</h3><p class="caption">연결하기 전에는 웹 기록만 저장돼요. 이 가족이 네스트·휴대폰에서 쓰는 Google 계정으로 연결하면 그 계정에 ‘솜하우스 원본 기록’ 시트, ‘솜하우스 웹 기록’ Tasks 목록, 수유 캘린더를 만들고 그 계정의 음성 입력을 가져와요. 승인 화면에서 모든 권한에 체크해 주세요.</p><div class="actions" style="justify-content:flex-start;margin-top:8px"><button type="button" data-family-google="1">Google 연결하기</button></div>`;
 }
 async function familyChange(body,done){
  if(busy)return;busy=true;$('#family-status').textContent='저장하고 있어요…';
@@ -728,6 +733,11 @@ if(shared){
    familyChange({action:'remove_member',email:b.dataset.familyRemove},'가족 구성원을 바꿨어요.');
   }else if(b.dataset.familyUnregister)familyChange({action:'remove_email',email:b.dataset.familyUnregister},'등록을 취소했어요.');
   else if(b.dataset.familyInvite)familyChange({action:'invite'},'초대 링크를 만들었어요. 이전 링크는 더 이상 쓸 수 없어요.');
+  else if(b.dataset.familyGoogle){
+   busy=true;$('#family-status').textContent='Google로 이동하고 있어요…';
+   try{location.href=await shared.googleStart('connect',location.origin+location.pathname);}
+   catch(error){$('#family-status').textContent=error.message;busy=false;}
+  }
   else if(b.dataset.familyStop){familyLink='';familyChange({action:'stop_invite'},'초대 링크를 껐어요.');}
   else if(b.dataset.familyShare){
    try{
@@ -757,7 +767,10 @@ if(shared){
   })();
  }else{
   if(returned.has('google-error')){clearHash();forgetInvite();message(returned.get('google-error'));}
-  if(returned.has('google-connected')){clearHash();accountMessage('Google을 다시 연결했어요. 멈춰 있던 전송을 이어서 진행해요.');}
+  if(returned.has('google-connected')){
+   const first=returned.get('google-connected');clearHash();
+   accountMessage(first==='new'?'Google을 연결했어요. 원본 시트·Tasks 목록·수유 캘린더를 만들었고, 이 계정의 음성 입력을 가져오기 시작해요.':first==='new-no-calendar'?'Google을 연결했어요. 캘린더 권한이 없어 원본 시트와 Tasks만 써요. 캘린더도 쓰려면 가족 관리에서 다시 연결하고 모든 권한에 체크해 주세요.':'Google을 다시 연결했어요. 멈춰 있던 전송을 이어서 진행해요.');
+  }
   if(mode==='shared'){if(!returned.has('google-error'))message('가족의 기록을 불러오고 있어요…');refreshShared(true);}
  }
 }else message('화면을 불러오지 못했어요. 잠시 후 다시 열어주세요.');

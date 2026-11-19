@@ -108,7 +108,7 @@ class Families(unittest.TestCase):
         self.assertEqual(self.request("/api/merge", "POST", {"records": [], "schedule": [], "shopping": []}, other["token"])[0], 403)
         self.assertEqual(self.request("/api/ai", token=other["token"])[1]["enabled"], False)
         self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, other["token"])[0], 403)
-        self.assertEqual(self.request("/api/google/start", "POST", {"mode": "connect", "returnTo": BACK}, other["token"])[0], 409)
+        self.assertEqual(self.request("/api/family", token=other["token"])[1]["google"]["connected"], False)
         self.assertEqual(self.request("/api/password", "POST", {"currentPassword": "x", "newPassword": "y" * 12}, other["token"])[0], 403)
         self.assertEqual(self.request("/api/me", token=other["token"])[1]["family"]["home"], False)
 
@@ -160,6 +160,80 @@ class Families(unittest.TestCase):
         with self.store.connect() as db:
             db.execute("UPDATE family_invites SET expires=?", (time.time() - 1,))
         self.assertIn("만료", self.google("S-X", "x@gmail.com", fresh)["error"])
+
+    def connect(self, token, sub, scope, refresh="r1"):
+        """Run the phone's 'Google 연결' round trip for the signed-in family. Returns the redirect fragment."""
+        tokens = {"access_token": "at", "scope": scope}
+        if refresh:
+            tokens["refresh_token"] = refresh
+        code, body = self.request("/api/google/start", "POST", {"mode": "connect", "returnTo": BACK}, token)
+        self.assertEqual(code, 200)
+        with patch.object(google_web, "exchange", lambda *a: dict(tokens)), \
+             patch.object(google_web, "identity", lambda t: {"sub": sub, "email": "x@gmail.com", "email_verified": True}):
+            state = dict(x.split("=", 1) for x in body["url"].split("?", 1)[1].split("&"))["state"]
+            connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=10)
+            connection.request("GET", f"/api/google/callback?state={state}&code=abc")
+            response = connection.getresponse(); response.read(); connection.close()
+        return unquote(response.getheader("Location").split("#", 1)[1])
+
+    def test_another_family_connects_its_own_google_account(self):
+        import server as server_module
+        from google_records import GoogleRecords, read_config
+        other = self.google("S2", "other@gmail.com")["token"]
+        family = other[2:18]
+        made = []
+
+        def fake_provision(directory, api, config, calendar):
+            made.append((Path(directory).name, calendar, api.token))
+            config.update(task_list="web-list", spreadsheet="sheet-1", ready=True,
+                          **({"calendar_inbox": "primary", "calendar_outbox": "cal-out"} if calendar else {}))
+            save_config(directory, config)
+            return config
+
+        full = "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/tasks " \
+               "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/calendar.events.owned " \
+               "https://www.googleapis.com/auth/calendar.app.created"
+        start = self.request("/api/google/start", "POST", {"mode": "connect", "returnTo": BACK}, other)[1]["url"]
+        self.assertIn("calendar.app.created", unquote(start))  # the first connection asks for Calendar too
+        with patch.object(server_module, "provision", fake_provision), patch.object(GoogleRecords, "run", lambda self: None):
+            # The home family's account, a missing refresh token or unticked Tasks/Drive are refused.
+            self.assertIn("이미 다른 가족", self.connect(other, "HOME", full))
+            self.assertIn("google-error", self.connect(other, "S2", full, refresh=None))
+            self.assertIn("Tasks와 Drive", self.connect(other, "S2", "openid https://www.googleapis.com/auth/tasks"))
+            self.assertEqual(made, [])
+            self.assertEqual(self.connect(other, "S2", full), "google-connected=new")
+        self.assertEqual(made, [(family, True, "at")])
+        saved = read_config(self.directory / "families" / family)
+        self.assertEqual((saved["subject"], saved["refresh_token"], saved["calendar_write"]), ("S2", "r1", True))
+        self.assertIsNone(read_config(self.directory / "families" / "nope"))
+        view = self.request("/api/family", token=other)[1]
+        self.assertEqual((view["google"]["connected"], view["google"]["calendar"]), (True, True))
+        data = self.request("/api/data", token=other)[1]
+        self.assertIn("google_status", data)
+        self.assertEqual(data["google_status"]["auth_state"], "ready")
+        # The home family is untouched: its own (here: incomplete) connection, not this family's bridge.
+        home = self.request("/api/data", token=self.google("HOME", "s@gmail.com")["token"])[1]
+        self.assertEqual((home["google_status"]["auth_state"], "sources" in home), ("configuration_error", False))
+
+        # A record saved by this family is queued for this family's Google only.
+        self.save(other, "o-1", "70ml")
+        with self.server.family_store(family).connect() as db:
+            self.assertTrue(db.execute("SELECT COUNT(*) FROM google_record_events").fetchone()[0] >= 1)
+        with self.store.connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM google_record_events").fetchone()[0], 0)
+
+        # The same Google account cannot be connected to a second family; reconnecting this one renews it.
+        third = self.google("S3", "third@gmail.com")["token"]
+        with patch.object(server_module, "provision", fake_provision), patch.object(GoogleRecords, "run", lambda self: None):
+            self.assertIn("이미 다른 가족", self.connect(third, "S2", full))
+            with patch.object(google_web, "check_access", return_value=True):
+                self.assertEqual(self.connect(other, "S2", full, refresh="r2"), "google-connected=1")
+                self.assertIn("이 가족에 연결된", self.connect(other, "S9", full))
+        self.assertEqual(read_config(self.directory / "families" / family)["refresh_token"], "r2")
+        # A family with a Google connection is never set aside, even without records: its last member stays.
+        self.request("/api/items/records/o-1", "DELETE", token=other)
+        self.assertEqual(self.request("/api/family", "POST", {"action": "remove_member", "email": "other@gmail.com"}, other)[0], 409)
+        self.assertTrue((self.directory / "families" / family).exists())
 
     def test_removing_a_member_signs_them_out(self):
         home = self.google("HOME", "somsom@gmail.com")["token"]

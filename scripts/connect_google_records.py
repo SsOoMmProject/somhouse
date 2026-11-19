@@ -7,9 +7,9 @@ import secrets
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from google_records import (GoogleAPI, GoogleError, HEADERS, SCOPES, SHEETS, TAB, TASKS,
-                            load_config, read_config, save_config)
-from calendar_records import CALENDAR, CALENDAR_NAME, CALENDAR_SCOPES, CALENDAR_WEB, WRITE_SCOPE, event_pages
+from google_records import GoogleAPI, GoogleError, SCOPES, TASKS, load_config, read_config
+from calendar_records import CALENDAR_NAME, CALENDAR_SCOPES, CALENDAR_WEB, WRITE_SCOPE
+from google_setup import provision
 from server import DEFAULT_DATA
 
 
@@ -58,41 +58,7 @@ def configure(directory, client_file, inbox=None, calendar=False, *, open_browse
         config["calendar_write"] = WRITE_SCOPE in granted
     if config["inbox"] == config.get("task_list"):
         raise SystemExit("음성 입력 목록과 웹 기록 목록은 서로 달라야 합니다.")
-    next(iter(api.tasks(config["inbox"])), None)
-
-    # Persist IDs as resources are created so a later setup retry reuses them.
-    if not config.get("ready"):
-        save_config(directory, config)
-    if not config.get("task_list"):
-        task_list = api.request(TASKS + "users/@me/lists", "POST", {"title": "솜하우스 웹 기록"}, "Tasks")
-        config["task_list"] = task_list["id"]
-        save_config(directory, config)
-    else:
-        next(iter(api.tasks(config["task_list"])), None)
-    if not config.get("spreadsheet"):
-        spreadsheet = api.request(SHEETS, "POST", {
-            "properties": {"title": "솜하우스 원본 기록", "locale": "ko_KR", "timeZone": "Asia/Seoul"},
-            "sheets": [{"properties": {"title": TAB, "gridProperties": {
-                "frozenRowCount": 1, "rowCount": 1000, "columnCount": 20}}}],
-        }, "Sheets")
-        config["spreadsheet"] = spreadsheet["spreadsheetId"]
-        save_config(directory, config)
-    if api.sheet_cell("A1") != [[HEADERS[0]]]:
-        api.sheet_row(1, HEADERS)
-    if api.sheet_cell("A1") != [[HEADERS[0]]]:
-        raise GoogleError("원본 시트 헤더 확인 실패", "Sheets")
-    api.protect_source()
-    config["source_sheet_id"] = api.sheet_id
-    if calendar:
-        config.setdefault("calendar_inbox", "primary")
-        next(event_pages(api, config["calendar_inbox"], maxResults=1), None)
-        if not config.get("calendar_outbox"):
-            target = api.request(CALENDAR, "POST", {"summary": CALENDAR_NAME, "timeZone": "Asia/Seoul"}, "Calendar")
-            config["calendar_outbox"] = target["id"]
-            save_config(directory, config)
-        next(event_pages(api, config["calendar_outbox"], maxResults=1), None)
-    config["ready"] = True
-    save_config(directory, config)
+    provision(directory, api, config, calendar)
     print(f"연결 계정 {identity.get('email', '')} · 음성 목록 {config['inbox']}")
     print(f"원본 시트 https://docs.google.com/spreadsheets/d/{config['spreadsheet']}/edit")
     if calendar:

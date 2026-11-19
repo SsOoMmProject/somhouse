@@ -189,7 +189,7 @@ class Registry:
                 raise Refused("이미 나갔거나 찾을 수 없는 가족이에요. 화면을 새로고침해 주세요.")
             left = db.execute("SELECT COUNT(*) FROM family_members WHERE family=?", (family,)).fetchone()[0]
             if family != HOME and left == 1 and not is_empty(family):
-                raise Refused("기록이 있는 가족의 마지막 구성원은 나갈 수 없어요. 먼저 다른 가족을 초대해 주세요.")
+                raise Refused("기록이나 Google 연결이 있는 가족의 마지막 구성원은 나갈 수 없어요. 먼저 다른 가족을 초대해 주세요.")
             db.execute("DELETE FROM family_members WHERE sub=?", (row[0],))
             if family != HOME and left == 1:
                 self.drop_family(db, family)
