@@ -290,17 +290,25 @@ test('the family calendar lives on the schedule page and shows feedings, schedul
  assert.deepEqual(JSON.parse(b.eval('JSON.stringify([shared.calendarEvents,shared.aliases])')),[[],{}]);
 });
 
-test('calendar writeback button appears only with write permission and asks before sending',async()=>{
+test('calendar writeback button appears only when the server says the title would change, and asks first',async()=>{
  const server=family();
  server.data.records.push({id:'cal-1',type:'feeding',date:'2026-11-17T14:00',category:'분유',amount:'10ml',memo:''},
                           {id:'web-1',type:'feeding',date:'2026-11-17T15:00',category:'분유',amount:'20ml',memo:''});
  server.googleStatus={auth_state:'ready',review:0,errors:[],services:{},calendar_write:false};
  const b=browser({server});await b.login();b.eval("page='records';render()");
  assert.doesNotMatch(b.get('#content').innerHTML,/data-writeback/);
- server.googleStatus={...server.googleStatus,calendar_write:true};
+ server.googleStatus={...server.googleStatus,calendar_write:true,writeback_ready:[],writeback_pending:[]};
+ await b.eval('refreshShared(true)');b.eval("page='records';render()");
+ assert.doesNotMatch(b.get('#content').innerHTML,/data-writeback/);  // Calendar already says the same
+ server.googleStatus={...server.googleStatus,writeback_ready:['cal-1']};
  await b.eval('refreshShared(true)');b.eval("page='records';render()");
  const html=b.get('#content').innerHTML;
  assert.match(html,/data-writeback="cal-1">캘린더에도 반영/);assert.doesNotMatch(html,/data-writeback="web-1"/);
+ server.googleStatus={...server.googleStatus,writeback_ready:[],writeback_pending:['cal-1']};
+ await b.eval('refreshShared(true)');b.eval("page='records';render()");
+ assert.doesNotMatch(b.get('#content').innerHTML,/data-writeback/);assert.match(b.get('#content').innerHTML,/📆 캘린더 반영 중/);
+ server.googleStatus={...server.googleStatus,writeback_ready:['cal-1'],writeback_pending:[]};
+ await b.eval('refreshShared(true)');b.eval("page='records';render()");
  const asked=[];b.context.confirm=text=>{asked.push(text);return false;};
  await b.events.get('click')({target:{closest:()=>({dataset:{writeback:'cal-1'}})}});
  assert.match(asked[0],/‘분유 10ml’로 바꿀까요/);
