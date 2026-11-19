@@ -168,9 +168,10 @@ def natural_feeding(text, when, item_id, title, aliases=None):
         return (True, None) if known and clean else (False, None)
     if not known and not found["heard"] and not found["misheard"]:
         return False, None
-    # A look-alike is only read as a feeding next to a volume; "수육 30분" is a cooking time.
+    # Minutes are only used for breastfeeding, so a 유-word with minutes ("머유 10분") is likely 모유: keep it for a
+    # person to check instead of saving it. A 육-word with minutes ("수육 30분") is a cooking time and is ignored.
     if not known and all(unit == "분" for _, unit in found["amounts"]):
-        return False, None
+        return (True, None) if any(word.endswith("유") for word in found["heard"]) else (False, None)
     value, unit = found["amounts"][0]
     # Unknown words, a second amount, two kinds or two new words are kept for a person to check.
     if (len(found["amounts"]) != 1 or found["leftover"] or len(found["kinds"]) > 1 or len(found["heard"]) > 1

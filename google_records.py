@@ -470,7 +470,9 @@ class GoogleRecords:
             text = " ".join(unicodedata.normalize("NFKC", title or "").split())
             found = scan_feeding(PREFIX.sub("", text), aliases)
             amount = found["amounts"][0] if found["amounts"] else None
-            suggest = {"category": found["kinds"][0] if found["kinds"] else "기타",
+            # Minutes are only used for 모유 (breastfeeding), so suggest it when no kind was heard.
+            minutes = bool(amount and amount[1] == "분")
+            suggest = {"category": found["kinds"][0] if found["kinds"] else ("모유" if minutes else "기타"),
                        "amount": (amount[0] + ("분" if amount[1] == "분" else "ml")) if amount else ""}
             words = set(PREFIX.sub("", text).replace(".", " ").split())
             if words & SLEEP_WORDS and not found["kinds"] and not found["generic"]:

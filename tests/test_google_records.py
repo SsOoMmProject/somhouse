@@ -332,8 +332,12 @@ class GoogleRegression(unittest.TestCase):
             self.assertEqual(parse(summary), (True, None), summary)
         self.assertEqual(parse('부유 100ml', {'부유': '분유', '머유': '모유'})[1]['category'], '분유')
         self.assertEqual(parse('부유 머유 100ml', {'부유': '분유', '머유': '모유'}), (True, None))
-        for summary in ('수육 30분', '부유 30분', '교육 2시', '석유 가격'):
+        for summary in ('수육 30분', '교육 2시', '석유 가격'):
             self.assertEqual(parse(summary), (False, None), summary)
+        # A 유-word with minutes is probably 모유: kept for review, never saved by itself.
+        for summary in ('머유 10분', '부유 30분'):
+            self.assertEqual(parse(summary), (True, None), summary)
+        self.assertEqual(parse('머유 10분', {'머유': '모유'})[1]['category'], '모유')  # learned: saved directly
         self.assertEqual([learnable(w) for w in ('부유', '머유', '수육', '수유', '분유', '부', '부유물')],
                          [True, True, False, False, False, False, False])
 
@@ -395,6 +399,12 @@ class GoogleRegression(unittest.TestCase):
             status = self.bridge.status(db)
         self.assertEqual(status['review'], 1)
         self.assertEqual(status['review_items'][0]['suggest'], {'category': '분유', 'amount': ''})
+        self.assertFalse(self.rows("SELECT * FROM items"))
+        # "머유 10분": not saved, but offered for review with 모유 suggested (minutes mean breastfeeding).
+        self.bridge.calendar.record({'id': 'w2', 'summary': '머유 10분', 'start': start})
+        with self.store.connect() as db:
+            items = {x['title']: x for x in self.bridge.status(db)['review_items']}
+        self.assertEqual(items['머유 10분']['suggest'], {'category': '모유', 'amount': '10분'})
         self.assertFalse(self.rows("SELECT * FROM items"))
 
     def writeback_setup(self, description='엄마 메모'):
