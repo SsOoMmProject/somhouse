@@ -22,14 +22,14 @@ from antigravity import (CONFIG_NAME, SCOPES, Antigravity, AntigravityError,
                          executable, parse_question, save_config, summarize_records)
 from google_records import (GoogleError, GoogleRecords, SCHEMA as GOOGLE_SCHEMA, SCOPES as GOOGLE_SCOPES,
                             load_config as load_google_config, read_config as read_google_config)
-from calendar_records import FEEDING_KINDS, SLEEP_KINDS, SCHEMA as CALENDAR_SCHEMA, load_aliases, relearn
+from calendar_records import FEEDING_KINDS, SLEEP_KINDS, SCHEMA as CALENDAR_SCHEMA, WritebackRefused, load_aliases, relearn
 from shopping_records import SCHEMA as SHOPPING_SCHEMA
 from google_delivery import SCHEMA as DELIVERY_SCHEMA
 from holidays import HolidayFeed, SCHEMA as HOLIDAY_SCHEMA, listing as holiday_listing
 from demo import GUEST, READ_ONLY_MESSAGE, demo_payload
 from sleep_wake import end_sleep_on_feeding
 import google_web
-from calendar_records import CALENDAR_SCOPES
+from calendar_records import CALENDAR_SCOPES, WRITE_SCOPE
 from keep_sync import (CONFIG_NAME as KEEP_CONFIG_NAME, SCHEMA as KEEP_SCHEMA,
                        KeepSync, configured_email, queue as queue_keep)
 
@@ -125,6 +125,7 @@ class Store:
             for table, column, definition in (
                 ("google_voice_receipts", "captured", "TEXT"),
                 ("google_calendar_inputs", "review", "INTEGER NOT NULL DEFAULT 0"),
+                ("google_calendar_inputs", "etag", "TEXT NOT NULL DEFAULT ''"),
             ):
                 if column not in {row[1] for row in db.execute(f"PRAGMA table_info({table})")}:
                     db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
@@ -132,7 +133,7 @@ class Store:
                         db.execute("""UPDATE google_voice_receipts SET captured=(
                             SELECT MIN(captured) FROM google_record_events e
                             WHERE e.binding=google_voice_receipts.binding AND e.voice_id=google_voice_receipts.voice_id)""")
-                    else:
+                    elif column == "review":
                         db.execute("""UPDATE google_calendar_inputs SET review=COALESCE((
                             SELECT status LIKE '확인 필요%' OR status='웹 기록 유지' FROM google_record_events e
                             WHERE e.binding=google_calendar_inputs.binding AND e.item_id=google_calendar_inputs.item_id
@@ -418,7 +419,10 @@ class Handler(BaseHTTPRequestHandler):
             google_web.check_access(trial, tokens["access_token"], bool(google.calendar))
         except (GoogleError, KeyError, TypeError):
             return fail("새 연결로 기존 시트·Tasks·캘린더를 읽지 못해 이전 연결을 유지했어요. 모든 권한에 체크했는지 확인해 주세요.")
-        google.adopt_credentials(client["client_id"], client["client_secret"], tokens["refresh_token"], tokens["access_token"])
+        # Writing back to the original Calendar event needs the owned-events scope; Google lets people untick it.
+        extra = {"calendar_write": WRITE_SCOPE in str(tokens.get("scope", "")).split()} if google.calendar else {}
+        google.adopt_credentials(client["client_id"], client["client_secret"], tokens["refresh_token"],
+                                 tokens["access_token"], extra)
         return self.redirect(back + "#google-connected=1")
 
     def body(self, max_size=MAX_BODY):
@@ -553,6 +557,19 @@ class Handler(BaseHTTPRequestHandler):
                     if self.server.google is not None:
                         result["sources"] = self.server.google.sources()
                         result["google_status"] = self.server.google.status(db)
+                elif path == "/api/calendar-writeback" and self.command == "POST":
+                    google = self.server.google
+                    if google is None or google.calendar is None:
+                        raise Problem(404, "Google 캘린더 연결이 없어요.")
+                    item_id = self.body().get("id")
+                    if not isinstance(item_id, str) or not 0 < len(item_id) <= 200:
+                        raise Problem(400, "반영할 기록을 다시 선택해 주세요.")
+                    try:
+                        title = google.calendar.request_writeback(db, item_id)
+                    except WritebackRefused as refused:
+                        raise Problem(409, str(refused)) from None
+                    result = {"data": store.state(db), "aliases": load_aliases(db), "sources": google.sources(),
+                              "google_status": google.status(db), "title": title}
                 elif path == "/api/confirm" and self.command == "POST":
                     # One tap settles the kind of a feeding saved from an unclear voice or Calendar input.
                     body = self.body()
@@ -642,7 +659,7 @@ class Handler(BaseHTTPRequestHandler):
                     and (store.directory / "google-records.json").exists()):
                 result["google_status"] = {"auth_state": "configuration_error", "services": {}, "review": 0, "errors": []}
             sync = self.server.google or self.server.keep
-            if sync is not None and (path.startswith("/api/items/") or path in ("/api/review", "/api/confirm")):
+            if sync is not None and (path.startswith("/api/items/") or path in ("/api/review", "/api/confirm", "/api/calendar-writeback")):
                 sync.wake.set()
             self.respond(200, result)
         except (Problem, AntigravityError) as error:

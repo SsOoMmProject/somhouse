@@ -113,8 +113,9 @@ def check_access(config, access_token, calendar):
                 service="Sheets")
     if calendar:
         from urllib.parse import quote
-        api.request("https://www.googleapis.com/calendar/v3/calendars/" + quote(config["calendar_outbox"], safe="")
-                    + "/events?maxResults=1", service="Calendar")
+        for key in ("calendar_inbox", "calendar_outbox"):  # voice intake reads the inbox, feedings go to the outbox
+            api.request("https://www.googleapis.com/calendar/v3/calendars/" + quote(config[key], safe="")
+                        + "/events?maxResults=1", service="Calendar")
     return True
 
 

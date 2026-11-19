@@ -166,9 +166,11 @@ function dday(date){
 function item(x,k,compact=false,timeOnly=false){
  const when=timeOnly?(x.date||'').slice(11):(x.date||'').replace('T',' ');
  const badges=`${k==='schedule'&&x.date?dday(x.date):''}${x.confirm==='category'?'<span class="badge warn">종류 확인 필요</span>':''}`;
+ // A feeding that came from the primary Calendar can push a web correction back to its original event (PR #15).
+ const writeback=!compact&&k==='records'&&x.type==='feeding'&&String(x.id).startsWith('cal-')&&shared?.googleStatus?.calendar_write?`<button class="secondary done-toggle" data-writeback="${esc(x.id)}">캘린더에도 반영</button>`:'';
  const toggle=k==='shopping'&&!compact?`<button class="${x.done==='yes'?'plain':'secondary'} done-toggle" data-action="toggle" data-key="${k}" data-id="${esc(x.id)}">${x.done==='yes'?'다시 사기':'✓ 샀어요'}</button>`:'';
  const body=`<strong>${desc(x,k)}</strong> ${badges}<p>${esc(when)}${x.place?` · 📍 ${esc(x.place)}`:''}${x.memo?'<br>'+esc(x.memo):''}</p>${x.url?link(x.url):''}`;
- return `<div class="item${compact?'':' tappable'}${k==='shopping'&&x.done==='yes'?' done':''}"${compact?'':` data-action="edit" data-key="${k}" data-id="${esc(x.id)}" role="button" tabindex="0" aria-label="눌러서 수정"`}>${toggle}${body}</div>`;
+ return `<div class="item${compact?'':' tappable'}${k==='shopping'&&x.done==='yes'?' done':''}"${compact?'':` data-action="edit" data-key="${k}" data-id="${esc(x.id)}" role="button" tabindex="0" aria-label="눌러서 수정"`}>${toggle}${writeback}${body}</div>`;
 }
 // A mirrored Google Calendar event: read-only, opened in Google to edit.
 function googleItem(x){
@@ -499,6 +501,14 @@ document.addEventListener('click',async e=>{
    if(entry.heard&&kind!=='기타'&&shared.aliases?.[entry.heard]===kind)message(`저장했어요. 앞으로 ‘${entry.heard}’는 ${kind}로 기억할게요.`);
    render();
   }
+  return;
+ }
+ if(b.dataset.writeback){
+  const entry=data.records.find(x=>x.id===b.dataset.writeback);if(!entry)return;
+  const kind=['분유','모유','혼합'].includes(entry.category)?entry.category:'수유';
+  if(!confirm(`기본 캘린더의 원래 일정 제목을 ‘${kind} ${entry.amount}’로 바꿀까요?\n원래 제목은 일정 설명에 남고, 시각은 바꾸지 않아요.`))return;
+  let next;
+  if(await sharedChange(async()=>{next=await shared.calendarWriteback(entry.id);return next.data;})){message(`캘린더 반영을 요청했어요. 잠시 뒤 ‘${next.title}’로 바뀌어요.`);render();}
   return;
  }
  if(b.dataset.forget){

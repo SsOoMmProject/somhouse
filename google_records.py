@@ -386,9 +386,10 @@ class GoogleRecords:
                        (self.binding, credential_hash))
             self.auth_state = db.execute("SELECT state FROM google_auth_state WHERE binding=?", (self.binding,)).fetchone()[0]
 
-    def adopt_credentials(self, client_id, client_secret, refresh_token, access_token):
+    def adopt_credentials(self, client_id, client_secret, refresh_token, access_token, extra=None):
         """Switch to credentials renewed from the web: same account and resources, new client and refresh token."""
-        updated = {**self.config, "client_id": client_id, "client_secret": client_secret, "refresh_token": refresh_token}
+        updated = {**self.config, **(extra or {}), "client_id": client_id, "client_secret": client_secret,
+                   "refresh_token": refresh_token}
         save_config(self.store.directory, updated)
         self.config.update(updated)  # GoogleAPI and the Calendar/shopping helpers share this dict
         self.api.token, self.api.expires = access_token, time.monotonic() + 3000
@@ -453,7 +454,8 @@ class GoogleRecords:
         imports = [dict(target=target, last_error=error) for target, error in db.execute(
             "SELECT target,last_error FROM google_service_state WHERE binding=? AND last_error<>''",
             (self.binding,))]
-        result = {"auth_state": self.auth_state, "services": pending, "review": review, "errors": imports}
+        result = {"auth_state": self.auth_state, "services": pending, "review": review, "errors": imports,
+                  "calendar_write": bool(self.calendar and self.calendar.can_write)}
         if review:
             result["review_items"] = self.review_items(db)
         return result
@@ -802,6 +804,7 @@ class GoogleRecords:
             self.attempt("Tasks", self.deliver, "tasks")
             if self.calendar:
                 self.attempt("Calendar", self.calendar.flush)
+                self.attempt("Calendar 반영", self.calendar.flush_writebacks)
             self.attempt("장보기 가격비교", self.shopping.flush)
             self.wake.wait(30)
 

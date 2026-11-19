@@ -1,6 +1,6 @@
 # 기본 캘린더 정정 반영 설계 — 2026-11-17
 
-웹에서 정정한 수유(예: `뷰유` → 분유 10ml)를 사용자의 **기본 캘린더 원래 일정**에도 반영하는 기능의 설계입니다. **아직 구현하지 않았습니다.** Google 계정을 다시 연결할 때(Testing 토큰 만료 예상 2026-11-23경) 쓰기 권한 추가와 함께 진행합니다.
+웹에서 정정한 수유(예: `뷰유` → 분유 10ml)를 사용자의 **기본 캘린더 원래 일정**에도 반영하는 기능의 설계입니다. 구현은 `feature/calendar-writeback` 브랜치의 PR로 준비돼 있으며 **병합하지 않고 보관**합니다. Google 계정을 다시 연결할 때(Testing 토큰 만료 예상 2026-11-23경) 병합·배포하고 쓰기 권한을 받습니다.
 
 ## 현재 상태 (구현 전)
 
@@ -42,7 +42,7 @@
 
 - 필요한 범위: `https://www.googleapis.com/auth/calendar.events.owned`(소유한 캘린더 일정 읽기·쓰기). 기존 `calendar.events.owned.readonly`를 대체합니다.
 - 범위가 넓어지므로, 코드에서 위 "반영 대상 제한"을 지키고 테스트로 확인합니다.
-- `scripts/connect_google_records.py --calendar`로 재연결해 새 토큰을 받습니다. 기존 `binding`·리소스 ID는 유지되는지 확인합니다.
+- 휴대폰의 **Google 다시 연결** 또는 `scripts/connect_google_records.py --calendar`로 재연결해 새 토큰을 받습니다. 기존 `binding`·리소스 ID는 유지되는지 확인합니다.
 - 쓰기 권한이 없는 토큰이면 버튼을 숨기고 기존 동작(읽기 전용)으로 남습니다.
 
 ## 배포 전 검증 (가짜 캘린더로)
@@ -55,3 +55,23 @@
 6. 읽기 전용 토큰: 버튼 없음, 쓰기 요청 0회.
 
 실제 계정에서는 재연결 후 시험용 일정 1건으로만 확인합니다.
+
+## 구현 위치 (PR 보관 중)
+
+| 대책 | 코드 |
+|---|---|
+| 1 | `content_fingerprint`, `CalendarRecords.record`의 `somhouseWrite` 메아리 처리 |
+| 2 | `writeback_check`의 재해석 비교와 마지막으로 본 캘린더 제목 비교 |
+| 3 | `POST /api/calendar-writeback`, 기록 목록의 **캘린더에도 반영** 버튼(확인창 후 요청) |
+| 4 | 수집 때 저장한 `google_calendar_inputs.etag`와 GET 결과 비교, PATCH `If-Match`, 412 처리 |
+| 5 | `google_calendar_writes`, `WRITE_LIMIT = 3` / 24시간, 요청 시와 전송 시 모두 검사 |
+| 6 | `with_original`, 원본 시트 `calendar-writeback` 이벤트 |
+
+권한은 `scripts/connect_google_records.py`가 재연결 때 `calendar.events.owned`를 요청하고, Google이 실제로 허락한 경우에만 설정에 `calendar_write: true`를 저장합니다. 이 값이 없으면 버튼이 보이지 않고 서버도 요청을 거절합니다.
+
+### 배포 순서 (2026-11-19 갱신: 휴대폰 재연결)
+
+1. 이 PR을 병합하고 운영 폴더를 갱신한 뒤 서버를 재시작합니다. 아직 `calendar_write`가 없으므로 동작은 바뀌지 않습니다.
+2. 휴대폰 솜하우스 홈 맨 아래 연동 줄(문제가 있으면 맨 위 경고)의 **Google 다시 연결**을 누르고 모든 권한에 체크해 승인합니다. 서버는 Google이 실제로 허락한 범위에 `calendar.events.owned`가 있을 때만 `calendar_write: true`를 저장하고, 새 권한으로 기본 캘린더·출력 캘린더·Tasks·시트를 읽어 본 뒤에만 교체합니다. 서버 재시작은 필요 없습니다. (맥의 `scripts/connect_google_records.py --calendar`도 계속 쓸 수 있습니다.)
+3. `google-status`와 웹에서 캘린더 입력 수유 카드에 **캘린더에도 반영** 버튼이 보이는지 확인합니다.
+4. 시험 일정 1건으로 반영 → 재수집 → 추가 쓰기 0회를 확인합니다.

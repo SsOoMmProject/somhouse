@@ -397,6 +397,137 @@ class GoogleRegression(unittest.TestCase):
         self.assertEqual(status['review_items'][0]['suggest'], {'category': '분유', 'amount': ''})
         self.assertFalse(self.rows("SELECT * FROM items"))
 
+    def writeback_setup(self, description='엄마 메모'):
+        """A fake primary calendar that behaves like Google: etags change on every write."""
+        from calendar_records import CalendarRecords
+        bridge = GoogleRecords(self.store, dict(self.config, calendar_write=True))
+        calendar = bridge.calendar
+        remote = {'id': 'w1', 'summary': '뷰유 10미리', 'description': description, 'etag': '"e1"',
+                  'created': '2026-01-01T05:01:00Z', 'start': {'dateTime': '2026-01-01T14:00:00+09:00'}}
+        calls = []
+        def api(url, method='GET', body=None, service=None, etag=None):
+            calls.append((method, etag))
+            self.assertIn('/primary/events/w1', url)
+            if method == 'GET':
+                return dict(remote)
+            self.assertEqual(method, 'PATCH')
+            if etag != remote['etag']:
+                raise GoogleError(412, 'Calendar')
+            self.assertEqual(set(body), {'summary', 'description', 'extendedProperties'})
+            remote.update(summary=body['summary'], description=body['description'],
+                          extendedProperties=body['extendedProperties'],
+                          etag='"e%d"' % (int(remote['etag'][2:-1]) + 1))
+            return dict(remote)
+        calendar.record(dict(remote))
+        with self.store.connect() as db:
+            item_id = db.execute("SELECT id FROM items").fetchone()[0]
+            body = json.loads(db.execute("SELECT body FROM items").fetchone()[0])
+            body.pop('confirm'); body['category'] = '분유'
+            db.execute("UPDATE items SET body=?", (encode(body),))
+        return bridge, calendar, remote, calls, api, item_id
+
+    def writes(self):
+        return self.rows("SELECT COUNT(*) FROM google_calendar_writes")[0][0]
+
+    def test_writeback_settles_without_a_loop(self):
+        bridge, calendar, remote, calls, api, item_id = self.writeback_setup()
+        with patch.object(bridge.api, 'request', side_effect=api):
+            with self.store.connect() as db:
+                self.assertEqual(calendar.request_writeback(db, item_id), '분유 10ml')
+            calendar.flush_writebacks()
+            # Safeguard 6: the original title is kept above the user's own description.
+            self.assertEqual((remote['summary'], remote['description']), ('분유 10ml', '음성 원문: 뷰유 10미리\n엄마 메모'))
+            self.assertEqual(calls, [('GET', None), ('PATCH', '"e1"')])
+            # Safeguard 1: our change comes back from Calendar and is not a new change.
+            before = self.rows("SELECT COUNT(*) FROM google_record_events")[0][0]
+            calendar.record(dict(remote))
+            calendar.record(dict(remote))
+            calendar.flush_writebacks()
+            self.assertEqual(self.rows("SELECT COUNT(*) FROM google_record_events")[0][0], before)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(self.writes(), 1)
+            record = json.loads(self.rows("SELECT body FROM items")[0][0])
+            self.assertEqual((record['category'], record['amount'], record['date']), ('분유', '10ml', '2026-01-01T14:00'))
+            with self.store.connect() as db:
+                self.assertEqual(self.bridge.status(db)['review'], 0)
+                # Safeguard 2: nothing left to change, so a second tap is refused.
+                with self.assertRaisesRegex(ValueError, '이미 같은 내용'):
+                    calendar.request_writeback(db, item_id)
+            # A later real Calendar edit is processed normally and keeps the web kind.
+            calendar.record(dict(remote, summary='분유 30ml', etag='"e9"'))
+            self.assertEqual(json.loads(self.rows("SELECT body FROM items")[0][0])['amount'], '30ml')
+            self.assertEqual(self.rows("SELECT action,status FROM google_record_events WHERE action='calendar-writeback'"),
+                             [('calendar-writeback', '캘린더 반영')])
+
+    def test_writeback_never_overwrites_a_newer_calendar_edit(self):
+        bridge, calendar, remote, calls, api, item_id = self.writeback_setup()
+        with patch.object(bridge.api, 'request', side_effect=api):
+            with self.store.connect() as db:
+                calendar.request_writeback(db, item_id)
+            # Safeguard 4: someone edits in Calendar after Somhouse last read the event.
+            remote.update(summary='뷰유 20미리', etag='"e5"')
+            calendar.flush_writebacks()
+            self.assertEqual(calls, [('GET', None)])
+            self.assertEqual(remote['summary'], '뷰유 20미리')
+            self.assertFalse(self.rows("SELECT * FROM google_calendar_writebacks"))
+            with self.store.connect() as db:
+                self.assertEqual(self.bridge.status(db)['review'], 1)
+            # The same race at the PATCH itself (412) is handled the same way.
+            calendar.record(dict(remote))
+            with self.store.connect() as db:
+                db.execute("UPDATE items SET body=?", (encode(dict(json.loads(db.execute("SELECT body FROM items").fetchone()[0]), category='분유', amount='20ml')),))
+                calendar.request_writeback(db, item_id)
+            def racing(url, method='GET', body=None, service=None, etag=None):
+                result = api(url, method, body, service, etag)
+                if method == 'GET':
+                    remote['etag'] = '"e7"'
+                return result
+            with patch.object(bridge.api, 'request', side_effect=racing):
+                calendar.flush_writebacks()
+            self.assertEqual(remote['summary'], '뷰유 20미리')
+            self.assertEqual(self.writes(), 0)
+
+    def test_writeback_circuit_breaker_stops_a_forced_loop(self):
+        bridge, calendar, remote, calls, api, item_id = self.writeback_setup(description='')
+        with patch.object(bridge.api, 'request', side_effect=api):
+            for amount in ('11ml', '12ml', '13ml', '14ml'):
+                # Break safeguard 1 on purpose: the user edits the event each time, and the web edits again.
+                calendar.record(dict(remote, summary='뷰유 9미리', etag=remote['etag'], extendedProperties={}))
+                with self.store.connect() as db:
+                    body = json.loads(db.execute("SELECT body FROM items").fetchone()[0])
+                    db.execute("UPDATE items SET body=?", (encode(dict(body, category='분유', amount=amount)),))
+                    try:
+                        calendar.request_writeback(db, item_id)
+                    except ValueError as refused:
+                        self.assertIn('여러 번', str(refused))
+                        break
+                calendar.flush_writebacks()
+            self.assertEqual(self.writes(), 3)
+            self.assertEqual(remote['summary'], '분유 13ml')
+            # Even a request queued before the limit is refused at send time.
+            with self.store.connect() as db:
+                db.execute("INSERT INTO google_calendar_writebacks VALUES ('test','w1',?,0)", (item_id,))
+            calendar.flush_writebacks()
+            self.assertEqual(self.writes(), 3)
+
+    def test_writeback_is_refused_without_scope_or_for_unsuitable_records(self):
+        bridge, calendar, remote, calls, api, item_id = self.writeback_setup()
+        with self.store.connect() as db:
+            with self.assertRaisesRegex(ValueError, '권한'):
+                self.bridge.calendar.request_writeback(db, item_id)
+            self.assertFalse(self.bridge.status(db)['calendar_write'])
+            self.assertTrue(bridge.status(db)['calendar_write'])
+            db.execute("INSERT INTO items VALUES ('records','web',?)", (encode(self.feeding('web')),))
+            with self.assertRaisesRegex(ValueError, '캘린더에서 들어온'):
+                calendar.request_writeback(db, 'web')
+        calendar.record({'id': 'allday', 'summary': '분유 10ml', 'etag': '"a"', 'created': '2026-01-01T05:00:00Z',
+                         'start': {'date': '2026-01-01'}})
+        with self.store.connect() as db:
+            allday = db.execute("SELECT item_id FROM google_calendar_inputs WHERE event_id='allday'").fetchone()[0]
+            with self.assertRaisesRegex(ValueError, '종일'):
+                calendar.request_writeback(db, allday)
+        self.assertFalse(calls)
+
     def test_primary_calendar_events_are_mirrored_read_only_for_the_dashboard(self):
         calendar = self.bridge.calendar
         calendar.record({'id': 'feed', 'summary': '분유 120ml', 'start': {'dateTime': '2026-01-01T10:00:00+09:00'}})
