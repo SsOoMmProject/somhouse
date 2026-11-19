@@ -108,7 +108,8 @@ class FamilyAPI(unittest.TestCase):
         code, login, _ = self.request("/api/login", "POST", {"username": "guest", "password": "guest-password-1"})
         self.assertEqual((code, login["read_only"]), (200, True))
         guest = login["token"]
-        self.assertEqual(self.request("/api/me", token=guest)[1], {"username": "guest", "read_only": True})
+        self.assertEqual(self.request("/api/me", token=guest)[1], {"username": "guest", "read_only": True,
+                                                                     "family": {"home": True, "name": "우리 가족"}})
         code, view, _ = self.request("/api/data", token=guest)
         self.assertEqual(code, 200)
         self.assertTrue(view["read_only"])
@@ -198,7 +199,8 @@ class FamilyAPI(unittest.TestCase):
             self.assertEqual((code, login["username"], login["read_only"]), (200, "family", False))
             self.assertEqual(self.request("/api/me", token=login["token"])[1]["username"], "family")
             self.assertEqual(self.request("/api/login/google", "POST", {"code": one_time})[0], 401)  # single use
-            # Another Google account is refused.
+            # Another Google account without a verified e-mail is refused (with one it gets its own family:
+            # see test_families).
             who["sub"] = "S2"
             status, location = callback(start("login")[1]["url"])
             self.assertIn("#google-error=", location)

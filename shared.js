@@ -12,7 +12,7 @@
   }
   class Client {
     constructor() {
-      this.base = ''; this.token = ''; this.username = ''; this.readOnly = false; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = []; this.settings = {children: []};
+      this.base = ''; this.token = ''; this.username = ''; this.readOnly = false; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = []; this.settings = {children: []}; this.family = {home: true, name: ''};
       try {this.base = serverURL(root.SOMHOUSE_API_URL);} catch {}
       if (['localhost', '127.0.0.1'].includes(location.hostname)) this.base = 'http://127.0.0.1:8787';
       try { this.base = serverURL(localStorage.getItem(SERVER)); } catch {}
@@ -21,6 +21,8 @@
           const saved = JSON.parse(root[name].getItem(SESSION));
           if (!saved || typeof saved.token !== 'string' || !saved.token || typeof saved.username !== 'string') continue;
           this.base = serverURL(saved.base); this.token = saved.token; this.username = saved.username; this.readOnly = saved.readOnly === true;
+          // Sessions saved before families existed all belong to the original (home) family.
+          if (saved.family && typeof saved.family.home === 'boolean') this.family = {home: saved.family.home, name: String(saved.family.name || '')};
           if (name === 'sessionStorage') this.remember();
           break;
         } catch {}
@@ -62,19 +64,24 @@
     }
     // Google sign-in returns here with a one-time code; trade it for the session token.
     async googleLogin(code) {
-      this.adopt(this.base, await this.request('/api/login/google', 'POST', {code}, this.base, ''));
+      const result = await this.request('/api/login/google', 'POST', {code}, this.base, '');
+      this.adopt(this.base, result);
+      return result.outcome || '';
     }
     // Ask the server for Google's address: 'login' (anyone) or 'connect' (signed-in family, renews the Google link).
-    async googleStart(mode, returnTo) {
-      return (await this.request('/api/google/start', 'POST', {mode, returnTo}, this.base, mode === 'connect' ? this.token : '')).url;
+    // A family invite code (from an invite link) rides along with a 'login' so the account joins that family.
+    async googleStart(mode, returnTo, invite) {
+      const body = invite ? {mode, returnTo, invite} : {mode, returnTo};
+      return (await this.request('/api/google/start', 'POST', body, this.base, mode === 'connect' ? this.token : '')).url;
     }
     adopt(base, result) {
       this.base = base; this.token = result.token; this.username = result.username; this.readOnly = result.read_only === true; this.sources = null; this.googleStatus = null;
+      this.family = result.family && typeof result.family.home === 'boolean' ? {home: result.family.home, name: String(result.family.name || '')} : {home: true, name: ''};
       try {localStorage.setItem(SERVER, base);} catch {}
       this.remember();
     }
     remember() {
-      const saved = JSON.stringify({base: this.base, token: this.token, username: this.username, readOnly: this.readOnly});
+      const saved = JSON.stringify({base: this.base, token: this.token, username: this.username, readOnly: this.readOnly, family: this.family});
       try {
         localStorage.setItem(SESSION, saved);
       } catch {
@@ -85,7 +92,7 @@
     }
     clear() {
       const token = this.token;
-      this.token = ''; this.username = ''; this.readOnly = false; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = [];
+      this.token = ''; this.username = ''; this.readOnly = false; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = []; this.family = {home: true, name: ''};
       for (const name of ['localStorage', 'sessionStorage']) {
         try {
           const storage = root[name];
@@ -150,6 +157,9 @@
       if (token === this.token) this.settings = result.settings;
       return result;
     }
+    // Family management: who is in this family, pre-registered addresses and the invite link.
+    async familyView() {return this.request('/api/family');}
+    async familyChange(body) {return this.request('/api/family', 'POST', body);}
     async merge(data) {
       const token = this.token, result = await this.request('/api/merge', 'POST', data);
       if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null;}
