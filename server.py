@@ -7,7 +7,9 @@ import json
 import mimetypes
 import os
 from pathlib import Path
+import re
 import secrets
+import shutil
 import sys
 import sqlite3
 import subprocess
@@ -29,6 +31,8 @@ from holidays import HolidayFeed, SCHEMA as HOLIDAY_SCHEMA, listing as holiday_l
 from demo import GUEST, READ_ONLY_MESSAGE, demo_payload
 from sleep_wake import end_sleep_on_feeding
 import google_web
+import families
+from families import HOME, Refused, Registry, family_of_token, session_prefix
 from calendar_records import CALENDAR_SCOPES, WRITE_SCOPE
 from keep_sync import (CONFIG_NAME as KEEP_CONFIG_NAME, SCHEMA as KEEP_SCHEMA,
                        KeepSync, configured_email, queue as queue_keep)
@@ -234,11 +238,12 @@ class Store:
             db.execute("BEGIN IMMEDIATE")
             if not self.password_matches(db, username, password):
                 raise Problem(401, "아이디 또는 비밀번호를 확인해 주세요.")
-            return {"token": self.new_session(db, username), "username": username, "read_only": username == GUEST}
+            return {"token": self.new_session(db, username), "username": username, "read_only": username == GUEST,
+                    "family": {"home": True, "name": families.HOME_NAME}}
 
     @staticmethod
-    def new_session(db, username):
-        token = secrets.token_urlsafe(32)
+    def new_session(db, username, prefix=""):
+        token = prefix + secrets.token_urlsafe(32)
         db.execute("INSERT INTO sessions VALUES(?,?,?)", (hashlib.sha256(token.encode()).hexdigest(), username, NO_SESSION_EXPIRY))
         return token
 
@@ -282,6 +287,17 @@ class Store:
         return {"data": self.state(db), "added": added, "skipped": skipped}
 
 
+class Family:
+    """One family's records: the home family uses the server's own store and Google bridge."""
+
+    def __init__(self, family, store, google=None, keep=None):
+        self.id, self.store, self.google, self.keep = family, store, google, keep
+
+    @property
+    def home(self):
+        return self.id == HOME
+
+
 class FamilyServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -305,6 +321,61 @@ class FamilyServer(ThreadingHTTPServer):
         self.login_codes = google_web.Pending(120)    # one-time codes handed back to the web page
         self.google = GoogleRecords.load(store)
         self.keep = KeepSync.load(store) if self.google is None and not (store.directory / "google-records.json").exists() else None
+        self.registry = Registry(store)
+        self.family_stores = {}
+        self.family_lock = threading.Lock()
+
+    def family_store(self, family):
+        with self.family_lock:
+            if family not in self.family_stores:
+                self.family_stores[family] = Store(self.store.directory / "families" / family)
+            return self.family_stores[family]
+
+    def family(self, family):
+        if family == HOME:
+            return Family(HOME, self.store, self.google, self.keep)
+        return Family(family, self.family_store(family))
+
+    def family_for(self, token):
+        """The family a session token opens. Unknown or removed families need a new sign-in."""
+        family = family_of_token(token)
+        if family is None:
+            raise Problem(401, "로그인이 필요합니다. 다시 로그인해 주세요.")
+        if family != HOME:
+            with self.store.lock, self.store.connect() as db:
+                if not self.registry.exists(db, family):
+                    raise Problem(401, "가족 구성이 바뀌었어요. 다시 로그인해 주세요.")
+        return self.family(family)
+
+    def family_empty(self, family):
+        if family == HOME:
+            return False
+        store = self.family_store(family)
+        with store.lock, store.connect() as db:
+            return db.execute("SELECT 1 FROM items LIMIT 1").fetchone() is None
+
+    def retire_family(self, family):
+        """Move the folder of a family that no longer exists aside (it had no records); nothing is deleted."""
+        if family == HOME or not families.ID_PATTERN.fullmatch(family):
+            return
+        with self.family_lock:
+            self.family_stores.pop(family, None)
+            folder = self.store.directory / "families" / family
+            if folder.exists():
+                retired = self.store.directory / "families" / ".retired"
+                retired.mkdir(parents=True, exist_ok=True, mode=0o700)
+                folder.rename(retired / f"{family}-{time.strftime('%Y%m%d-%H%M%S')}")
+
+    def holidays(self, db, family):
+        if family.home:
+            return holiday_listing(db)
+        with self.store.connect() as home:
+            return holiday_listing(home)
+
+    def end_sessions(self, family, username):
+        store = self.family(family).store
+        with store.lock, store.connect() as db:
+            db.execute("DELETE FROM sessions WHERE username=?", (username,))
 
     def serve_forever(self, poll_interval=0.5):
         sync = self.google or self.keep
@@ -390,15 +461,21 @@ class Handler(BaseHTTPRequestHandler):
             auth = self.headers.get("Authorization", "")
             if not auth.startswith("Bearer ") or len(auth) > 200:
                 raise Problem(401, "로그인이 필요합니다.")
-            with store.lock, store.connect() as db:
-                if store.user(db, auth[7:]) == GUEST:
+            family = self.server.family_for(auth[7:])
+            with family.store.lock, family.store.connect() as db:
+                if family.store.user(db, auth[7:]) == GUEST:
                     raise Problem(403, READ_ONLY_MESSAGE)
+            if not family.home:
+                raise Problem(409, "이 가족은 아직 Google 기록 연동이 없어요. 웹 기록은 그대로 저장돼요.")
             if self.server.google is None:
                 raise Problem(409, "처음 연결은 관리자가 맥에서 해야 해요. 연결된 뒤부터 여기서 다시 연결할 수 있어요.")
             state["session"] = hashlib.sha256(auth[7:].encode()).hexdigest()
             scopes = GOOGLE_SCOPES + (CALENDAR_SCOPES if self.server.google.calendar else ())
         elif mode == "login":
             scopes = google_web.LOGIN_SCOPES
+            invite = body.get("invite")
+            if isinstance(invite, str) and 0 < len(invite) <= 100:
+                state["invite"] = invite
         else:
             raise Problem(400, "로그인 방식을 확인해 주세요.")
         state.update(mode=mode, verifier=secrets.token_urlsafe(48))
@@ -422,13 +499,32 @@ class Handler(BaseHTTPRequestHandler):
             who = google_web.identity(tokens["access_token"])
         except (GoogleError, KeyError, TypeError):
             return fail("Google 로그인을 확인하지 못했어요. 잠시 후 다시 시도해 주세요.")
-        if not connected.get("subject") or who.get("sub") != connected["subject"] or who.get("email_verified") is not True:
-            return fail("솜하우스에 연결된 가족 Google 계정으로 로그인해 주세요.")
+        if not isinstance(who.get("sub"), str) or not who["sub"] or who.get("email_verified") is not True:
+            return fail("이메일이 확인된 Google 계정으로 로그인해 주세요.")
         if state["mode"] == "login":
-            with store.lock, store.connect() as db:
-                token = store.new_session(db, google_web.FAMILY_USER)
-            code = self.server.login_codes.add({"token": token, "username": google_web.FAMILY_USER})
+            # Which family this account opens: the connected home account, an invite, a pre-registered
+            # address, an existing membership, or else a new empty family of its own.
+            registry = self.server.registry
+            try:
+                with store.lock, store.connect() as db:
+                    db.execute("BEGIN IMMEDIATE")
+                    previous, _ = registry.membership(db, who["sub"])
+                    family, username, outcome = registry.sign_in(
+                        db, who["sub"], who.get("email"), state.get("invite"), connected.get("subject"),
+                        self.server.family_empty)
+                    name = registry.name(db, family)
+            except Refused as refused:
+                return fail(refused.message)
+            if outcome == "moved":
+                self.server.retire_family(previous)
+            target = self.server.family(family).store
+            with target.lock, target.connect() as db:
+                token = target.new_session(db, username, session_prefix(family))
+            code = self.server.login_codes.add({"token": token, "username": username, "outcome": outcome,
+                                                "family": {"home": family == HOME, "name": name}})
             return self.redirect(back + "#google=" + code)
+        if not connected.get("subject") or who["sub"] != connected["subject"]:
+            return fail("솜하우스에 연결된 가족 Google 계정으로 다시 연결해 주세요.")
         # Reconnect: the person who started it must still be signed in, and the new grant must reach every resource.
         with store.lock, store.connect() as db:
             row = db.execute("SELECT username FROM sessions WHERE token=?", (state["session"],)).fetchone()
@@ -468,10 +564,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def ai_request(self, token):
         ai = self.server.antigravity
-        store = self.server.store
+        family = self.server.family_for(token)
+        store = family.store
         if self.command == "GET":
             with store.lock, store.connect() as db:
                 guest = store.user(db, token) == GUEST
+            if not family.home:
+                # The Mac's AI account answers for the original family only.
+                return {**ai.status(), "enabled": False, "homeOnly": True}
             return {**ai.status(), "enabled": False, "readOnly": True} if guest else ai.status()
 
         # Read the small body before taking the lock, but check the session
@@ -482,6 +582,8 @@ class Handler(BaseHTTPRequestHandler):
             username = store.user(db, token)
             if username == GUEST:
                 raise Problem(403, READ_ONLY_MESSAGE)
+            if not family.home:
+                raise Problem(403, "AI 대화는 아직 기본 가족만 쓸 수 있어요.")
             question, scope = parse_question(body)
             if not ai.binary:
                 raise Problem(503, "관리자가 맥미니에 Antigravity CLI를 설정해야 해요.")
@@ -493,6 +595,33 @@ class Handler(BaseHTTPRequestHandler):
                 summary = summarize_records(scope, items, date.today())
         # Release the SQLite connection and lock before waiting for Google.
         return ai.answer(username, question, scope, summary)
+
+    def family_request(self, family, username):
+        """Who is in this family: list members, pre-register an address, invite by link, remove or leave."""
+        if username == GUEST:
+            raise Problem(403, READ_ONLY_MESSAGE)
+        server, home = self.server, self.server.store
+        body = self.body(4096) if self.command == "POST" else None
+        removed = None
+        try:
+            with home.lock, home.connect() as db:
+                if body is not None:
+                    db.execute("BEGIN IMMEDIATE")
+                    if not server.registry.exists(db, family.id):
+                        raise Problem(401, "가족 구성이 바뀌었어요. 다시 로그인해 주세요.")
+                    extra, removed = server.registry.change(db, family.id, body, server.family_empty)
+                else:
+                    extra = {}
+                gone = not server.registry.exists(db, family.id)
+                anchor = getattr(server.google, "email", "") if family.home else ""
+                result = {} if gone else server.registry.overview(db, family.id, username, anchor)
+        except Refused as refused:
+            raise Problem(refused.status, refused.message) from None
+        if removed:
+            server.end_sessions(family.id, removed)
+        if gone:
+            server.retire_family(family.id)
+        return {**result, **extra, "signed_out": removed == username or gone}
 
     def handle_request(self):
         try:
@@ -549,6 +678,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise Problem(400, "현재 비밀번호를 입력해 주세요.")
                 if not valid_new_password(new):
                     raise Problem(400, f"새 비밀번호를 {MIN_PASSWORD_LENGTH}~{MAX_PASSWORD_LENGTH}자로 입력해 주세요.")
+                if not self.server.family_for(token).home:
+                    raise Problem(403, "Google로 로그인한 계정은 비밀번호가 없어요.")
                 with store.lock, store.connect() as db:
                     if store.user(db, token) == GUEST:
                         raise Problem(403, READ_ONLY_MESSAGE)
@@ -556,10 +687,21 @@ class Handler(BaseHTTPRequestHandler):
                     store.change_password(token, current, new)
                 self.respond(200, {"ok": True})
                 return
+            family = self.server.family_for(token)
+            store, google, keep = family.store, family.google, family.keep
+            if path == "/api/family" and self.command in ("GET", "POST"):
+                # Taken outside the family's lock: the registry lives in the home database.
+                with store.lock, store.connect() as db:
+                    username = store.user(db, token)
+                self.respond(200, self.family_request(family, username))
+                return
             with store.lock, store.connect() as db:
                 username = store.user(db, token)
                 if path == "/api/me" and self.command == "GET":
-                    result = {"username": username, "read_only": username == GUEST}
+                    with self.server.store.connect() as home:
+                        name = self.server.registry.name(home, family.id)
+                    result = {"username": username, "read_only": username == GUEST,
+                              "family": {"home": family.home, "name": name}}
                 elif path == "/api/logout" and self.command == "POST":
                     db.execute("DELETE FROM sessions WHERE token=?", (hashlib.sha256(token.encode()).hexdigest(),))
                     result = {"ok": True}
@@ -570,13 +712,13 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(200, {**demo_payload(), "holidays": holiday_listing(db)})
                     return
                 elif path == "/api/data" and self.command == "GET":
-                    result = {"data": store.state(db), "aliases": load_aliases(db), "holidays": holiday_listing(db),
-                              "settings": store.settings(db)}
-                    if self.server.google is not None:
-                        result["sources"] = self.server.google.sources()
-                        result["google_status"] = self.server.google.status(db)
-                        if self.server.google.calendar is not None:
-                            result["calendar_events"] = self.server.google.calendar.view_events(db)
+                    result = {"data": store.state(db), "aliases": load_aliases(db),
+                              "holidays": self.server.holidays(db, family), "settings": store.settings(db)}
+                    if google is not None:
+                        result["sources"] = google.sources()
+                        result["google_status"] = google.status(db)
+                        if google.calendar is not None:
+                            result["calendar_events"] = google.calendar.view_events(db)
                 elif path == "/api/settings" and self.command == "PUT":
                     # Children's names, shared by every phone. A rename also moves that child's schedules.
                     body = self.body(16 * 1024)
@@ -593,16 +735,18 @@ class Handler(BaseHTTPRequestHandler):
                                (encode(children),))
                     for item_id, item in moved:
                         db.execute("UPDATE items SET body=? WHERE kind='schedule' AND id=?", (encode(item), item_id))
-                        if self.server.google is not None:
-                            self.server.google.queue(db, "schedule", item_id, item, "save")
+                        if google is not None:
+                            google.queue(db, "schedule", item_id, item, "save")
                     result = {"data": store.state(db), "settings": store.settings(db), "moved": len(moved)}
                 elif path == "/api/merge" and self.command == "POST":
+                    # Old device records (before login existed) belong to the original family only.
+                    if not family.home:
+                        raise Problem(403, "이 기기의 예전 기록은 기본 가족에만 옮길 수 있어요.")
                     result = store.merge(db, self.body())
-                    if self.server.google is not None:
-                        result["sources"] = self.server.google.sources()
-                        result["google_status"] = self.server.google.status(db)
+                    if google is not None:
+                        result["sources"] = google.sources()
+                        result["google_status"] = google.status(db)
                 elif path == "/api/calendar-writeback" and self.command == "POST":
-                    google = self.server.google
                     if google is None or google.calendar is None:
                         raise Problem(404, "Google 캘린더 연결이 없어요.")
                     item_id = self.body().get("id")
@@ -634,16 +778,15 @@ class Handler(BaseHTTPRequestHandler):
                         relearn(db, item)
                         store.snapshot(db)
                         db.execute("UPDATE items SET body=? WHERE kind='records' AND id=?", (encode(item), item_id))
-                        if self.server.google is not None:
-                            self.server.google.queue(db, "records", item_id, item, "save")
+                        if google is not None:
+                            google.queue(db, "records", item_id, item, "save")
                     else:
                         raise Problem(400, "확인할 기록과 종류를 다시 선택해 주세요.")
                     result = {"data": store.state(db), "aliases": load_aliases(db)}
-                    if self.server.google is not None:
-                        result["sources"] = self.server.google.sources()
-                        result["google_status"] = self.server.google.status(db)
+                    if google is not None:
+                        result["sources"] = google.sources()
+                        result["google_status"] = google.status(db)
                 elif path == "/api/review" and self.command == "POST":
-                    google = self.server.google
                     if google is None:
                         raise Problem(404, "Google 음성 입력 연결이 없어요.")
                     body = self.body()
@@ -682,27 +825,27 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         body = None
                         item = None
-                        if self.server.google is not None:
+                        if google is not None:
                             row = db.execute("SELECT body FROM items WHERE kind=? AND id=?", (kind, item_id)).fetchone()
                             item = json.loads(row[0]) if row else None
                         store.snapshot(db)
                         db.execute("DELETE FROM items WHERE kind=? AND id=?", (kind, item_id))
-                    if self.server.google is not None:
-                        self.server.google.queue(db, kind, item_id, item, "save" if body is not None else "delete")
+                    if google is not None:
+                        google.queue(db, kind, item_id, item, "save" if body is not None else "delete")
                         if woke:
-                            self.server.google.queue(db, "records", woke["id"], woke, "save")
-                    elif self.server.keep is not None:
-                        queue_keep(db, self.server.keep.email, kind, item_id, body)
+                            google.queue(db, "records", woke["id"], woke, "save")
+                    elif keep is not None:
+                        queue_keep(db, keep.email, kind, item_id, body)
                         if woke:
-                            queue_keep(db, self.server.keep.email, "records", woke["id"], encode(woke))
+                            queue_keep(db, keep.email, "records", woke["id"], encode(woke))
                     result = {"data": store.state(db), "aliases": load_aliases(db)}
                 else:
                     raise Problem(404, "API를 찾을 수 없습니다.")
             # Only acknowledge a change after the SQLite context has committed it.
-            if (path in ("/api/data", "/api/merge") and self.server.google is None
+            if (path in ("/api/data", "/api/merge") and google is None
                     and (store.directory / "google-records.json").exists()):
                 result["google_status"] = {"auth_state": "configuration_error", "services": {}, "review": 0, "errors": []}
-            sync = self.server.google or self.server.keep
+            sync = google or keep
             if sync is not None and (path.startswith("/api/items/") or path in ("/api/review", "/api/confirm", "/api/calendar-writeback", "/api/settings")):
                 sync.wake.set()
             self.respond(200, result)
@@ -787,11 +930,30 @@ def delete_record(directory, kind, item_id):
           else "Google로 보낸 적이 없는 기록이라 외부에 남는 흔적은 없습니다.")
 
 
+def list_families(directory):
+    """Admin view: every family, its members and pre-registered addresses, and how many records it holds."""
+    store = Store(directory)
+    registry = Registry(store)
+    with store.connect() as db:
+        rows = registry.families(db)
+        for family, name in rows:
+            target = store if family == HOME else Store(store.directory / "families" / family)
+            with target.connect() as fdb:
+                count = fdb.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+            members = [row[0] for row in db.execute("SELECT email FROM family_members WHERE family=?", (family,))]
+            waiting = [row[0] for row in db.execute("SELECT email FROM family_emails WHERE family=?", (family,))]
+            print(f"{name} [{family}] 기록 {count}건")
+            print("  구성원: " + (", ".join(([] if family != HOME else ["연결된 가족 Google 계정"]) + members) or "없음"))
+            if waiting:
+                print("  미리 등록한 주소: " + ", ".join(waiting))
+    print(f"가족 {len(rows)}개 (새 가족은 최대 {families.MAX_FAMILIES}개)")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("init", "serve", "password", "backup", "restore",
                         "antigravity-config", "antigravity-test", "keep-config", "keep-test", "keep-status",
-                        "google-status", "google-retry", "google-backfill", "delete-record", "guest", "google-web-client"),
+                        "google-status", "google-retry", "google-backfill", "delete-record", "guest", "google-web-client", "families"),
                         nargs="?", default="serve")
     parser.add_argument("--kind", choices=KINDS, help="delete-record: 기록 종류")
     parser.add_argument("--item-id", help="delete-record: 삭제할 기록 ID")
@@ -822,6 +984,9 @@ def main():
         return
     if args.command == "delete-record":
         delete_record(args.data_dir, args.kind, args.item_id)
+        return
+    if args.command == "families":
+        list_families(args.data_dir)
         return
     if args.command in ("google-retry", "google-backfill"):
         store = Store(args.data_dir)

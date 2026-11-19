@@ -1,19 +1,19 @@
 <!doctype html>
 <html lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f8f5ef"><title>솜하우스</title><link rel="stylesheet" href="style.css?v=writeback-20261119"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f8f5ef"><title>솜하우스</title><link rel="stylesheet" href="style.css?v=families-20261120"></head>
 <body>
 <header><div><span class="logo">✿</span> <strong>솜하우스</strong><small>우리 가족의 작은 기록</small></div></header>
 <main>
 <section id="connection" class="card connection" aria-label="가족 로그인">
 <div class="heading">
 <h2 id="connection-title">가족 로그인</h2>
-<div class="account-actions"><button type="button" id="change-password" class="plain" hidden>비밀번호 변경</button><button type="button" id="logout" class="plain" hidden>로그아웃</button></div>
+<div class="account-actions"><button type="button" id="manage-family" class="plain" hidden>가족 관리</button><button type="button" id="change-password" class="plain" hidden>비밀번호 변경</button><button type="button" id="logout" class="plain" hidden>로그아웃</button></div>
 </div>
 <p id="connection-status" role="status" aria-live="polite">로그인하면 가족의 기록을 함께 보고 관리할 수 있어요.</p>
 <p id="account-status" role="status" hidden></p>
 <p id="raw-sources" hidden></p>
 <div id="google-status" role="status" hidden></div>
-<div id="google-login-box"><button type="button" id="google-login" class="google-login">Google로 로그인</button><p class="caption">가족 Google 계정으로 로그인해요.</p></div>
+<div id="google-login-box"><button type="button" id="google-login" class="google-login">Google로 로그인</button><p class="caption">가족 Google 계정으로 로그인해요. 처음 보는 계정은 새 가족으로 시작하고, 초대 링크로 열면 그 가족에 들어가요.</p></div>
 <details id="password-login"><summary>아이디로 로그인 (게스트·비상용)</summary><form id="login-form"><label class="field">아이디<input name="username" autocomplete="username" required maxlength="100"></label><label class="field">비밀번호<input name="password" type="password" autocomplete="current-password" required maxlength="256"></label><button type="submit">로그인</button></form></details>
 </section>
 <nav aria-label="메뉴" hidden><button data-page="home"><span class="ic" aria-hidden="true">🏠</span>홈</button><button data-page="records"><span class="ic" aria-hidden="true">📝</span>기록</button><button data-page="stats"><span class="ic" aria-hidden="true">📊</span>통계</button><button data-page="schedule"><span class="ic" aria-hidden="true">📅</span>일정</button><button data-page="shopping"><span class="ic" aria-hidden="true">🛒</span>구매</button><button data-page="ai"><span class="ic" aria-hidden="true">💬</span>AI</button></nav>
@@ -55,5 +55,11 @@
 <div class="actions"><button type="button" id="cancel-password" class="secondary">취소</button><button type="submit">비밀번호 저장</button></div>
 </form>
 </dialog>
-<script src="config.js?v=auto-20261102" defer></script><script src="service.js?v=writeback-20261119" defer></script><script src="shared.js?v=kids-20261119" defer></script><script src="app.js?v=kids-20261119" defer></script>
+<dialog id="family-dialog" aria-labelledby="family-title">
+<h2 id="family-title">가족 관리</h2>
+<div id="family-body"><p>불러오고 있어요…</p></div>
+<p id="family-status" role="status"></p>
+<div class="actions"><button type="button" id="close-family" class="secondary">닫기</button></div>
+</dialog>
+<script src="config.js?v=auto-20261102" defer></script><script src="service.js?v=writeback-20261119" defer></script><script src="shared.js?v=families-20261120" defer></script><script src="app.js?v=families-20261120" defer></script>
 </body></html>

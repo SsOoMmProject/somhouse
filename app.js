@@ -41,11 +41,12 @@ function showSources(connected){
 }
 function connectionView(){
  const connected=mode==='shared'&&Boolean(shared?.token);
- $('#connection-title').textContent=connected?(shared.readOnly?'게스트 보기 · 예시 기록':'가족 기록 · '+shared.username):'가족 로그인';
+ $('#connection-title').textContent=connected?(shared.readOnly?'게스트 보기 · 예시 기록':(shared.family.home?'가족 기록':shared.family.name||'우리 가족')+' · '+shared.username):'가족 로그인';
  $('#connection').classList.toggle('compact',connected);
  $('#login-form').hidden=connected;$('#google-login-box').hidden=connected;$('#password-login').hidden=connected;$('#logout').hidden=!connected;
  // A Google sign-in has no Somhouse password to change.
- $('#change-password').hidden=!connected||shared.readOnly||shared.username==='family';
+ $('#change-password').hidden=!connected||shared.readOnly||shared.username==='family'||shared.username.includes('@');
+ $('#manage-family').hidden=!connected||shared.readOnly;
  $('nav').hidden=!connected||!sharedReady;
  showSources(connected);
  showGoogleStatus(connected);
@@ -80,14 +81,16 @@ function showLogin(text){
  ai={config:null,checking:false,pending:false};
  $('#ai-form').reset();$('#ai-scope-field').hidden=true;$('#ai-result').hidden=true;
  for(const selector of ['#ai-status','#ai-asked','#ai-answer'])$(selector).textContent='';
- for(const dialog of [$('#dialog'),$('#password-dialog')])if(dialog.open)dialog.close();
+ for(const dialog of [$('#dialog'),$('#password-dialog'),$('#family-dialog')])if(dialog.open)dialog.close();
  accountMessage('');render();message(text);
 }
-function editingScreen(){return $('#dialog').open||$('#password-dialog').open||Boolean(document.activeElement?.closest?.('#filter-form'));}
+function editingScreen(){return $('#dialog').open||$('#password-dialog').open||$('#family-dialog').open||Boolean(document.activeElement?.closest?.('#filter-form'));}
 async function loadFamilyData(){
  let raw, original;
  // The guest sees made-up records only; this device's old family records are never sent with a guest login.
  if(shared.readOnly)return shared.load();
+ // Old device records belong to the original family only; another family never receives them.
+ if(!shared.family.home)return shared.load();
  try{
   raw=localStorage.getItem(KEY);original=raw===null?empty():JSON.parse(raw);
   if(!valid(original))throw Error();
@@ -413,7 +416,7 @@ async function checkAI(){
   state.config=config;
   $('#ai-scope-field').hidden=!config.recordSummaries;
   if(!config.recordSummaries)$('#ai-scope').value='none';
-  $('#ai-status').textContent=config.readOnly?'게스트 보기에서는 질문할 수 없어요. 가족 계정으로 로그인하면 질문을 보낼 수 있어요.':config.enabled?'질문마다 새로 답해요.':'관리자가 맥미니에 Antigravity CLI를 연결하면 질문할 수 있어요.';
+  $('#ai-status').textContent=config.homeOnly?'AI 대화는 아직 처음 만든 가족만 쓸 수 있어요.':config.readOnly?'게스트 보기에서는 질문할 수 없어요. 가족 계정으로 로그인하면 질문을 보낼 수 있어요.':config.enabled?'질문마다 새로 답해요.':'관리자가 맥미니에 Antigravity CLI를 연결하면 질문할 수 있어요.';
  }catch(error){
   if(ai!==state)return;
   state.config=null;
@@ -591,7 +594,47 @@ $('#form').onsubmit=async e=>{
  const review=reviewKey,remembered=JSON.stringify(shared.aliases||{}),asleep=kind==='feeding'?openSleep(x.date,false):null;
  try{if(await (review?sharedChange(()=>shared.resolveReview(review,'save',k,x)):changeItem(k,x))){$('#dialog').close();const word=Object.keys(shared.aliases||{}).find(w=>shared.aliases[w]===x.category&&JSON.parse(remembered)[w]!==x.category);if(word)message(`저장했어요. 앞으로 ‘${word}’는 ${x.category}로 기억할게요.`);const woke=asleep&&data.records.find(r=>r.id===asleep.id&&r.end);if(woke)message(`수유를 기록해서 ${woke.category}을 ${woke.end.slice(11)}에 끝냈어요 (${Somhouse.duration(Somhouse.sleepMinutes(woke))}).`);render();}}finally{submit.disabled=false;}
 };
-window.addEventListener('hashchange',route);
+// Family management: members, addresses registered in advance, and a 7-day invite link.
+const INVITE='somhouse-invite';
+let familyInfo=null, familyLink='';
+function savedInvite(){try{return sessionStorage.getItem(INVITE)||'';}catch{return '';}}
+function forgetInvite(){try{sessionStorage.removeItem(INVITE);}catch{}}
+// An invite link opens the app with #invite=<code>; keep the code until the Google sign-in uses it.
+function takeInvite(){
+ const code=new URLSearchParams(location.hash.slice(1)).get('invite');
+ if(!code)return false;
+ try{sessionStorage.setItem(INVITE,code.slice(0,100));}catch{}
+ try{history.replaceState(null,'',location.pathname+location.search);}catch{}
+ message(shared?.token?'가족 초대 링크예요. 이 가족에 들어가려면 로그아웃한 뒤 ‘Google로 로그인’을 눌러 주세요.':'가족 초대 링크예요. ‘Google로 로그인’을 누르면 초대한 가족과 같은 기록을 보게 돼요.');
+ return true;
+}
+function familyView(){
+ const f=familyInfo;
+ if(!f){$('#family-body').innerHTML='<p>불러오고 있어요…</p>';return;}
+ $('#family-title').textContent='가족 관리 · '+(f.name||'우리 가족');
+ const members=f.members.map(m=>`<li><span>${esc(m.email)}${m.you?' <span class="badge">나</span>':''}${m.anchor?' <span class="badge">연결 계정</span>':''}</span>${m.anchor?'':`<button type="button" class="secondary" data-family-remove="${esc(m.email)}">${m.you?'나가기':'내보내기'}</button>`}</li>`).join('');
+ const emails=f.emails.map(e=>`<li><span>${esc(e)} <span class="badge">로그인 대기</span></span><button type="button" class="secondary" data-family-unregister="${esc(e)}">취소</button></li>`).join('');
+ const link=familyLink?`<div class="invite-link"><input readonly value="${esc(familyLink)}" aria-label="초대 링크"><button type="button" data-family-share="1">${navigator.share?'공유':'복사'}</button></div>`:'';
+ $('#family-body').innerHTML=`<p class="caption">같은 가족은 같은 기록을 봐요. 다른 가족의 기록은 서로 보이지 않아요.${f.home?'':' 이 가족은 아직 Google 연동(음성 입력·시트) 없이 웹 기록만 저장돼요.'}</p>
+  <h3>구성원</h3><ul>${members||'<li>아직 없어요</li>'}</ul>
+  <h3>이메일로 미리 등록</h3><p class="caption">등록한 Google 계정으로 로그인하면 바로 이 가족이 돼요.</p>
+  ${emails?`<ul>${emails}</ul>`:''}<form id="family-email-form"><label class="field" style="flex:1;margin:0">Google 계정 이메일<input name="email" type="email" required maxlength="254" placeholder="name@gmail.com" autocomplete="off"></label><button type="submit">등록</button></form>
+  <h3>초대 링크</h3><p class="caption">${f.invite?`초대 링크가 켜져 있어요 (${esc(f.invite.expires.replace('T',' '))}까지). 링크를 연 사람은 Google로 로그인하면 이 가족이 돼요.`:'링크를 받은 사람은 Google로 로그인하면 이 가족이 돼요. 7일 동안 쓸 수 있어요.'}</p>
+  <div class="actions" style="justify-content:flex-start;margin-top:8px"><button type="button" class="secondary" data-family-invite="1">${f.invite?'새 링크 만들기':'초대 링크 만들기'}</button>${f.invite?'<button type="button" class="plain" data-family-stop="1">링크 끄기</button>':''}</div>${link}
+  <p class="caption">앱을 정식 게시하기 전에는 새 Google 계정을 관리자가 Google Cloud 테스트 사용자로 추가해야 로그인할 수 있어요.</p>`;
+}
+async function familyChange(body,done){
+ if(busy)return;busy=true;$('#family-status').textContent='저장하고 있어요…';
+ try{
+  const result=await shared.familyChange(body);
+  if(result.signed_out){$('#family-dialog').close();showLogin('가족에서 나갔어요. 다시 로그인하면 새 가족으로 시작해요.');return;}
+  if(result.code)familyLink=location.origin+location.pathname+'#invite='+encodeURIComponent(result.code);
+  familyInfo=result;familyView();$('#family-status').textContent=done;
+ }catch(error){if(error.status===401){$('#family-dialog').close();showLogin(error.message);}else $('#family-status').textContent=error.message;}
+ finally{busy=false;connectionView();}
+}
+window.addEventListener('hashchange',()=>{if(!takeInvite())route();});
+takeInvite();
 route();
 if(shared){
  $('#ai-form').onsubmit=askAI;
@@ -662,22 +705,58 @@ if(shared){
  $('#dialog').addEventListener('close',()=>{reviewKey='';refreshShared();});
  setInterval(()=>{if(!document.hidden)refreshShared();},2000);
  setInterval(()=>{if(!document.hidden&&page==='home'&&mode==='shared'&&sharedReady&&!editingScreen())render();},60000);
+ $('#manage-family').onclick=async()=>{
+  if(busy||!shared.token)return;
+  familyInfo=null;familyLink='';$('#family-status').textContent='';familyView();$('#family-dialog').showModal();
+  try{familyInfo=await shared.familyView();familyView();}
+  catch(error){if(error.status===401){$('#family-dialog').close();showLogin(error.message);}else $('#family-status').textContent=error.message;}
+ };
+ $('#close-family').onclick=()=>{if(!busy)$('#family-dialog').close();};
+ $('#family-dialog').addEventListener('cancel',e=>{if(busy)e.preventDefault();});
+ $('#family-dialog').addEventListener('close',()=>refreshShared());
+ $('#family-body').addEventListener('submit',e=>{
+  if(e.target.id!=='family-email-form')return;
+  e.preventDefault();
+  const email=String(new FormData(e.target).get('email')).trim();
+  familyChange({action:'add_email',email},`${email}을 등록했어요. 이 계정으로 Google 로그인하면 같은 기록을 봐요.`);
+ });
+ $('#family-body').addEventListener('click',async e=>{
+  const b=e.target.closest('button');if(!b||busy)return;
+  if(b.dataset.familyRemove){
+   const you=familyInfo?.members.find(m=>m.email===b.dataset.familyRemove)?.you;
+   if(!confirm(you?'이 가족에서 나갈까요? 이 기기는 로그아웃돼요.':`${b.dataset.familyRemove}을 가족에서 내보낼까요? 그 계정은 바로 로그아웃돼요.`))return;
+   familyChange({action:'remove_member',email:b.dataset.familyRemove},'가족 구성원을 바꿨어요.');
+  }else if(b.dataset.familyUnregister)familyChange({action:'remove_email',email:b.dataset.familyUnregister},'등록을 취소했어요.');
+  else if(b.dataset.familyInvite)familyChange({action:'invite'},'초대 링크를 만들었어요. 이전 링크는 더 이상 쓸 수 없어요.');
+  else if(b.dataset.familyStop){familyLink='';familyChange({action:'stop_invite'},'초대 링크를 껐어요.');}
+  else if(b.dataset.familyShare){
+   try{
+    if(navigator.share)await navigator.share({title:'솜하우스 가족 초대',text:'솜하우스에서 같은 가족 기록을 함께 봐요. 링크를 열고 Google로 로그인해 주세요.',url:familyLink});
+    else{await navigator.clipboard.writeText(familyLink);$('#family-status').textContent='초대 링크를 복사했어요.';}
+   }catch(error){if(error?.name!=='AbortError')$('#family-status').textContent='링크를 길게 눌러 직접 복사해 주세요.';}
+  }
+ });
  $('#google-login').onclick=async()=>{
   if(busy)return;busy=true;connectionView();message('Google로 이동하고 있어요…');
-  try{location.href=await shared.googleStart('login',location.origin+location.pathname);}catch(error){message(error.message);busy=false;connectionView();}
+  try{location.href=await shared.googleStart('login',location.origin+location.pathname,savedInvite());}catch(error){message(error.message);busy=false;connectionView();}
  };
  // Coming back from Google: #google=<one-time code>, #google-error=<message> or #google-connected=1.
  const returned=new URLSearchParams(location.hash.slice(1));
  const clearHash=()=>{try{history.replaceState(null,'',location.pathname+location.search);}catch{}};
  if(returned.has('google')){
-  clearHash();busy=true;connectionView();message('Google 계정으로 로그인하고 있어요…');
+  clearHash();forgetInvite();busy=true;connectionView();message('Google 계정으로 로그인하고 있어요…');
   (async()=>{
-   try{await shared.googleLogin(returned.get('google'));mode='shared';sharedReady=false;data=empty();migratedRaw=undefined;render();}
+   try{
+    const outcome=await shared.googleLogin(returned.get('google'));mode='shared';sharedReady=false;data=empty();migratedRaw=undefined;render();
+    const name=shared.family.name||'가족';
+    if(outcome==='created')accountMessage(`새 가족(${name})을 만들었어요. 다른 가족은 이 기록을 볼 수 없어요. 함께 볼 가족은 위의 ‘가족 관리’에서 초대해 주세요.`);
+    else if(outcome==='joined'||outcome==='moved')accountMessage(`${name}에 들어왔어요. 이제 같은 기록을 함께 봐요.`);
+   }
    catch(error){message(error.message);}finally{busy=false;connectionView();}
    if(mode==='shared')await refreshShared(true);
   })();
  }else{
-  if(returned.has('google-error')){clearHash();message(returned.get('google-error'));}
+  if(returned.has('google-error')){clearHash();forgetInvite();message(returned.get('google-error'));}
   if(returned.has('google-connected')){clearHash();accountMessage('Google을 다시 연결했어요. 멈춰 있던 전송을 이어서 진행해요.');}
   if(mode==='shared'){if(!returned.has('google-error'))message('가족의 기록을 불러오고 있어요…');refreshShared(true);}
  }
