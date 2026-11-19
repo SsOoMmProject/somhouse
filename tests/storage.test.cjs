@@ -482,3 +482,25 @@ test('records are grouped by day, cards open the editor, and delete lives in the
  assert.match(html,/살 것 2 · 산 것 1/);assert.match(html,/<details class="past"><summary>산 것 1개<\/summary>[^]*다시 사기/);
  assert.match(html,/✓ 샀어요/);
 });
+
+test('who list shows registered children, and a child can be added from the schedule form',async()=>{
+ const server=family();server.data.schedule.push({id:'s1',date:'2099-01-01T10:00',title:'검진',who:'아기'});
+ const b=browser({server});await b.login();
+ b.eval("openForm('schedule')");
+ let html=b.get('#fields').innerHTML;
+ assert.match(html,/<option >가족<\/option><option >엄마<\/option><option >아빠<\/option><option >아기<\/option><option value="__add_child__">＋ 아기 추가…/);
+ b.get('#dialog').open=false;
+ const prompts=['솜이'];b.context.prompt=()=>prompts.shift();b.context.confirm=()=>true;
+ assert.equal(await b.eval('addChild()'),'솜이');
+ assert.deepEqual(server.settingsCalls.at(-1),{children:['솜이'],rename:{'아기':'솜이'}});
+ b.eval("openForm('schedule')");html=b.get('#fields').innerHTML;
+ assert.match(html,/<option >아빠<\/option><option >솜이<\/option><option value="__add_child__">/);assert.doesNotMatch(html,/>아기</);
+ b.get('#dialog').open=false;
+ b.eval("page='schedule';render()");html=b.get('#content').innerHTML;
+ assert.match(html,/👶 아기: 솜이 <button class="plain small" data-manage-children="1">아기 이름 관리/);
+ assert.match(html,/<span class="who who-아기">솜이<\/span> 검진/);
+ // Rename one and add another in one line; the renamed child's schedules follow.
+ b.context.prompt=()=>'솜솜이, 하늘';
+ await b.eval('manageChildren()');
+ assert.deepEqual(server.settingsCalls.at(-1),{children:['솜솜이','하늘']});
+});

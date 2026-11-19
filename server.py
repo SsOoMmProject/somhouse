@@ -94,6 +94,24 @@ def fingerprint(kind, item):
     return hashlib.sha256(encode(content).encode()).hexdigest()
 
 
+PARENTS = ("가족", "엄마", "아빠")
+
+
+def valid_children(value):
+    """Children's names for '누구 일정': 1~10 unique names of 1~20 characters, not a parent word."""
+    if not isinstance(value, list) or len(value) > 10:
+        raise Problem(400, "아기 이름은 10명까지 등록할 수 있어요.")
+    names = []
+    for name in value:
+        name = name.strip() if isinstance(name, str) else ""
+        if not 0 < len(name) <= 20 or "," in name or name in PARENTS:
+            raise Problem(400, "아기 이름을 1~20자로 입력해 주세요. 가족·엄마·아빠는 쓸 수 없어요.")
+        if name in names:
+            raise Problem(400, f"‘{name}’은 이미 등록돼 있어요.")
+        names.append(name)
+    return names
+
+
 def password_text(value):
     if not isinstance(value, str) or not 0 < len(value) <= MAX_PASSWORD_LENGTH:
         return False
@@ -121,6 +139,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, username TEXT NOT NULL, expires REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS items(kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id));
                 CREATE TABLE IF NOT EXISTS imports(kind TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(kind,fingerprint));
+                CREATE TABLE IF NOT EXISTS family_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
             """ + KEEP_SCHEMA + GOOGLE_SCHEMA + CALENDAR_SCHEMA + SHOPPING_SCHEMA + DELIVERY_SCHEMA + HOLIDAY_SCHEMA)
             for table, column, definition in (
                 ("google_voice_receipts", "captured", "TEXT"),
@@ -148,6 +167,11 @@ class Store:
                 yield db
         finally:
             db.close()
+
+    @staticmethod
+    def settings(db):
+        row = db.execute("SELECT value FROM family_settings WHERE key='children'").fetchone()
+        return {"children": json.loads(row[0]) if row else []}
 
     def state(self, db):
         data = {k: [] for k in KINDS}
@@ -546,12 +570,32 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(200, {**demo_payload(), "holidays": holiday_listing(db)})
                     return
                 elif path == "/api/data" and self.command == "GET":
-                    result = {"data": store.state(db), "aliases": load_aliases(db), "holidays": holiday_listing(db)}
+                    result = {"data": store.state(db), "aliases": load_aliases(db), "holidays": holiday_listing(db),
+                              "settings": store.settings(db)}
                     if self.server.google is not None:
                         result["sources"] = self.server.google.sources()
                         result["google_status"] = self.server.google.status(db)
                         if self.server.google.calendar is not None:
                             result["calendar_events"] = self.server.google.calendar.view_events(db)
+                elif path == "/api/settings" and self.command == "PUT":
+                    # Children's names, shared by every phone. A rename also moves that child's schedules.
+                    body = self.body(16 * 1024)
+                    children = valid_children(body.get("children"))
+                    rename = body.get("rename") or {}
+                    if not isinstance(rename, dict) or not all(isinstance(k, str) and v in children for k, v in rename.items()):
+                        raise Problem(400, "바꿀 이름을 다시 확인해 주세요.")
+                    moved = [(item_id, {**item, "who": rename[item["who"]]}) for item_id, item in
+                             ((row[0], json.loads(row[1])) for row in db.execute("SELECT id,body FROM items WHERE kind='schedule'"))
+                             if item.get("who") in rename]
+                    if moved:
+                        store.snapshot(db)
+                    db.execute("INSERT INTO family_settings VALUES('children',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                               (encode(children),))
+                    for item_id, item in moved:
+                        db.execute("UPDATE items SET body=? WHERE kind='schedule' AND id=?", (encode(item), item_id))
+                        if self.server.google is not None:
+                            self.server.google.queue(db, "schedule", item_id, item, "save")
+                    result = {"data": store.state(db), "settings": store.settings(db), "moved": len(moved)}
                 elif path == "/api/merge" and self.command == "POST":
                     result = store.merge(db, self.body())
                     if self.server.google is not None:
@@ -659,7 +703,7 @@ class Handler(BaseHTTPRequestHandler):
                     and (store.directory / "google-records.json").exists()):
                 result["google_status"] = {"auth_state": "configuration_error", "services": {}, "review": 0, "errors": []}
             sync = self.server.google or self.server.keep
-            if sync is not None and (path.startswith("/api/items/") or path in ("/api/review", "/api/confirm", "/api/calendar-writeback")):
+            if sync is not None and (path.startswith("/api/items/") or path in ("/api/review", "/api/confirm", "/api/calendar-writeback", "/api/settings")):
                 sync.wake.set()
             self.respond(200, result)
         except (Problem, AntigravityError) as error:

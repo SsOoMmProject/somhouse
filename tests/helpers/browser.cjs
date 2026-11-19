@@ -38,12 +38,16 @@ function browser({hash='',raw=JSON.stringify(blank()),session=null,local=new Map
    const items=(server.googleStatus?.review_items||[]).filter(x=>x.key!==request.key);
    server.googleStatus={...server.googleStatus,review:items.length,review_items:items};
    result={data:clone(server.data),sources:server.sources,google_status:server.googleStatus};
+  }else if(url.endsWith('/api/settings')){
+   const request=JSON.parse(options.body);(server.settingsCalls||=[]).push(request);server.settings={children:request.children};
+   for(const x of server.data.schedule)if(request.rename&&request.rename[x.who])x.who=request.rename[x.who];
+   result={data:clone(server.data),settings:clone(server.settings),moved:0};
   }else if(options.method==='PUT'){
    const item=JSON.parse(options.body),kind=url.split('/').at(-2);
    server.data[kind]=server.data[kind].filter(x=>x.id!==item.id);server.data[kind].push(clone(item));if(item.type==='feeding'){const open=server.data.records.filter(x=>x.type==='sleep'&&!x.end&&x.date<item.date).sort((a,b)=>b.date.localeCompare(a.date))[0];if(open)open.end=item.date;}if(item.heard&&['분유','모유','혼합'].includes(item.category))(server.aliases||={})[item.heard]=item.category;result={data:clone(server.data),aliases:clone(server.aliases||{})};
   }else if(options.method==='DELETE'){
    const parts=url.split('/'),kind=parts.at(-2),id=decodeURIComponent(parts.at(-1));server.data[kind]=server.data[kind].filter(x=>x.id!==id);result={data:clone(server.data)};
-  }else result={data:clone(server.data),sources:server.sources,google_status:server.googleStatus,aliases:server.aliases,calendar_events:server.calendarEvents,holidays:server.holidays,read_only:server.readOnly};
+  }else result={data:clone(server.data),sources:server.sources,google_status:server.googleStatus,aliases:server.aliases,calendar_events:server.calendarEvents,holidays:server.holidays,read_only:server.readOnly,settings:server.settings};
   if(url.endsWith('/api/data')&&server.readGate){const gate=server.readGate;server.readGate=null;await gate;}
   return {ok:true,json:async()=>result};
  }};
