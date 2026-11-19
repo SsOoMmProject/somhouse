@@ -448,6 +448,7 @@ class CalendarRecords:
                             ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body
                         """, (item_id, body))
                         projected = item
+                        self.records.wake_from_sleep(db, item)
                     applied, status = body, "저장"
                 else:
                     merged = merge_edit(applied, current, item)

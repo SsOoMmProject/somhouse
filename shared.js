@@ -12,7 +12,7 @@
   }
   class Client {
     constructor() {
-      this.base = ''; this.token = ''; this.username = ''; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = [];
+      this.base = ''; this.token = ''; this.username = ''; this.readOnly = false; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = [];
       try {this.base = serverURL(root.SOMHOUSE_API_URL);} catch {}
       if (['localhost', '127.0.0.1'].includes(location.hostname)) this.base = 'http://127.0.0.1:8787';
       try { this.base = serverURL(localStorage.getItem(SERVER)); } catch {}
@@ -20,14 +20,26 @@
         try {
           const saved = JSON.parse(root[name].getItem(SESSION));
           if (!saved || typeof saved.token !== 'string' || !saved.token || typeof saved.username !== 'string') continue;
-          this.base = serverURL(saved.base); this.token = saved.token; this.username = saved.username;
+          this.base = serverURL(saved.base); this.token = saved.token; this.username = saved.username; this.readOnly = saved.readOnly === true;
           if (name === 'sessionStorage') this.remember();
           break;
         } catch {}
       }
       if (!this.base && ['localhost', '127.0.0.1'].includes(location.hostname)) this.base = 'http://127.0.0.1:8787';
     }
-    async request(path, method = 'GET', body, base = this.base, token = this.token, timeoutMs = 15000) {
+    // The public relay (Tailscale Funnel) sometimes takes 5-20 seconds to open a connection.
+    // Requests that are safe to repeat get one more try; a POST (other than login) never repeats.
+    async request(path, method = 'GET', body, base = this.base, token = this.token, timeoutMs = 30000) {
+      const repeatable = method !== 'POST' || path === '/api/login';
+      try {
+        return await this.attempt(path, method, body, base, token, timeoutMs);
+      } catch (error) {
+        if (error.status || !repeatable) throw error;
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        return this.attempt(path, method, body, base, token, timeoutMs);
+      }
+    }
+    async attempt(path, method, body, base, token, timeoutMs) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
       try {
@@ -41,18 +53,28 @@
       } catch (error) {
         if (error.status) throw error;
         if (controller.signal.aborted) throw Error('응답이 늦어지고 있어요. 잠시 후 다시 시도해 주세요. 입력한 내용은 유지됩니다.');
-        throw Error('맥미니에 연결하지 못했어요. 연결을 확인하고 다시 시도해 주세요. 입력한 내용은 유지됩니다.');
+        throw Error('맥미니에 연결하지 못했어요. 인터넷 연결을 확인하고 다시 시도해 주세요. 입력한 내용은 유지됩니다.');
       } finally {clearTimeout(timeout);}
     }
     async login(base, username, password) {
       base = serverURL(base);
-      const result = await this.request('/api/login', 'POST', {username, password}, base, '');
-      this.base = base; this.token = result.token; this.username = result.username; this.sources = null; this.googleStatus = null;
+      this.adopt(base, await this.request('/api/login', 'POST', {username, password}, base, ''));
+    }
+    // Google sign-in returns here with a one-time code; trade it for the session token.
+    async googleLogin(code) {
+      this.adopt(this.base, await this.request('/api/login/google', 'POST', {code}, this.base, ''));
+    }
+    // Ask the server for Google's address: 'login' (anyone) or 'connect' (signed-in family, renews the Google link).
+    async googleStart(mode, returnTo) {
+      return (await this.request('/api/google/start', 'POST', {mode, returnTo}, this.base, mode === 'connect' ? this.token : '')).url;
+    }
+    adopt(base, result) {
+      this.base = base; this.token = result.token; this.username = result.username; this.readOnly = result.read_only === true; this.sources = null; this.googleStatus = null;
       try {localStorage.setItem(SERVER, base);} catch {}
       this.remember();
     }
     remember() {
-      const saved = JSON.stringify({base: this.base, token: this.token, username: this.username});
+      const saved = JSON.stringify({base: this.base, token: this.token, username: this.username, readOnly: this.readOnly});
       try {
         localStorage.setItem(SESSION, saved);
       } catch {
@@ -63,7 +85,7 @@
     }
     clear() {
       const token = this.token;
-      this.token = ''; this.username = ''; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = [];
+      this.token = ''; this.username = ''; this.readOnly = false; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = [];
       for (const name of ['localStorage', 'sessionStorage']) {
         try {
           const storage = root[name];
@@ -92,7 +114,7 @@
     }
     async load() {
       const token = this.token, result = await this.request('/api/data');
-      if (token === this.token) {this.sources = result.sources || null; this.googleStatus = result.google_status || null; this.aliases = result.aliases || {}; this.calendarEvents = Array.isArray(result.calendar_events) ? result.calendar_events : []; this.holidays = Array.isArray(result.holidays) ? result.holidays : [];}
+      if (token === this.token) {if (this.readOnly !== (result.read_only === true)) {this.readOnly = result.read_only === true; this.remember();} this.sources = result.sources || null; this.googleStatus = result.google_status || null; this.aliases = result.aliases || {}; this.calendarEvents = Array.isArray(result.calendar_events) ? result.calendar_events : []; this.holidays = Array.isArray(result.holidays) ? result.holidays : [];}
       return result.data;
     }
     async put(kind, item) {

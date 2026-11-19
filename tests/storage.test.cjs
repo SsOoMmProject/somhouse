@@ -72,29 +72,28 @@ test('recent feeding button only prefills the form and never saves by itself',as
  assert.equal(b.get('#dialog').open,true);
  assert.equal(b.eval('editing'),null);
  assert.match(b.get('#fields').innerHTML,/<option selected>분유<\/option>/);
- assert.match(b.get('#fields').innerHTML,/name="amount" type="text" value="120ml"/);
+ assert.match(b.get('#fields').innerHTML,/name="amount" type="text" inputmode="decimal" value="120"[^>]*><span class="unit">ml<\/span>/);
  assert.doesNotMatch(b.get('#fields').innerHTML,/value="2026-01-01T09:00"/);
  assert.equal(writes(),before);
 });
 
-test('healthy Google status is one folded line and is not rewritten while unchanged',async()=>{
+test('healthy Google status is one folded line at the bottom of home, problems go to the top',async()=>{
  const server=family();
  server.googleStatus={auth_state:'ready',review:0,errors:[],services:{
   sheets:{pending:0,retrying:0,failed:0,last_success:'2026-11-16T12:03:44'},
   tasks:{pending:1,retrying:0,failed:0,last_success:'2026-11-16T11:00:00'}}};
- const b=browser({server});await b.login();
+ const b=browser({server});await b.login();b.eval("page='home';render()");
  const status=b.get('#google-status');
- assert.match(status.innerHTML,/Google 연동 정상<\/strong> · 전송 대기 1건 · 마지막 전송 2026-11-16 12:03/);
- assert.match(status.innerHTML,/<details><summary>자세히 보기<\/summary>/);
- // Simulate the browser reflecting an opened <details>; an unchanged poll must not reset it.
- status.innerHTML=status.innerHTML.replace('<details>','<details open="">');
- await b.eval('refreshShared(true)');
- assert.match(status.innerHTML,/<details open="">/);
+ assert.equal(status.hidden,true);
+ const html=b.get('#content').innerHTML;
+ assert.match(html,/<details class="google-footer"><summary>🟢 Google 연동 정상 · 전송 대기 1건 · 마지막 전송 12:03<\/summary>/);
+ assert.ok(html.indexOf('google-footer')>html.indexOf('summary-cards'));
  server.googleStatus={...server.googleStatus,services:{sheets:{pending:0,retrying:0,failed:2,last_success:null}}};
  await b.eval('refreshShared(true)');
+ assert.equal(status.hidden,false);
  assert.match(status.innerHTML,/<strong>Google 연동 상태<\/strong><ul>/);
  assert.match(status.innerHTML,/실패 2건/);
- assert.doesNotMatch(status.innerHTML,/<details/);
+ assert.doesNotMatch(b.get('#content').innerHTML,/google-footer/);
 });
 
 test('unit-less feedings show no preset and ask before saving',async()=>{
@@ -104,8 +103,18 @@ test('unit-less feedings show no preset and ask before saving',async()=>{
  b.eval("page='home';render()");
  assert.doesNotMatch(b.get('#content').innerHTML,/data-repeat-category/);
  const asked=[];b.context.confirm=text=>{asked.push(text);return false;};
+ // 모유 is typed as a number and saved in minutes; 분유 in ml.
  b.eval("openForm('feeding')");
  b.get('#form').values={date:'2026-01-02T09:00',category:'모유',amount:'3',memo:''};
+ await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
+ assert.equal(asked.length,0);assert.ok(b.server.data.records.some(x=>x.amount==='3분'));
+ b.eval("openForm('feeding')");
+ b.get('#form').values={date:'2026-01-02T10:00',category:'분유',amount:'130',memo:''};
+ await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
+ assert.ok(b.server.data.records.some(x=>x.amount==='130ml'));
+ // 기타 stays free text and still asks about a missing unit.
+ b.eval("openForm('feeding')");
+ b.get('#form').values={date:'2026-01-02T11:00',category:'기타',amount:'3',memo:''};
  const before=b.calls.length;
  await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
  assert.equal(asked.length,1);assert.match(asked[0],/단위가 없어요/);
@@ -121,7 +130,9 @@ test('review inputs can be saved from a prefilled form or dismissed on the web',
  const entry=(key,title)=>({key,source:'Calendar',title,when:'2026-11-17T07:12',status:'확인 필요',suggest:{category:'기타',amount:'100ml'}});
  server.googleStatus={auth_state:'ready',review:2,errors:[],services:{},review_items:[entry('calendar:a','수유 100미리 병원'),entry('tasks:b','솜하우스 수유 조금')]};
  const b=browser({server});await b.login();
- assert.match(b.get('#google-status').innerHTML,/data-page="review">확인 필요 2건 정리하기/);
+ assert.equal(b.get('#google-status').hidden,true);
+ b.eval("page='home';render()");
+ assert.match(b.get('#content').innerHTML,/⚠️ 확인할 것 2건<\/h2><h3>저장하지 못한 음성·캘린더 입력 · 2건<\/h3>[^]*data-review-key="calendar:a" data-review-action="save"/);
  b.eval("page='review';render()");
  const html=b.get('#content').innerHTML;
  assert.match(html,/수유 100미리 병원/);assert.match(html,/data-review-key="tasks:b" data-review-action="dismiss"/);
@@ -130,7 +141,7 @@ test('review inputs can be saved from a prefilled form or dismissed on the web',
  assert.equal(b.get('#dialog').open,true);
  assert.match(b.get('#formtitle').textContent,/확인 필요 정정/);
  assert.match(b.get('#fields').innerHTML,/name="date" type="datetime-local" value="2026-11-17T07:12"/);
- assert.match(b.get('#fields').innerHTML,/name="amount" type="text" value="100ml"/);
+ assert.match(b.get('#fields').innerHTML,/name="amount" type="text" inputmode="text" value="100ml"/);
  assert.match(b.get('#fields').innerHTML,/음성 원문: 수유 100미리 병원/);
  b.get('#form').values={date:'2026-11-17T07:12',category:'분유',amount:'100ml',memo:''};
  await b.get('#form').onsubmit({preventDefault(){},target:b.get('#form')});
@@ -153,6 +164,8 @@ test('voice and calendar help appears only when the Calendar intake is connected
  assert.doesNotMatch(plain.get('#content').innerHTML,/voice-help/);
  const server=family();server.sources={calendar:'https://calendar.google.com/calendar/'};
  const b=browser({server});await b.login();b.eval("page='home';render()");
+ assert.doesNotMatch(b.get('#content').innerHTML,/voice-help/);
+ b.eval("page='records';render()");
  assert.match(b.get('#content').innerHTML,/<details class="voice-help">/);
  assert.match(b.get('#content').innerHTML,/수유 100ml/);
 });
@@ -165,7 +178,7 @@ test('unclear feeding kinds are settled with one tap, learned, and can be forgot
   {id:'c',type:'feeding',date:'2026-11-17T10:00',category:'분유',amount:'120ml',memo:''});
  const b=browser({server});await b.login();b.eval("page='home';render()");
  let html=b.get('#content').innerHTML;
- assert.match(html,/종류를 골라 주세요 · 2건/);assert.match(html,/들린 말 ‘부유’/);
+ assert.match(html,/종류만 골라 주세요 · 2건/);assert.match(html,/들린 말 ‘부유’/);
  assert.match(html,/data-confirm-id="a" data-confirm-category="분유"/);
  assert.doesNotMatch(html,/data-confirm-id="c"/);
  const click=dataset=>b.events.get('click')({target:{closest:()=>({dataset})}});
@@ -173,11 +186,12 @@ test('unclear feeding kinds are settled with one tap, learned, and can be forgot
  assert.deepEqual(server.confirms,[{id:'a',category:'분유'}]);
  assert.match(b.get('#connection-status').textContent,/‘부유’는 분유로 기억/);
  html=b.get('#content').innerHTML;
- assert.match(html,/종류를 골라 주세요 · 1건/);assert.match(html,/‘부유’→분유 <button class="plain" data-forget="부유">잊기/);
+ assert.match(html,/종류만 골라 주세요 · 1건/);
+ b.eval("page='records';render()");assert.match(b.get('#content').innerHTML,/‘부유’→분유 <button class="plain" data-forget="부유">잊기/);b.eval("page='home';render()");
  await click({confirmId:'b',confirmCategory:'주스'});
  assert.equal(server.confirms.length,1);
  await click({confirmId:'b',confirmCategory:'기타'});
- assert.doesNotMatch(b.get('#content').innerHTML,/종류를 골라 주세요/);
+ assert.doesNotMatch(b.get('#content').innerHTML,/종류만 골라 주세요/);
  await click({forget:'부유'});
  assert.deepEqual(server.confirms.at(-1),{forget:'부유'});
  assert.doesNotMatch(b.get('#content').innerHTML,/data-forget/);
@@ -223,10 +237,10 @@ test('review cards explain why an input waits and name their buttons by situatio
  assert.match(html,/data-review-key="calendar:c" data-review-action="dismiss">지금 기록 그대로 두기/);
  await b.events.get('click')({target:{closest:()=>({dataset:{reviewKey:'calendar:a',reviewAction:'save'}})}});
  assert.match(b.get('#fields').innerHTML,/<option selected>분유<\/option>/);
- assert.match(b.get('#fields').innerHTML,/name="amount" type="text" value=""/);
+ assert.match(b.get('#fields').innerHTML,/name="amount" type="text" inputmode="decimal" value=""/);
 });
 
-test('the family calendar sits above the menu and shows feedings, schedules, dated shopping and Google events',async()=>{
+test('the family calendar lives on the schedule page and shows feedings, schedules, dated shopping and Google events',async()=>{
  const server=family();const today=new Date();const pad=n=>String(n).padStart(2,'0');
  const key=`${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
  server.data.records.push({id:'a',type:'feeding',date:key+'T00:01',category:'분유',amount:'100ml',memo:'음성 원문: 뷰유'});
@@ -238,6 +252,8 @@ test('the family calendar sits above the menu and shows feedings, schedules, dat
  assert.doesNotMatch(html,/cal-grid/);
  for(const label of ['오늘','어제','이번 주','지난주'])assert.match(html,new RegExp(`<p>${label}<span`));
  assert.match(html,/<strong>1회 · 100ml<\/strong>/);
+ assert.equal(b.get('#dashboard').hidden,true);assert.match(html,/now-card/);
+ b.eval("page='schedule';render()");
  html=b.get('#dashboard').innerHTML;assert.equal(b.get('#dashboard').hidden,false);
  assert.match(html,new RegExp(`data-cal-day="${key}" aria-label="${key} 수유 1회 일정 2건 구매 1건 구글 2건"`));
  assert.match(html,/🍼1 100<\/span><span class="mark plan">📅2<\/span><span class="mark shop">🛒1<\/span><span class="mark gcal">📆2/);
@@ -264,7 +280,7 @@ test('the family calendar sits above the menu and shows feedings, schedules, dat
  assert.match(html,new RegExp(`${next.getFullYear()}년 ${next.getMonth()+1}월`));assert.match(html,/이번 달로/);assert.doesNotMatch(html,/cal-detail/);
  // The stats page keeps the summary cards and tables, without the calendar.
  b.eval("page='stats';render()");
- assert.match(b.get('#content').innerHTML,/summary-cards/);assert.match(b.get('#dashboard').innerHTML,/cal-grid/);
+ assert.match(b.get('#content').innerHTML,/summary-cards/);assert.equal(b.get('#dashboard').hidden,true);assert.doesNotMatch(b.get('#dashboard').innerHTML,/cal-grid/);
  // A new shopping item starts without a date; schedule items keep their who.
  b.eval("openForm('shopping')");
  assert.match(b.get('#fields').innerHTML,/name="date" type="date" value=""/);
@@ -304,7 +320,7 @@ test('Google links keep the connected account and reject other addresses',async(
  await b.eval('refreshShared(true)');
  assert.equal(b.get('#raw-sources').innerHTML,'');
  server.calendarEvents=[{id:'g',date:'2026-11-17T21:30',end:'2026-11-17T22:30',allDay:false,title:'엄마약속',link:'javascript:alert(1)'}];
- await b.eval('refreshShared(true)');b.eval("calendarDay='2026-11-17';calendarMonth='2026-11';render()");
+ await b.eval('refreshShared(true)');b.eval("page='schedule';calendarDay='2026-11-17';calendarMonth='2026-11';render()");
  assert.match(b.get('#dashboard').innerHTML,/21:30 · 엄마약속<\/p>/);
  b.eval("page='home';render()");
  assert.match(b.get('#content').innerHTML,/<button class="secondary" data-add="feeding">수유 기록<\/button>/);
@@ -316,9 +332,12 @@ test('home puts recent feedings under their own heading and the voice help after
  const b=browser({server});await b.login();b.eval("page='home';render()");
  const html=b.get('#content').innerHTML;
  assert.match(html,/<section class="repeat" aria-labelledby="repeat-title"><h2 id="repeat-title">최근 수유 다시 기록<\/h2><div class="quick"><button class="secondary" data-repeat-category="분유"/);
- assert.match(html,/<summary>ⓘ 음성·캘린더 입력 도움말 <span class="caption">기억한 말 관리<\/span><\/summary>/);
- assert.ok(html.indexOf('summary-cards')<html.indexOf('voice-help'));
- assert.ok(html.indexOf('repeat-title')<html.indexOf('summary-cards'));
+ assert.doesNotMatch(html,/voice-help/);
+ assert.ok(html.indexOf('now-card')<html.indexOf('repeat-title'));
+ assert.ok(html.indexOf('repeat-title')<html.indexOf('다가오는 일정'));
+ assert.ok(html.indexOf('다가오는 일정')<html.indexOf('summary-cards'));
+ b.eval("page='records';render()");
+ assert.match(b.get('#content').innerHTML,/<summary>ⓘ 음성·캘린더 입력 도움말 <span class="caption">기억한 말 관리<\/span><\/summary>/);
 });
 
 test('calendar marks Korean holidays and substitutes, and upcoming mixes Somhouse and Google events',async()=>{
@@ -329,7 +348,7 @@ test('calendar marks Korean holidays and substitutes, and upcoming mixes Somhous
  server.calendarEvents=[{id:'g',date:fkey+'T19:00',end:fkey+'T21:00',allDay:false,title:'아빠 저녁',link:'https://www.google.com/calendar/event?eid=a'},
                         {id:'old',date:'2000-01-01T09:00',end:'2000-01-01T10:00',allDay:false,title:'지난 일정',link:''}];
  server.data.schedule.push({id:'s',date:fkey+'T08:00',title:'소아과',who:'엄마',memo:''});
- const b=browser({server});await b.login();b.eval("page='home';render()");
+ const b=browser({server});await b.login();b.eval("page='schedule';render()");
  const board=b.get('#dashboard').innerHTML;
  assert.match(board,new RegExp(`class="cal-day red[^"]*" data-cal-day="${day(3)}" aria-label="[^"]* 개천절"><span class="num">3</span><span class="holiday">개천절</span>`));
  assert.match(board,new RegExp(`data-cal-day="${day(5)}"[^>]*><span class="num">5</span><span class="holiday">대체공휴일\\(개천절\\)</span>`));
@@ -337,6 +356,7 @@ test('calendar marks Korean holidays and substitutes, and upcoming mixes Somhous
  assert.match(board,new RegExp(`class="cal-day red[^"]*" data-cal-day="${day(sunday)}"`));
  await b.events.get('click')({target:{closest:()=>({dataset:{calDay:day(5)}})}});
  assert.match(b.get('#dashboard').innerHTML,new RegExp(`<h3>${day(5)} · <span class="holiday-name">대체공휴일\\(개천절\\)</span></h3>`));
+ b.eval("page='home';render()");
  const html=b.get('#content').innerHTML;
  const upcoming=html.slice(html.indexOf('다가오는 일정'),html.indexOf('구매 예정</h2>'));
  assert.ok(upcoming.indexOf('소아과')<upcoming.indexOf('아빠 저녁'));
@@ -355,6 +375,7 @@ test('sleep records are entered, confirmed, totalled and shown on the calendar',
  assert.match(html,/😴 [0-9-]+ 00:30 · 깬 시각 미입력<\/strong> · 시각으로 추정: 밤잠/);
  assert.match(html,/data-confirm-id="g" data-confirm-category="낮잠">낮잠/);
  assert.match(html,/<span class="sleep-line">😴 2회 · 1시간 30분<\/span>/);
+ b.eval("page='schedule';render()");
  assert.match(b.get('#dashboard').innerHTML,/<span class="mark sleep">😴1h 30m<\/span>/);
  const click=dataset=>b.events.get('click')({target:{closest:()=>({dataset})}});
  await click({confirmId:'g',confirmCategory:'낮잠'});
@@ -382,4 +403,74 @@ test('one record of an unknown type still blocks a broken payload, but every kno
  assert.equal(b.eval('sharedReady'),true);assert.equal(b.eval('data.records.length'),3);
  assert.equal(b.eval("valid({records:[{id:'x',type:'nap',date:'d'}],schedule:[],shopping:[]})"),false);
  assert.equal(b.eval("valid({records:[{id:'x',type:'sleep',date:'d'}],schedule:[],shopping:[]})"),false);
+});
+
+test('home leads with the last feeding and sleep; schedules list the soonest first and fold the past',async()=>{
+ const server=family(),pad=n=>String(n).padStart(2,'0'),stamp=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+ const at=minutes=>stamp(new Date(Date.now()+minutes*60000));
+ server.data.records.push({id:'f1',type:'feeding',date:at(-200),category:'분유',amount:'100ml'},{id:'f2',type:'feeding',date:at(-65),category:'모유',amount:'15분'},
+  {id:'z',type:'sleep',date:at(-30),category:'낮잠',end:''});
+ server.data.schedule.push({id:'far',date:at(60*24*20),title:'먼 일정'},{id:'soon',date:at(60*24),title:'가까운 일정'},{id:'old',date:at(-60*24*3),title:'지난 일정'});
+ const b=browser({server});await b.login();b.eval("page='home';render()");
+ let html=b.get('#content').innerHTML;
+ assert.match(html,/마지막 수유<\/p><strong>1시간 5분 전<\/strong><span>[^<]* · 모유 15분/);
+ assert.match(html,/마지막 수면<\/p><strong>자는 중 · 30분째<\/strong>/);
+ assert.ok(html.indexOf('now-card')<html.indexOf('class="quick"'));
+ b.eval("page='schedule';render()");
+ html=b.get('#content').innerHTML;
+ assert.ok(html.indexOf('가까운 일정')<html.indexOf('먼 일정'));
+ assert.match(html,/다가오는 2 · 지난 1/);
+ assert.match(html,/<details class="past"><summary>지난 일정 1개<\/summary>[^]*지난 일정<\/strong>/);
+ server.data.records.find(x=>x.id==='z').end=at(-5);await b.eval('refreshShared(true)');b.eval("page='home';render()");
+ assert.match(b.get('#content').innerHTML,/마지막 수면<\/p><strong>깬 지 5분<\/strong><span>낮잠 25분 · /);
+});
+
+test('sleep start and end buttons, and a feeding ends the open sleep',async()=>{
+ const server=family(),b=browser({server});await b.login();b.eval("page='home';render()");
+ const click=dataset=>b.events.get('click')({target:{closest:()=>({dataset})}});
+ assert.match(b.get('#content').innerHTML,/data-sleep-start="1">😴 수면 시작/);
+ await click({sleepStart:'1'});
+ const sleep=server.data.records.find(x=>x.type==='sleep');
+ assert.equal(sleep.end,'');assert.ok(['낮잠','밤잠'].includes(sleep.category));
+ assert.match(b.get('#content').innerHTML,new RegExp(`data-sleep-end="${sleep.id}">☀️ 수면 종료`));
+ assert.match(b.get('#content').innerHTML,/자는 중 · 방금/);
+ // Pressed in the same minute: nothing is saved.
+ await click({sleepEnd:sleep.id});assert.match(b.alerts.at(-1),/1분/);assert.equal(sleep.end,'');
+ // Started 45 minutes ago, then ended with the button.
+ const pad=n=>String(n).padStart(2,'0'),stamp=d=>`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+ sleep.date=stamp(new Date(Date.now()-45*60000));await b.eval('refreshShared(true)');
+ await click({sleepEnd:sleep.id});
+ assert.equal(server.data.records.find(x=>x.id===sleep.id).end,b.eval('Somhouse.localDateTime()'));
+ assert.match(b.get('#connection-status').textContent,/45분을 기록했어요/);
+ // A new open sleep is ended by recording a feeding.
+ server.data.records.push({id:'s2',type:'sleep',date:stamp(new Date(Date.now()-90*60000)),end:'',category:'낮잠'});
+ await b.eval('refreshShared(true)');
+ b.eval("openForm('feeding')");b.get('#form').values={date:b.eval('Somhouse.localDateTime()'),category:'분유',amount:'120ml',memo:''};
+ await b.eval("document.querySelector('#form').onsubmit({preventDefault(){},target:document.querySelector('#form')})");
+ assert.equal(server.data.records.find(x=>x.id==='s2').end,b.eval('Somhouse.localDateTime()'));
+ assert.match(b.get('#connection-status').textContent,/수유를 기록해서 낮잠을 .*에 끝냈어요 \(1시간 30분\)/);
+});
+
+test('records are grouped by day, cards open the editor, and delete lives in the dialog',async()=>{
+ const server=family(),pad=n=>String(n).padStart(2,'0'),day=n=>{const d=new Date(Date.now()-n*86400000);return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;};
+ for(const n of [0,1,5])server.data.records.push({id:'f'+n,type:'feeding',date:day(n)+'T00:05',category:'분유',amount:'100ml',memo:''});
+ server.data.shopping.push({id:'p1',title:'손수건',quantity:'5장',done:'no'},{id:'p2',title:'분유',quantity:'1통',date:day(-3),done:'no'},{id:'p3',title:'물티슈',quantity:'1',date:day(-1),done:'yes'});
+ const b=browser({server});await b.login();b.eval("page='records';render()");
+ let html=b.get('#content').innerHTML;
+ assert.match(html,/<h3 class="day-head">[^<]+<span>🍼 1회 · 100ml<\/span><\/h3>/);
+ assert.match(html,/data-add="sleep">수면 추가/);
+ assert.doesNotMatch(html,/data-id="f5"/);assert.match(html,/data-more-days="7">이전 기록 더 보기 \(1일 남음\)/);
+ assert.doesNotMatch(html,/data-action="delete"/);
+ const click=dataset=>b.events.get('click')({target:{closest:sel=>sel==='a'?null:({dataset})}});
+ await click({moreDays:'7'});assert.match(b.get('#content').innerHTML,/data-id="f5"/);
+ await click({action:'edit',key:'records',id:'f0'});
+ assert.equal(b.get('#dialog').open,true);assert.equal(b.get('#delete-item').hidden,false);
+ await b.get('#delete-item').onclick();
+ assert.ok(!server.data.records.some(x=>x.id==='f0'));
+ b.eval("openForm('shopping')");assert.match(b.get('#fields').innerHTML,/name="quantity" type="text" value="1"/);assert.equal(b.get('#delete-item').hidden,true);
+ b.get('#dialog').open=false;
+ b.eval("page='shopping';render()");html=b.get('#content').innerHTML;
+ assert.ok(html.indexOf('분유')<html.indexOf('손수건'));
+ assert.match(html,/살 것 2 · 산 것 1/);assert.match(html,/<details class="past"><summary>산 것 1개<\/summary>[^]*다시 사기/);
+ assert.match(html,/✓ 샀어요/);
 });

@@ -100,6 +100,168 @@ class FamilyAPI(unittest.TestCase):
         with reopened.connect() as db:
             self.assertEqual(reopened.state(db)["shopping"], [a])
 
+    def test_guest_sees_only_demo_records_and_can_change_nothing(self):
+        family = self.login()
+        secret = {"id": "real", "type": "hospital", "date": "2026-11-01T10:00", "hospital": "실제병원", "reason": "비공개"}
+        self.assertEqual(self.request("/api/items/records/real", "PUT", secret, family)[0], 200)
+        self.store.password("guest", "guest-password-1")
+        code, login, _ = self.request("/api/login", "POST", {"username": "guest", "password": "guest-password-1"})
+        self.assertEqual((code, login["read_only"]), (200, True))
+        guest = login["token"]
+        self.assertEqual(self.request("/api/me", token=guest)[1], {"username": "guest", "read_only": True})
+        code, view, _ = self.request("/api/data", token=guest)
+        self.assertEqual(code, 200)
+        self.assertTrue(view["read_only"])
+        self.assertNotIn("실제병원", json.dumps(view, ensure_ascii=False))
+        self.assertNotIn("sources", view)  # no links that would open the viewer's own Google account
+        self.assertTrue(all(view["data"][k] for k in ("records", "schedule", "shopping")))
+        from server import validate_data
+        validate_data(view["data"])
+        blocked = [("/api/items/records/real", "DELETE", None), ("/api/items/shopping/x", "PUT", self.item("x")),
+                   ("/api/merge", "POST", self.blank([self.item("m")])), ("/api/confirm", "POST", {"forget": "부유"}),
+                   ("/api/review", "POST", {"key": "k", "action": "dismiss"}),
+                   ("/api/ai", "POST", {"question": "안녕", "scope": "none"}),
+                   ("/api/password", "POST", {"currentPassword": "guest-password-1", "newPassword": "another-password-2"})]
+        for path, method, body in blocked:
+            self.assertEqual(self.request(path, method, body, guest)[0], 403, path)
+        self.assertFalse(self.request("/api/ai", token=guest)[1]["enabled"])
+        self.assertEqual(self.request("/api/data", token=family)[1]["data"],
+                         {"records": [secret], "schedule": [], "shopping": []})
+        self.assertNotIn("read_only", self.request("/api/data", token=family)[1])
+        self.assertEqual(self.request("/api/logout", "POST", {}, guest)[0], 200)
+        with self.store.connect() as db:
+            db.execute("DELETE FROM users WHERE username='guest'")
+
+    def test_feeding_ends_the_open_sleep_from_web_and_voice(self):
+        token = self.login()
+        put = lambda item: self.request("/api/items/records/" + item["id"], "PUT", item, token)
+        sleep = {"id": "s", "type": "sleep", "date": "2026-11-18T13:00", "end": "", "category": "낮잠", "memo": ""}
+        old = {"id": "old", "type": "sleep", "date": "2026-11-17T08:00", "end": "", "category": "낮잠"}
+        for item in (old, sleep):
+            self.assertEqual(put(item)[0], 200)
+        # A feeding before the sleep started does not end it.
+        put({"id": "f0", "type": "feeding", "date": "2026-11-18T12:30", "category": "분유", "amount": "100ml"})
+        code, result, _ = put({"id": "f1", "type": "feeding", "date": "2026-11-18T14:10", "category": "분유", "amount": "120ml"})
+        self.assertEqual(code, 200)
+        records = {x["id"]: x for x in result["data"]["records"]}
+        self.assertEqual(records["s"]["end"], "2026-11-18T14:10")
+        self.assertEqual(records["old"]["end"], "")  # open for over 16 hours: left for a person to fix
+        # Voice and Calendar inputs use the same rule and send the changed sleep to Google.
+        from google_records import GoogleRecords
+        queued = []
+        fake = type("Fake", (), {"queue": lambda self, db, kind, item_id, item, action: queued.append((item_id, item["end"]))})()
+        put({"id": "s2", "type": "sleep", "date": "2026-11-18T15:00", "end": "", "category": "낮잠"})
+        with self.store.connect() as db:
+            woke = GoogleRecords.wake_from_sleep(fake, db, {"type": "feeding", "date": "2026-11-18T16:05"})
+        self.assertEqual(woke["end"], "2026-11-18T16:05")
+        self.assertEqual(queued, [("s2", "2026-11-18T16:05")])
+        with self.store.connect() as db:
+            self.assertIsNone(GoogleRecords.wake_from_sleep(fake, db, {"type": "feeding", "date": "2026-11-18T17:00"}))
+
+    def test_preflight_is_cached_by_the_browser(self):
+        code, _, headers = self.request("/api/data", "OPTIONS", origin="https://ssoommproject.github.io")
+        self.assertEqual((code, headers["Access-Control-Max-Age"]), (204, "600"))
+
+    def test_google_sign_in_and_reconnect_accept_only_the_connected_account(self):
+        import http.client, json as _json, os as _os
+        import google_web
+        from google_records import GoogleError, save_config
+        directory = Path(self.temp.name)
+        start = lambda mode, token=None, back="https://ssoommproject.github.io/somhouse/": self.request(
+            "/api/google/start", "POST", {"mode": mode, "returnTo": back}, token)
+        self.assertEqual(start("login")[0], 503)  # not set up yet
+        client = directory / "client.json"
+        client.write_text(_json.dumps({"web": {"client_id": "web-id", "client_secret": "web-secret",
+            "redirect_uris": ["https://family.example/api/google/callback"]}}))
+        google_web.save_web_client(directory, client, "https://family.example")
+        save_config(directory, {"subject": "S1", "binding": "b"})
+        _os.chmod(directory / "google-records.json", 0o600)
+
+        def callback(url):
+            state = dict(x.split("=", 1) for x in url.split("?", 1)[1].split("&"))["state"]
+            connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=10)
+            connection.request("GET", f"/api/google/callback?state={state}&code=abc")
+            response = connection.getresponse(); response.read(); connection.close()
+            return response.status, response.getheader("Location")
+
+        who = {"sub": "S1", "email_verified": True}
+        tokens = {"access_token": "at"}
+        with patch.object(google_web, "exchange", lambda *a: dict(tokens)), \
+             patch.object(google_web, "identity", lambda token: dict(who)):
+            code, body, _ = start("login", back="https://evil.example/steal")
+            self.assertIn("scope=openid", body["url"]); self.assertNotIn("access_type=offline", body["url"])
+            status, location = callback(body["url"])
+            self.assertEqual(status, 302)
+            self.assertTrue(location.startswith("https://ssoommproject.github.io/somhouse/#google="))  # never the evil origin
+            one_time = location.split("#google=")[1]
+            code, login, _ = self.request("/api/login/google", "POST", {"code": one_time})
+            self.assertEqual((code, login["username"], login["read_only"]), (200, "family", False))
+            self.assertEqual(self.request("/api/me", token=login["token"])[1]["username"], "family")
+            self.assertEqual(self.request("/api/login/google", "POST", {"code": one_time})[0], 401)  # single use
+            # Another Google account is refused.
+            who["sub"] = "S2"
+            status, location = callback(start("login")[1]["url"])
+            self.assertIn("#google-error=", location)
+            who["sub"] = "S1"
+            # A state can be used only once.
+            url = start("login")[1]["url"]
+            callback(url)
+            self.assertIn("#google-error=", callback(url)[1])
+
+            # Reconnect: signed-in family only, needs the running bridge, and keeps the old link if access fails.
+            self.assertEqual(start("connect")[0], 401)
+            family = login["token"]
+            self.assertEqual(start("connect", family)[0], 409)  # no bridge running in this test server
+            adopted = []
+            fake = type("Bridge", (), {"calendar": None, "config": {"binding": "b", "subject": "S1"},
+                                       "adopt_credentials": lambda self, *a: adopted.append(a)})()
+            self.server.google = fake
+            try:
+                self.store.password("guest", "guest-password-1")
+                guest = self.request("/api/login", "POST", {"username": "guest", "password": "guest-password-1"})[1]["token"]
+                self.assertEqual(start("connect", guest)[0], 403)
+                url = start("connect", family)[1]["url"]
+                self.assertIn("access_type=offline", url); self.assertIn("auth%2Ftasks", url)
+                self.assertIn("#google-error=", callback(url)[1])
+                tokens["refresh_token"] = "new-refresh"
+                tokens["scope"] = "openid https://www.googleapis.com/auth/calendar.events.owned"
+                with patch.object(google_web, "check_access", side_effect=GoogleError(403, "Sheets")):
+                    self.assertIn("#google-error=", callback(start("connect", family)[1]["url"])[1])
+                self.assertEqual(adopted, [])
+                with patch.object(google_web, "check_access", return_value=True):
+                    status, location = callback(start("connect", family)[1]["url"])
+                self.assertTrue(location.endswith("#google-connected=1"))
+                self.assertEqual(adopted, [("web-id", "web-secret", "new-refresh", "at", {})])  # no calendar in this bridge
+                adopted.clear()
+                fake.calendar = object()
+                with patch.object(google_web, "check_access", return_value=True):
+                    callback(start("connect", family)[1]["url"])
+                    tokens["scope"] = "openid"  # the person unticked calendar access
+                    callback(start("connect", family)[1]["url"])
+                self.assertEqual([a[4] for a in adopted], [{"calendar_write": True}, {"calendar_write": False}])
+            finally:
+                self.server.google = None
+                with self.store.connect() as db:
+                    db.execute("DELETE FROM users WHERE username='guest'")
+                for name in ("google-web-client.json", "google-records.json", "client.json"):
+                    (directory / name).unlink(missing_ok=True)
+
+    def test_renewed_google_credentials_are_saved_and_resume_delivery(self):
+        from google_records import read_config
+        config = {"binding": "renew", "client_id": "old", "client_secret": "old-s", "refresh_token": "old-r",
+                  "subject": "S1", "inbox": "@default", "task_list": "web", "spreadsheet": "sheet", "ready": True}
+        bridge = GoogleRecords(self.store, config)
+        bridge.require_reconnect()
+        self.assertEqual(bridge.auth_state, "reconnect_required")
+        try:
+            bridge.adopt_credentials("web-id", "web-s", "new-r", "access")
+            saved = read_config(Path(self.temp.name))
+            self.assertEqual((saved["client_id"], saved["refresh_token"], saved["spreadsheet"]), ("web-id", "new-r", "sheet"))
+            self.assertEqual((bridge.auth_state, bridge.api.token, bridge.api.config["client_id"]), ("ready", "access", "web-id"))
+            self.assertEqual(GoogleRecords(self.store, saved).auth_state, "ready")  # survives a restart
+        finally:
+            (Path(self.temp.name) / "google-records.json").unlink(missing_ok=True)
+
     def test_login_stays_active_until_logout_and_stores_hashes(self):
         self.assertEqual(self.request("/api/data")[0], 401)
         self.assertEqual(self.request("/api/login", "POST", {"username": "family1", "password": "wrong"})[0], 401)

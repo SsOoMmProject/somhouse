@@ -42,7 +42,7 @@
 
 - 필요한 범위: `https://www.googleapis.com/auth/calendar.events.owned`(소유한 캘린더 일정 읽기·쓰기). 기존 `calendar.events.owned.readonly`를 대체합니다.
 - 범위가 넓어지므로, 코드에서 위 "반영 대상 제한"을 지키고 테스트로 확인합니다.
-- `scripts/connect_google_records.py --calendar`로 재연결해 새 토큰을 받습니다. 기존 `binding`·리소스 ID는 유지되는지 확인합니다.
+- 휴대폰의 **Google 다시 연결** 또는 `scripts/connect_google_records.py --calendar`로 재연결해 새 토큰을 받습니다. 기존 `binding`·리소스 ID는 유지되는지 확인합니다.
 - 쓰기 권한이 없는 토큰이면 버튼을 숨기고 기존 동작(읽기 전용)으로 남습니다.
 
 ## 배포 전 검증 (가짜 캘린더로)
@@ -69,9 +69,9 @@
 
 권한은 `scripts/connect_google_records.py`가 재연결 때 `calendar.events.owned`를 요청하고, Google이 실제로 허락한 경우에만 설정에 `calendar_write: true`를 저장합니다. 이 값이 없으면 버튼이 보이지 않고 서버도 요청을 거절합니다.
 
-### 배포 순서 (재연결 때)
+### 배포 순서 (2026-11-19 갱신: 휴대폰 재연결)
 
 1. 이 PR을 병합하고 운영 폴더를 갱신한 뒤 서버를 재시작합니다. 아직 `calendar_write`가 없으므로 동작은 바뀌지 않습니다.
-2. 맥미니에서 `scripts/connect_google_records.py --calendar`로 재연결해 새 권한을 승인합니다.
-3. 서버를 재시작하고 `google-status`와 웹에서 버튼이 보이는지 확인합니다.
+2. 휴대폰 솜하우스 홈 맨 아래 연동 줄(문제가 있으면 맨 위 경고)의 **Google 다시 연결**을 누르고 모든 권한에 체크해 승인합니다. 서버는 Google이 실제로 허락한 범위에 `calendar.events.owned`가 있을 때만 `calendar_write: true`를 저장하고, 새 권한으로 기본 캘린더·출력 캘린더·Tasks·시트를 읽어 본 뒤에만 교체합니다. 서버 재시작은 필요 없습니다. (맥의 `scripts/connect_google_records.py --calendar`도 계속 쓸 수 있습니다.)
+3. `google-status`와 웹에서 캘린더 입력 수유 카드에 **캘린더에도 반영** 버튼이 보이는지 확인합니다.
 4. 시험 일정 1건으로 반영 → 재수집 → 추가 쓰기 0회를 확인합니다.

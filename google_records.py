@@ -386,6 +386,21 @@ class GoogleRecords:
                        (self.binding, credential_hash))
             self.auth_state = db.execute("SELECT state FROM google_auth_state WHERE binding=?", (self.binding,)).fetchone()[0]
 
+    def adopt_credentials(self, client_id, client_secret, refresh_token, access_token, extra=None):
+        """Switch to credentials renewed from the web: same account and resources, new client and refresh token."""
+        updated = {**self.config, **(extra or {}), "client_id": client_id, "client_secret": client_secret,
+                   "refresh_token": refresh_token}
+        save_config(self.store.directory, updated)
+        self.config.update(updated)  # GoogleAPI and the Calendar/shopping helpers share this dict
+        self.api.token, self.api.expires = access_token, time.monotonic() + 3000
+        credential_hash = hashlib.sha256(encode([client_id, refresh_token]).encode()).hexdigest()
+        with self.store.lock, self.store.connect() as db:
+            db.execute("""INSERT INTO google_auth_state VALUES (?,?,'ready') ON CONFLICT(binding) DO UPDATE
+                SET credential_hash=excluded.credential_hash, state='ready'""", (self.binding, credential_hash))
+            db.execute("UPDATE google_service_state SET attempts=0,next_retry_at=0 WHERE binding=?", (self.binding,))
+        self.auth_state = "ready"
+        self.wake.set()
+
     @classmethod
     def load(cls, store):
         config = load_config(store.directory)
@@ -526,6 +541,7 @@ class GoogleRecords:
             db.execute("""INSERT INTO items VALUES (?,?,?)
                 ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body""", (kind, item_id, encode(item)))
             self.queue(db, kind, item_id, item, "save")
+            self.wake_from_sleep(db, item)
         else:
             queue_event(db, self.binding, "", item_id, {"review": key}, action="dismiss",
                         status="확인 필요 무시", skip_task=True)
@@ -574,6 +590,14 @@ class GoogleRecords:
                         voice_id=original[0] if original else "", title=task_title(kind, item))
             if self.calendar:
                 self.calendar.queue(db, kind, item_id, item, action)
+
+    def wake_from_sleep(self, db, feeding):
+        """A feeding from any input ends the open sleep; the change goes to Google like a web edit."""
+        from sleep_wake import end_sleep_on_feeding
+        sleep = end_sleep_on_feeding(db, feeding)
+        if sleep:
+            self.queue(db, "records", sleep["id"], sleep, "save")
+        return sleep
 
     def backfill(self, db):
         count = 0
@@ -634,6 +658,7 @@ class GoogleRecords:
                     db.execute("INSERT INTO items VALUES (?,?,?)", (kind, item_id, encode(item)))
                     if self.calendar:
                         self.calendar.queue(db, kind, item_id, item)
+                    self.wake_from_sleep(db, item)
                     if purchase and purchase["done"] != "yes":
                         self.shopping.queue(db, item, task)
             else:
