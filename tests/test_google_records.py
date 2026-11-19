@@ -341,6 +341,22 @@ class GoogleRegression(unittest.TestCase):
         self.assertEqual([learnable(w) for w in ('부유', '머유', '수육', '수유', '분유', '부', '부유물')],
                          [True, True, False, False, False, False, False])
 
+    def test_record_deleted_on_the_web_stays_deleted_whatever_calendar_does(self):
+        event = {'id': 'd1', 'summary': '분유 100ml', 'created': '2026-01-01T05:01:00Z', 'etag': '"a"',
+                 'start': {'dateTime': '2026-01-01T14:00:00+09:00'}}
+        calendar = self.bridge.calendar
+        calendar.record(event)
+        self.assertEqual(len(self.rows("SELECT * FROM items")), 1)
+        with self.store.connect() as db:
+            db.execute("DELETE FROM items")  # deleted on the web or by the admin command
+        before = self.rows("SELECT COUNT(*) FROM google_record_events")[0][0]
+        for change in ({'summary': '분유 120ml', 'etag': '"b"'}, {'status': 'cancelled', 'etag': '"c"'}):
+            calendar.record(dict(event, **change))
+            self.assertFalse(self.rows("SELECT * FROM items"))
+            with self.store.connect() as db:
+                self.assertEqual(self.bridge.status(db)['review'], 0)
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM google_record_events")[0][0], before)
+
     def test_calendar_edit_and_web_edit_of_different_fields_are_both_kept(self):
         event = {'id': 'm1', 'summary': '뷰유 10미리', 'created': '2026-01-01T05:01:00Z',
                  'start': {'dateTime': '2026-01-01T14:00:00+09:00'}}

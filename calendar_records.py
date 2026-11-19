@@ -428,6 +428,12 @@ class CalendarRecords:
             applied = previous[1] if previous else None
             current = db.execute("SELECT body FROM items WHERE kind='records' AND id=?", (item_id,)).fetchone()
             current = current[0] if current else None
+            if applied and current is None:
+                # The family deleted this record in Somhouse. Deleting, cancelling or editing the original event
+                # later must neither bring it back nor ask anything; just remember what Calendar now holds.
+                db.execute("""UPDATE google_calendar_inputs SET fingerprint=?, review=0, etag=?
+                    WHERE binding=? AND inbox=? AND event_id=?""", (fingerprint, event.get("etag") or "", *source_key))
+                return
             action, status, projected = "import", "확인 필요", None
             future = bool(item and datetime.fromisoformat(item["date"]).replace(tzinfo=SEOUL) > datetime.now(SEOUL))
             if cancelled or not tagged or future:
