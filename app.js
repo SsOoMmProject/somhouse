@@ -266,9 +266,19 @@ function timerState(){
  return {side:t.segments[t.segments.length-1].side,sides,total:sides.좌+sides.우,by:t.by};
 }
 function clock(seconds){const s=Math.floor(seconds),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,'0')}`;}
+// The last timed breastfeeding within a day: which side it started and ended on, and the other side to start now.
+function nextSide(now=Somhouse.localDateTime()){
+ const last=data.records.filter(x=>x.type==='feeding'&&['좌','우'].includes(x.firstSide)&&x.date<=now).sort((a,b)=>b.date.localeCompare(a.date))[0];
+ if(!last||(Somhouse.sleepMinutes({date:last.date,end:now})??0)>24*60)return null;
+ return {last,start:last.firstSide==='좌'?'우':'좌'};
+}
 function timerHtml(){
  const t=timerState();
- if(!t)return '<div class="tile-actions"><button class="secondary small" data-timer="start" data-side="좌">🤱 왼쪽부터</button><button class="secondary small" data-timer="start" data-side="우">오른쪽부터</button></div>';
+ if(!t){
+  const next=nextSide(),name=s=>s==='좌'?'왼쪽':'오른쪽',order=next?.start==='우'?['우','좌']:['좌','우'];
+  const hint=next?`<span class="guess">지난 직수 ${esc(next.last.date.slice(11))} · ${esc(name(next.last.firstSide))}${next.last.lastSide&&next.last.lastSide!==next.last.firstSide?`→${esc(name(next.last.lastSide))}`:''} · 이번엔 <b>${name(next.start)}</b>부터</span>`:'';
+  return `${hint}<div class="tile-actions">${order.map((side,i)=>`<button class="${next&&i===0?'small':'secondary small'}" data-timer="start" data-side="${side}">${i===0?'🤱 ':''}${name(side)}부터</button>`).join('')}</div>`;
+ }
  const other=t.side==='좌'?'우':'좌';
  return `<div class="timer-box"><p class="timer-head">🤱 직수 중 · <b>${esc(t.side)}</b> <b data-timer-clock="total">${clock(t.total)}</b></p><p class="caption" data-timer-clock="sides">좌 ${clock(t.sides.좌)} · 우 ${clock(t.sides.우)}</p><div class="tile-actions"><button class="secondary small" data-timer="switch">⇄ ${other==='좌'?'왼쪽':'오른쪽'}으로</button><button class="small" data-timer="finish">끝내기</button><button class="plain small" data-timer="cancel">취소</button></div></div>`;
 }

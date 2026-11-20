@@ -31,3 +31,17 @@ test('stats show sleep and diaper sections for the chosen period',async()=>{
  assert.match(html,/마지막 대변<\/p><strong>[^<]+ 전<\/strong>/);
  assert.match(html,new RegExp(`<time datetime="${y}">${y.slice(5)}</time></th><td>2회</td><td>2</td><td>1</td>`));
 });
+
+test('home suggests the other side to start breastfeeding after a timed feed',async()=>{
+ const f=family();
+ const now=f.b.eval('Somhouse.localDateTime()'),hourAgo=f.b.eval('Somhouse.localDateTime(new Date(Date.now()-3600000))');
+ let html=await f.open('home');
+ assert.match(html,/<button class="secondary small" data-timer="start" data-side="좌">🤱 왼쪽부터<\/button><button class="secondary small" data-timer="start" data-side="우">오른쪽부터/);
+ await f.load('records',[{id:'t',type:'feeding',date:hourAgo,category:'모유',amount:'15분',memo:'직수 타이머 · 좌 8분 · 우 7분',firstSide:'좌',lastSide:'우'}]);
+ html=await f.open('home');
+ assert.match(html,new RegExp(`지난 직수 ${hourAgo.slice(11)} · 왼쪽→오른쪽 · 이번엔 <b>오른쪽</b>부터`));
+ // The suggested side comes first and stands out.
+ assert.match(html,/<button class="small" data-timer="start" data-side="우">🤱 오른쪽부터<\/button><button class="secondary small" data-timer="start" data-side="좌">왼쪽부터/);
+ // Older than a day: no suggestion.
+ assert.equal(f.b.eval(`nextSide('${f.day(2)}T${now.slice(11)}')`),null);
+});

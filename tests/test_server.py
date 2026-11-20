@@ -314,6 +314,7 @@ class FamilyAPI(unittest.TestCase):
             saved = done["saved"]
             self.assertEqual((saved["category"], saved["amount"], saved["date"], saved["memo"]),
                              ("모유", "15분", "2026-11-20T10:00", "직수 타이머 · 좌 8분 · 우 7분"))
+            self.assertEqual((saved["firstSide"], saved["lastSide"]), ("좌", "우"))
             records = {x["id"]: x for x in done["data"]["records"]}
             self.assertEqual(records["s1"]["end"], "2026-11-20T10:00")
             # Starting the timer ends the open sleep at once (same minute too, as at least 1 minute);

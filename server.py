@@ -127,8 +127,11 @@ def timer_feeding(timer, ended):
     minutes = {side: round(value / 60) for side, value in seconds.items()}
     total = max(1, round(sum(seconds.values()) / 60))
     sides = " · ".join(f"{side} {minutes[side]}분" for side in TIMER_SIDES if seconds[side] >= 30)
+    # The side fed first and last (a side under 30 seconds was a slip), for "이번엔 어느 쪽부터".
+    order = [segment["side"] for segment in timer["segments"] if seconds[segment["side"]] >= 30] or [timer["segments"][0]["side"]]
     return {"id": "timer-" + secrets.token_hex(12), "type": "feeding", "date": timer["segments"][0]["start"][:16],
-            "category": "모유", "amount": f"{total}분", "memo": ("직수 타이머 · " + sides) if sides else "직수 타이머"}
+            "category": "모유", "amount": f"{total}분", "memo": ("직수 타이머 · " + sides) if sides else "직수 타이머",
+            "firstSide": order[0], "lastSide": order[-1]}
 
 
 def valid_children(value):
