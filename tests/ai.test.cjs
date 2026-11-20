@@ -38,16 +38,23 @@ test('AI form preserves drafts during polling and errors, then displays a plain 
  assert.equal(b.get('#ai-status').textContent,'Gemini failed');
  rejectAI=false;
  await form.onsubmit({preventDefault(){},target:form});
- assert.equal(b.get('#ai-answer').textContent,'<script>plain text</script>');
- assert.equal(b.get('#ai-answer').innerHTML,'');
- assert.equal(b.get('#ai-result').hidden,false);
+ // The answer joins the chat as escaped text, under the question.
+ const log=b.get('#ai-log').innerHTML;
+ assert.match(log,/<div class="ai-msg me">수유 요약<\/div><div class="ai-msg bot"><span class="ai-who">Antigravity · [^<]+<\/span>&lt;script&gt;plain text&lt;\/script&gt;<\/div>$/);
+ assert.doesNotMatch(log,/<script>/);
+ assert.equal(b.get('#ai-clear').hidden,false);
  assert.equal(b.get('#ai-question').value,'');
  const request=calls.filter(x=>x.url.endsWith('/api/ai')&&x.options.method==='POST').at(-1);
  assert.deepEqual(JSON.parse(request.options.body),{question:'수유 요약',scope:'feeding',provider:'antigravity'});
- assert.equal(b.get('#ai-result-title').textContent,'Antigravity 답변');
+ // A second question keeps the first one above it.
+ await form.onsubmit({preventDefault(){},target:form});
+ assert.equal(b.eval('aiLog().length'),2);
+ assert.equal((b.get('#ai-log').innerHTML.match(/ai-msg me/g)||[]).length,2);
+ // Logging out forgets this account's chat on this device.
  await b.get('#logout').onclick();
  assert.equal(b.get('#ai-panel').hidden,true);
- assert.equal(b.get('#ai-answer').textContent,'');
+ assert.equal(b.get('#ai-log').innerHTML,'');
+ assert.equal(b.context.localStorage.getItem('somhouse-ai-log-v1'),null);
 });
 
 test('an AI response arriving after logout cannot reappear in the next login',async()=>{
@@ -72,7 +79,8 @@ test('an AI response arriving after logout cannot reappear in the next login',as
  assert.equal(b.get('#ai-fields').disabled,true);
  await b.get('#logout').onclick();
  finishAI();await pending;
- assert.equal(b.get('#ai-answer').textContent,'');
+ assert.doesNotMatch(b.get('#ai-log').innerHTML,/old answer/);
+ assert.equal(b.context.localStorage.getItem('somhouse-ai-log-v1'),null);
  assert.equal(b.eval('mode'),'login');
 });
 
@@ -111,7 +119,7 @@ test('AI cards stay folded unless connected, and the picked AI answers the quest
  await form.onsubmit({preventDefault(){},target:form});
  const request=calls.filter(x=>x.url.endsWith('/api/ai')&&x.options.method==='POST').at(-1);
  assert.deepEqual(JSON.parse(request.options.body),{question:'안녕',scope:'none',provider:'claude'});
- assert.equal(b.get('#ai-result-title').textContent,'Claude 답변');
+ assert.match(b.get('#ai-log').innerHTML,/<span class="ai-who">Claude · /);
  // The choice is remembered for the next visit.
  assert.equal(b.context.localStorage.getItem('somhouse-ai-provider'),'mac:claude');
 });
@@ -153,7 +161,7 @@ test('another family connects its own Claude key on this device and asks without
  const form=b.get('#ai-form');
  form.values={question:'수유 요약',scope:'feeding'};
  await form.onsubmit({preventDefault(){},target:form});
- assert.equal(b.get('#ai-answer').textContent,'내 키 답변');
+ assert.match(b.get('#ai-log').innerHTML,/>내 키 답변<\/div>$/);
  const sent=calls.find(x=>x.url==='https://api.anthropic.com/v1/messages');
  assert.equal(sent.options.headers['x-api-key'],key);
  assert.equal(sent.options.headers['anthropic-dangerous-direct-browser-access'],'true');
@@ -251,7 +259,7 @@ test('personal plan stays inside the app and never falls back to another billing
  assert.equal(b.get('#ai-status').textContent,'ChatGPT 사용 한도');
  limited=false;
  await form.onsubmit({preventDefault(){},target:form});
- assert.equal(b.get('#ai-answer').textContent,'구독으로 답했어요.');
+ assert.match(b.get('#ai-log').innerHTML,/>구독으로 답했어요\.<\/div>$/);
  const asks=calls.filter(x=>x.url.endsWith('/api/chatgpt/ask'));
  assert.equal(asks.length,2);
  assert.deepEqual(JSON.parse(asks[0].options.body),{question:'Hello',scope:'none',model:'second'});
@@ -270,4 +278,28 @@ test('a Gemini key saved earlier shows only the free shortlist with tiers',async
  assert.match(html,/<option value="gemini-3\.8-flash" selected>상위 · gemini-3\.8-flash<\/option><option value="gemini-3\.1-flash-lite">하위 · gemini-3\.1-flash-lite<\/option><\/select>/);
  assert.doesNotMatch(html,/pro-preview/);
  assert.equal(b.eval("aiOption('key:antigravity').key.model"),'gemini-3.8-flash');
+});
+
+test('the chat stays on this device per account, survives reopening, and can be cleared',async()=>{
+ const b=browser({
+  session:{base:'http://127.0.0.1:8787',token:'existing',username:'mom'},
+  fetcher:async(url,options)=>({ok:true,json:async()=>url.endsWith('/api/ai')?(options.method==='GET'?{enabled:true,providers:providers(['claude'])}:{answer:'답'}):{data:blank()}}),
+ });
+ const old=Array.from({length:50},(_,i)=>({q:'q'+i,a:'a'+i,ai:'Claude',at:'2026-11-21T01:00:00.000Z'}));
+ b.context.localStorage.setItem('somhouse-ai-log-v1',JSON.stringify({'http://127.0.0.1:8787|mom':old,'http://127.0.0.1:8787|dad':[{q:'dad',a:'x',ai:'Claude',at:''}]}));
+ await b.settle();
+ b.context.location.hash='#ai';b.events.get('hashchange')();await b.settle();
+ assert.match(b.get('#ai-log').innerHTML,/>q49<\/div>/);
+ assert.doesNotMatch(b.get('#ai-log').innerHTML,/>dad</);
+ // Failed or pending questions are not saved; only the last 50 are kept.
+ const form=b.get('#ai-form');form.values={question:'new',scope:'none'};
+ await form.onsubmit({preventDefault(){},target:form});
+ const mine=b.eval('aiLog()');
+ assert.equal(mine.length,50);assert.equal(mine[0].q,'q1');assert.equal(mine.at(-1).q,'new');
+ b.context.confirm=()=>false;b.get('#ai-clear').onclick();
+ assert.equal(b.eval('aiLog().length'),50);
+ b.context.confirm=()=>true;b.get('#ai-clear').onclick();
+ assert.equal(b.eval('aiLog().length'),0);
+ assert.equal(b.get('#ai-clear').hidden,true);
+ assert.deepEqual(Object.keys(JSON.parse(b.context.localStorage.getItem('somhouse-ai-log-v1'))),['http://127.0.0.1:8787|dad']);
 });

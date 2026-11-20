@@ -85,8 +85,8 @@ function showGoogleStatus(connected){
 function showLogin(text){
  shared.clear();mode='login';sharedReady=false;data=empty();migratedRaw=undefined;
  ai={config:null,checking:false,pending:false,selected:''};
- $('#ai-form').reset();$('#ai-scope-field').hidden=true;$('#ai-result').hidden=true;$('#ai-providers').innerHTML='';
- for(const selector of ['#ai-status','#ai-asked','#ai-answer'])$(selector).textContent='';
+ $('#ai-form').reset();$('#ai-scope-field').hidden=true;$('#ai-providers').innerHTML='';
+ $('#ai-status').textContent='';aiLogView();
  for(const dialog of [$('#dialog'),$('#password-dialog'),$('#family-dialog')])if(dialog.open)dialog.close();
  accountMessage('');render();message(text);
 }
@@ -460,7 +460,7 @@ async function manageChildren(){
  if(after.length===before.length)before.forEach((old,i)=>{if(old!==after[i])rename[old]=after[i];});
  if(await saveChildren(after,Object.keys(rename).length?rename:undefined))render();
 }
-const AI_PICK='somhouse-ai-provider',AI_KEYS='somhouse-ai-keys-v1',aiDirect=typeof SomhouseAI!=='undefined'?SomhouseAI:null;
+const AI_PICK='somhouse-ai-provider',AI_KEYS='somhouse-ai-keys-v1',AI_LOG='somhouse-ai-log-v1',AI_LOG_MAX=50,aiDirect=typeof SomhouseAI!=='undefined'?SomhouseAI:null;
 // API keys stay in this browser, per signed-in account, and are never sent to the Mac.
 function aiAccount(){return shared?`${shared.base}|${shared.username}`:'';}
 function aiKeyStore(){try{const all=JSON.parse(localStorage.getItem(AI_KEYS)||'{}');return all&&typeof all==='object'?all:{};}catch{return {};}}
@@ -472,6 +472,30 @@ function saveAIKey(id,value){
   if(Object.keys(mine).length)all[aiAccount()]=mine;else delete all[aiAccount()];
   localStorage.setItem(AI_KEYS,JSON.stringify(all));return true;
  }catch{return false;}
+}
+// Past questions and answers, per account on this device, like a chat. Each question is still asked on its own.
+function aiLogStore(){try{const all=JSON.parse(localStorage.getItem(AI_LOG)||'{}');return all&&typeof all==='object'?all:{};}catch{return {};}}
+function aiLog(account=aiAccount()){const mine=account&&aiLogStore()[account];return Array.isArray(mine)?mine:[];}
+function saveAILog(account,entries){
+ try{
+  const all=aiLogStore();
+  if(entries.length)all[account]=entries.slice(-AI_LOG_MAX);else delete all[account];
+  if(Object.keys(all).length)localStorage.setItem(AI_LOG,JSON.stringify(all));else localStorage.removeItem(AI_LOG);
+ }catch{}
+}
+function aiLogView(waiting){
+ const box=$('#ai-log'),entries=shared?.token?aiLog():[];
+ const time=at=>{const d=new Date(at);return Number.isNaN(d.getTime())?'':`${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;};
+ const bubble=(cls,text,who='')=>`<div class="ai-msg ${cls}">${who?`<span class="ai-who">${esc(who)}</span>`:''}${esc(text)}</div>`;
+ box.innerHTML=entries.map(x=>bubble('me',x.q)+bubble('bot',x.a,[x.ai,time(x.at)].filter(Boolean).join(' · '))).join('')
+  +(waiting?bubble('me',waiting.q)+bubble('bot wait',`${waiting.ai} 답변을 기다리고 있어요…`,waiting.ai):'');
+ box.scrollTop=box.scrollHeight;
+ $('#ai-clear').hidden=!entries.length;
+}
+function clearAILog(){
+ if(!aiLog().length||ai.pending)return;
+ if(typeof confirm==='function'&&!confirm('이 기기에 남은 AI 대화를 모두 지울까요?'))return;
+ saveAILog(aiAccount(),[]);aiLogView();$('#ai-status').textContent='대화를 지웠어요.';
 }
 // Each way to ask: the Mac's CLI (original family only) or this device's own key.
 function aiOptions(){
@@ -663,22 +687,23 @@ async function askAI(e){
  const values=new FormData(e.target);
  const question=String(values.get('question')||'').trim(),scope=picked.summaries?values.get('scope')||'none':'none';
  if(!question){$('#ai-status').textContent='질문을 입력해 주세요.';return;}
+ const account=aiAccount(),name=aiName(picked);
  state.pending=true;connectionView();
- $('#ai-status').textContent=`${aiName(picked)} 답변을 기다리고 있어요…`;
+ $('#ai-status').textContent=`${name} 답변을 기다리고 있어요…`;
+ aiLogView({q:question,ai:name});
  try{
   const result=picked.mode==='plan'?await shared.request('/api/chatgpt/ask','POST',{question,scope:'none',model:state.config.chatgptPlan.model},shared.base,shared.token,55000)
    :picked.mode==='mac'?await shared.askAI(question,scope,picked.p.id)
    :await aiDirect.ask(picked.p.id,picked.key,question,scope==='none'?null:{scope,summary:aiDirect.summarize(scope,data,Somhouse.localDateTime().slice(0,10))});
-  if(ai!==state)return;
+  if(ai!==state||aiAccount()!==account)return;
   if(typeof result.answer!=='string'||!result.answer.trim())throw Error('답변을 확인하지 못했어요. 다시 시도해 주세요.');
-  $('#ai-result-title').textContent=`${aiName(picked)} 답변`;
-  $('#ai-asked').textContent=question;
-  $('#ai-answer').textContent=result.answer;
-  $('#ai-result').hidden=false;
+  saveAILog(account,[...aiLog(account),{q:question,a:result.answer,ai:name,at:new Date().toISOString()}]);
+  aiLogView();
   $('#ai-question').value='';
-  $('#ai-status').textContent=result.truncated?'답변이 길어 일부만 표시했어요.':`${aiName(picked)} 답변을 받았어요.`;
+  $('#ai-status').textContent=result.truncated?'답변이 길어 일부만 표시했어요.':`${name} 답변을 받았어요.`;
  }catch(error){
   if(ai!==state)return;
+  aiLogView();
   if(error.status===401&&picked.mode!=='key')showLogin(error.message);else $('#ai-status').textContent=error.message;
  }finally{state.pending=false;connectionView();}
 }
@@ -692,7 +717,7 @@ function render(){
  if(!connected){$('#dashboard').hidden=true;$('#dashboard').innerHTML='';dashboardHtml='';}
  if(!connected||showAI){
   $('#content').innerHTML='';connectionView();
-  if(openingAI)checkAI();
+  if(openingAI){aiLogView();checkAI();}
   return;
  }
  const dashboard=$('#dashboard');
@@ -937,7 +962,7 @@ takeInvite();
 route();
 if(shared?.base){
  if(window.SOMHOUSE_LOCAL_TRIAL===true&&!shared.token)$('#password-login').open=true;
- $('#ai-form').onsubmit=askAI;
+ $('#ai-form').onsubmit=askAI;$('#ai-clear').onclick=clearAILog;
  const aiBox=$('#ai-providers');
  aiBox.onchange=e=>{const t=e.target;if(t?.name==='provider')pickAI(t.value);else if(t?.dataset?.aiModel)chooseAIModel(t.dataset.aiModel,t.value);};
  aiBox.onclick=e=>{const b=e.target?.closest?.('button');if(b?.dataset.plan)return planAction(b.dataset.plan);if(b?.dataset.aiConnect)connectAIKey(b.dataset.aiConnect);else if(b?.dataset.aiDisconnect)disconnectAIKey(b.dataset.aiDisconnect);};
@@ -958,7 +983,9 @@ if(shared?.base){
   try{
    if(refreshTask)await refreshTask;
    if(!shared.token)return;
+   const account=aiAccount();
    const result=await shared.logout();
+   saveAILog(account,[]);
    showLogin(result?.chatgptRevoked===false?'로그아웃했어요. ChatGPT 설정에서 앱 권한 해제도 확인해 주세요.':'로그아웃했어요. 가족 계정으로 다시 로그인할 수 있어요.');
   }catch{
    if(shared.token)accountMessage('로그아웃하지 못했어요. 연결을 확인한 뒤 다시 시도해 주세요.');
