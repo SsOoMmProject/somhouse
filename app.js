@@ -90,7 +90,7 @@ function showLogin(text){
  for(const dialog of [$('#dialog'),$('#password-dialog'),$('#family-dialog')])if(dialog.open)dialog.close();
  accountMessage('');render();message(text);
 }
-function editingScreen(){return $('#dialog').open||$('#password-dialog').open||$('#family-dialog').open||Boolean(document.activeElement?.closest?.('#filter-form,.ai-help'));}
+function editingScreen(){return $('#dialog').open||$('#password-dialog').open||$('#family-dialog').open||Boolean(document.activeElement?.closest?.('#filter-form,.ai-help,.stock-form'));}
 async function loadFamilyData(){
  let raw, original;
  // The guest sees made-up records only; this device's old family records are never sent with a guest login.
@@ -303,7 +303,7 @@ function nowCard(){
  const feedHtml=(feed?`<strong>${esc(ago(feed.date,now))}</strong><span>${esc(day(feed.date))} · ${esc(feed.category)} ${esc(feed.amount)}</span>`:'<strong>기록 없음</strong><span>수유를 기록해 보세요</span>')
   +(guess?`<span class="guess">다음 예상 ${esc(day(guess.at))} 무렵 · 평균 ${esc(Somhouse.duration(guess.gap))} 간격</span>`:'')
   +(alarm?.enabled&&alarm.next?`<span class="guess">⏰ 밥 알람 ${esc(day(alarm.next))} (평소 ${esc(alarm.usual)})</span>`:'');
- const diaperHtml=diaper?`<strong>${esc(ago(diaper.date,now))}</strong><span>${esc(day(diaper.date))} · ${esc(diaperIcons[diaper.category]||'')} ${esc(diaper.category)}</span>`:'<strong>기록 없음</strong><span>갈 때 바로 눌러 주세요</span>';
+ const diaperHtml=(diaper?`<strong>${esc(ago(diaper.date,now))}</strong><span>${esc(day(diaper.date))} · ${esc(diaperIcons[diaper.category]||'')} ${esc(diaper.category)}</span>`:'<strong>기록 없음</strong><span>갈 때 바로 눌러 주세요</span>')+stockLine();
  let sleepHtml='<strong>기록 없음</strong><span>수면을 기록해 보세요</span>';
  const open=openSleep(now);
  if(open)sleepHtml=`<strong>자는 중 · ${esc(ago(open.date,now).replace(' 전','째'))}</strong><span>${esc(day(open.date))}부터 · ${esc(open.category)}</span>`;
@@ -483,7 +483,7 @@ function listView(k){
   const kids=k==='schedule'?`<p class="caption kids">👶 아기: ${children().map(esc).join(', ')||'아직 등록하지 않았어요'} <button class="plain small" data-manage-children="1">${children().length?'아기 이름 관리':'＋ 아기 등록'}</button></p>`:'';
  const add=k==='records'?'<button data-add="feeding">수유 추가</button><button class="secondary" data-add="sleep">수면 추가</button><button class="secondary" data-add="diaper">기저귀 추가</button><button class="secondary" data-add="hospital">병원 추가</button>':`<button data-add="${k}">추가하기</button>`;
  const body=k==='schedule'?scheduleItems(items):k==='shopping'?shoppingItems(items):items.length?recordGroups(items):'';
- return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p>${kids}${k==='shopping'?rebuyCard():aiHelpCard(k)}${k==='records'?checksCard():''}<div class="heading"><h2>${head}</h2><div class="quick">${add}</div></div>${filterView(k)}${body||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}${k==='records'?voiceHelp():''}`;
+ return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p>${kids}${k==='shopping'?stockCard()+rebuyCard():aiHelpCard(k)}${k==='records'?checksCard():''}<div class="heading"><h2>${head}</h2><div class="quick">${add}</div></div>${filterView(k)}${body||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}${k==='records'?voiceHelp():''}`;
 }
 function shoppingItems(items){
  if(!items.length)return '';
@@ -903,7 +903,7 @@ document.addEventListener('click',async e=>{
   const {action,key,id}=b.dataset,x=data[key].find(i=>i.id===id);if(!x)return;
   if(action==='edit')openForm(key==='records'?x.type:key,x);
   if(action==='delete'&&confirm('이 항목을 삭제할까요?')){if(await changeItem(key,x,true))render();}
-  if(action==='toggle'){if(await changeItem(key,x.done==='yes'?{...x,done:'no'}:{...x,done:'yes',boughtAt:boughtWith(x)}))render();}
+  if(action==='toggle'){const bought=x.done!=='yes';if(await changeItem(key,bought?{...x,done:'yes',boughtAt:boughtWith(x)}:{...x,done:'no'})){render();if(bought)await stockBought(x);}}
  }
 });
 $('#close').onclick=$('#cancel').onclick=()=>{if(!busy)$('#dialog').close();};

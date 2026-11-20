@@ -8,6 +8,7 @@ import sys
 import subprocess
 import shutil
 import tempfile
+from datetime import datetime, timedelta
 import threading
 import time
 import unittest
@@ -283,6 +284,24 @@ class FamilyAPI(unittest.TestCase):
         code, body, _ = self.request("/api/feeding-alarm", "POST", {"enabled": False}, token)
         self.assertEqual((code, body["settings"]["feedingAlarm"]), (200, False))
         self.assertFalse(self.request("/api/data", token=token)[1]["settings"]["feedingAlarm"])
+
+    def test_diaper_stock_setup_add_and_off(self):
+        token = self.login(1)
+        self.assertEqual(self.request("/api/diaper-stock", "POST", {"add": 1}, token)[0], 409)
+        self.assertEqual(self.request("/api/diaper-stock", "POST", {"perPack": 0, "packs": 1, "alertDays": 3}, token)[0], 400)
+        self.assertEqual(self.request("/api/diaper-stock", "POST", {"perPack": 60, "packs": 1.5, "alertDays": 30}, token)[0], 400)
+        body = self.request("/api/diaper-stock", "POST", {"perPack": 60, "packs": 1.5, "loose": 4, "alertDays": 3}, token)[1]
+        stock = body["settings"]["diaperStock"]
+        self.assertEqual((stock["count"], stock["perPack"], stock["alertDays"]), (94, 60, 3))
+        # Two diaper changes later, buying 2 packs adds 120 to what is left.
+        later = (datetime.strptime(stock["at"], "%Y-%m-%dT%H:%M") + timedelta(minutes=1)).isoformat(timespec="minutes")
+        for i in range(2):
+            self.request(f"/api/items/records/d{i}", "PUT", {"id": f"d{i}", "type": "diaper", "date": later, "category": "소변"}, token)
+        with patch("server.local_now", lambda: later + ":30"):
+            body = self.request("/api/diaper-stock", "POST", {"add": 2}, token)[1]
+        self.assertEqual(body["settings"]["diaperStock"]["count"], 92 + 120)
+        self.assertEqual(self.request("/api/diaper-stock", "POST", {"add": 0}, token)[0], 400)
+        self.assertIsNone(self.request("/api/diaper-stock", "POST", {"off": True}, token)[1]["settings"]["diaperStock"])
 
     def test_handoff_note_and_shared_breastfeeding_timer(self):
         import server as server_module

@@ -10,7 +10,7 @@ from urllib.parse import quote, urlencode
 
 from google_records import GoogleError, PREFIX, SEOUL, encode, queue_event, voice_payload
 from google_delivery import eligible
-from feeding_alarm import FeedingAlarm, NapAlarm
+from feeding_alarm import FeedingAlarm, NapAlarm, StockAlarm
 
 
 CALENDAR = "https://www.googleapis.com/calendar/v3/calendars"
@@ -360,7 +360,7 @@ class CalendarRecords:
         self.records, self.store = records, records.store
         self.binding = records.binding
         self.inbox, self.outbox = records.config["calendar_inbox"], records.config["calendar_outbox"]
-        self.alarm, self.nap_alarm = FeedingAlarm(self), NapAlarm(self)
+        self.alarm, self.nap_alarm, self.stock_alarm = FeedingAlarm(self), NapAlarm(self), StockAlarm(self)
 
     @property
     def api(self):

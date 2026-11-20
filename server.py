@@ -16,7 +16,7 @@ import subprocess
 import threading
 import time
 from contextlib import closing, contextmanager
-from datetime import date
+from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
@@ -25,7 +25,7 @@ from ai import AIError, Assistants, parse_question, summarize_records, SCOPES
 from google_records import (GoogleAPI, GoogleError, GoogleRecords, SCHEMA as GOOGLE_SCHEMA, SCOPES as GOOGLE_SCOPES,
                             load_config as load_google_config, read_config as read_google_config)
 from calendar_records import FEEDING_KINDS, SLEEP_KINDS, SCHEMA as CALENDAR_SCHEMA, WritebackRefused, load_aliases, relearn
-from feeding_alarm import SCHEMA as ALARM_SCHEMA, setting_value as alarm_setting
+from feeding_alarm import SCHEMA as ALARM_SCHEMA, setting_value as alarm_setting, stock_plan, stock_setting
 from shopping_records import SCHEMA as SHOPPING_SCHEMA
 from google_delivery import SCHEMA as DELIVERY_SCHEMA
 from holidays import HolidayFeed, SCHEMA as HOLIDAY_SCHEMA, listing as holiday_listing
@@ -208,10 +208,11 @@ class Store:
     @staticmethod
     def settings(db):
         values = {key: json.loads(value) for key, value in db.execute(
-            "SELECT key,value FROM family_settings WHERE key IN ('children','handoff','timer','feeding_alarm','nap_alarm')")}
+            "SELECT key,value FROM family_settings WHERE key IN ('children','handoff','timer','feeding_alarm','nap_alarm','diaper_stock')")}
         return {"children": values.get("children", []), "handoff": values.get("handoff"), "timer": values.get("timer"),
                 "feedingAlarm": bool((values.get("feeding_alarm") or {}).get("enabled")),
-                "napAlarm": bool((values.get("nap_alarm") or {}).get("enabled"))}
+                "napAlarm": bool((values.get("nap_alarm") or {}).get("enabled")),
+                "diaperStock": values.get("diaper_stock")}
 
     @staticmethod
     def put_setting(db, key, value):
@@ -842,6 +843,32 @@ class Handler(BaseHTTPRequestHandler):
         store.put_setting(db, "handoff", {"text": text, "by": username, "at": local_now()[:16]} if text else None)
         return {"data": store.state(db), "settings": store.settings(db)}
 
+    def stock_request(self, db, store):
+        """Diapers on hand: set it up (pack size, packs and loose ones left, days ahead to remind), add bought
+        packs, or turn it off. Every diaper change recorded after it was set counts as one used."""
+        body, current, now = self.body(1024), stock_setting(db), local_now()[:16]
+        number = lambda value, low, high: isinstance(value, (int, float)) and not isinstance(value, bool) and low <= value <= high
+        if body.get("off") is True:
+            store.put_setting(db, "diaper_stock", None)
+        elif "add" in body:
+            if current is None:
+                raise Problem(409, "먼저 남은 기저귀를 입력해 주세요.")
+            if not number(body["add"], 0.5, 50):
+                raise Problem(400, "산 팩 수를 0.5~50 사이로 입력해 주세요.")
+            items = [json.loads(row[0]) for row in db.execute("SELECT body FROM items WHERE kind='records'")]
+            left = stock_plan(current, items, datetime.strptime(now, "%Y-%m-%dT%H:%M"))["left"]
+            store.put_setting(db, "diaper_stock", {**current, "count": left + round(body["add"] * current["perPack"]),
+                                                   "at": now, "listed": ""})
+        else:
+            per_pack, packs, loose, days = (body.get(k) for k in ("perPack", "packs", "loose", "alertDays"))
+            loose = 0 if loose is None else loose
+            if not (isinstance(per_pack, int) and 1 <= per_pack <= 300 and number(packs, 0, 50)
+                    and isinstance(loose, int) and 0 <= loose <= 1000 and isinstance(days, int) and 1 <= days <= 14):
+                raise Problem(400, "팩당 매수(1~300), 남은 팩(0~50), 낱개(0~1000), 알림(1~14일 전)을 확인해 주세요.")
+            store.put_setting(db, "diaper_stock", {"perPack": per_pack, "count": round(packs * per_pack) + loose,
+                                                   "at": now, "alertDays": days, "listed": ""})
+        return {"data": store.state(db), "settings": store.settings(db)}
+
     def timer_request(self, db, store, google, keep, username):
         """The direct-breastfeeding timer, shared by the family's phones: start, switch sides, finish or cancel.
 
@@ -1057,6 +1084,11 @@ class Handler(BaseHTTPRequestHandler):
                     result = {"data": store.state(db), "settings": store.settings(db), "moved": len(moved)}
                 elif path == "/api/handoff" and self.command == "POST":
                     result = self.handoff_request(db, store, username)
+                elif path == "/api/diaper-stock" and self.command == "POST":
+                    result = self.stock_request(db, store)
+                    if google is not None:
+                        result["sources"] = google.sources()
+                        result["google_status"] = google.status(db)
                 elif path == "/api/feeding-alarm" and self.command == "POST":
                     # Calendar reminders when a usual feeding time passes ("feeding") or the baby has been awake
                     # longer than usual ("nap"); they need the family's Google Calendar.
@@ -1172,7 +1204,7 @@ class Handler(BaseHTTPRequestHandler):
                     and (store.directory / "google-records.json").exists()):
                 result["google_status"] = {"auth_state": "configuration_error", "services": {}, "review": 0, "errors": []}
             sync = google or keep
-            if sync is not None and (path.startswith("/api/items/") or path in ("/api/review", "/api/confirm", "/api/calendar-writeback", "/api/settings", "/api/timer", "/api/feeding-alarm")):
+            if sync is not None and (path.startswith("/api/items/") or path in ("/api/review", "/api/confirm", "/api/calendar-writeback", "/api/settings", "/api/timer", "/api/feeding-alarm", "/api/diaper-stock")):
                 sync.wake.set()
             self.respond(200, result)
         except (Problem, AIError) as error:

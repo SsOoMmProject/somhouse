@@ -509,6 +509,7 @@ class GoogleRecords:
         if self.calendar:
             result["feeding_alarm"] = self.calendar.alarm.status(db)
             result["nap_alarm"] = self.calendar.nap_alarm.status(db)
+            result["diaper_stock"] = self.calendar.stock_alarm.status(db)
         if review:
             result["review_items"] = self.review_items(db)
         return result
@@ -862,6 +863,7 @@ class GoogleRecords:
                 self.attempt("Calendar 반영", self.calendar.flush_writebacks)
                 self.attempt("밥 알람", self.calendar.alarm.sync)
                 self.attempt("낮잠 알람", self.calendar.nap_alarm.sync)
+                self.attempt("기저귀 재고", self.calendar.stock_alarm.sync)
             self.attempt("장보기 가격비교", self.shopping.flush)
             self.wake.wait(30)
 
