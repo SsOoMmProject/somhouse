@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from feeding_alarm import FeedingAlarm, feeding_times, next_alarm, next_nap, sleeps_of, usual_times, usual_wake, wake_windows
+from feeding_alarm import FeedingAlarm, feeding_times, stock_plan, next_alarm, next_nap, sleeps_of, usual_times, usual_wake, wake_windows
 from google_records import GoogleError, GoogleRecords, encode
 from server import Store
 
@@ -249,6 +249,79 @@ class CalendarNapAlarm(unittest.TestCase):
         with self.store.connect() as db:
             self.assertIsNone(db.execute("SELECT 1 FROM google_nap_alarm").fetchone())
             self.assertIsNone(db.execute("SELECT 1 FROM google_feeding_alarm").fetchone())
+
+
+
+def diapers(per_day, days=range(1, 8), start=8):
+    return [{"type": "diaper", "date": (NOW - timedelta(days=d)).replace(hour=start + i).isoformat(timespec="minutes"), "category": "소변"}
+            for d in days for i in range(per_day)]
+
+
+class DiaperStock(unittest.TestCase):
+    setting = {"perPack": 60, "count": 100, "at": "2026-11-19T00:00", "alertDays": 3}
+
+    def test_left_daily_use_and_reminder(self):
+        plan = stock_plan(self.setting, diapers(8, days=range(1, 7)), NOW)
+        # 8 changes on each of 11/19 and 11/20 after the count was set → 84 left; 8 a day → 10.5 days.
+        self.assertEqual((plan["left"], plan["daily"]), (84, 8.0))
+        self.assertEqual(plan["runout"], NOW + timedelta(days=10.5))
+        self.assertEqual(plan["alarm"], datetime(2026, 11, 29, 10, 0))  # runs out 12/2 00:00
+        # A partial day at the edge of the 7 days counts as a day with records.
+        self.assertEqual(stock_plan(self.setting, diapers(8), NOW)["daily"], 7.3)
+        self.assertIsNone(stock_plan(None, [], NOW))
+        self.assertIsNone(stock_plan({"count": "x", "at": "2026-11-18T12:00"}, [], NOW))
+
+    def test_needs_three_days_and_reminds_soon_when_already_low(self):
+        plan = stock_plan(self.setting, diapers(8, days=(1, 2)), NOW)
+        self.assertEqual((plan["left"], plan["daily"], plan["alarm"]), (84, None, None))
+        low = stock_plan({**self.setting, "count": 10, "at": "2026-11-21T11:00"}, diapers(8, days=range(1, 7)), NOW)
+        self.assertEqual((low["left"], low["alarm"]), (10, datetime(2026, 11, 21, 11, 5)))
+
+
+class CalendarStock(unittest.TestCase):
+    setUp, api = CalendarAlarm.setUp, CalendarAlarm.api
+
+    def stock(self, count, at="2026-11-21T11:58"):
+        with self.store.connect() as db:
+            for i, item in enumerate(diapers(8, days=range(1, 7))):
+                db.execute("INSERT OR REPLACE INTO items VALUES ('records',?,?)", (f"d{i}", encode({"id": f"d{i}", **item})))
+            self.store.put_setting(db, "diaper_stock", {"perPack": 60, "count": count, "at": at, "alertDays": 3, "listed": ""})
+
+    def sync(self, now):
+        with patch("feeding_alarm.local_now", return_value=now), patch.object(self.bridge.api, "request", side_effect=self.api):
+            self.bridge.calendar.stock_alarm.sync()
+
+    def shopping(self):
+        with self.store.connect() as db:
+            return [json.loads(row[0]) for row in db.execute("SELECT body FROM items WHERE kind='shopping'")]
+
+    def test_reminder_event_then_diapers_join_the_shopping_list_once(self):
+        self.stock(10)
+        self.sync(NOW)
+        method, _, body = self.calls[0]
+        self.assertEqual((method, body["start"]["dateTime"]), ("POST", "2026-11-21T12:03:00+09:00"))
+        self.assertEqual(body["summary"], "🧷 기저귀 살 때예요 (약 10개 · 1일분)")
+        self.assertEqual(self.shopping(), [])
+        with patch("feeding_alarm.local_now", return_value=NOW), self.store.connect() as db:
+            self.assertEqual(self.bridge.status(db)["diaper_stock"],
+                             {"left": 10, "daily": 8.0, "runout": "2026-11-22T18:00", "next": "2026-11-21T12:03"})
+        # At the reminder time 기저귀 is added and sent to Google like any shopping item; only once.
+        self.sync(NOW.replace(minute=4))
+        added = self.shopping()
+        self.assertEqual([(x["title"], x["quantity"], x["done"]) for x in added], [("기저귀", "1팩", "no")])
+        self.assertIn("남은 기저귀 약 10개", added[0]["memo"])
+        with self.store.connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM google_record_events WHERE kind='shopping'").fetchone()[0], 1)
+            db.execute("DELETE FROM items WHERE kind='shopping'")
+        self.sync(NOW.replace(minute=5))
+        self.assertEqual(self.shopping(), [])
+
+    def test_no_second_item_when_diapers_are_already_on_the_list(self):
+        self.stock(10)
+        with self.store.connect() as db:
+            db.execute("INSERT INTO items VALUES ('shopping','mine',?)", (encode({"id": "mine", "title": "하기스 기저귀 2단계", "quantity": "2", "done": "no"}),))
+        self.sync(NOW.replace(minute=4))
+        self.assertEqual([x["id"] for x in self.shopping()], ["mine"])
 
 
 if __name__ == "__main__":

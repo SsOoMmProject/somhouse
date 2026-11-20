@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS google_feeding_alarm (
 CREATE TABLE IF NOT EXISTS google_nap_alarm (
     binding TEXT PRIMARY KEY, event_id TEXT NOT NULL, alarm_at TEXT NOT NULL, slot TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS google_stock_alarm (
+    binding TEXT PRIMARY KEY, event_id TEXT NOT NULL, alarm_at TEXT NOT NULL, slot TEXT NOT NULL
+);
 """
 
 
@@ -93,6 +96,10 @@ def next_alarm(feedings, now, slots):
         return alarm, slot
     return None, None
 
+
+def stock_setting(db):
+    row = db.execute("SELECT value FROM family_settings WHERE key='diaper_stock'").fetchone()
+    return json.loads(row[0]) if row else None
 
 def records_of(db):
     return [json.loads(row[0]) for row in db.execute("SELECT body FROM items WHERE kind='records'")]
@@ -278,6 +285,80 @@ class NapAlarm(CalendarAlarm):
                 "next": plan["alarm"].isoformat(timespec="minutes") if plan["alarm"] else None}
 
 
+# Diaper stock: the count the family entered minus every diaper change recorded since, used up at the average
+# daily rate of the last 7 days (days with diaper records only, at least 3 of them).
+STOCK_ITEM = "기저귀"
+STOCK_HOUR = 10          # the buying reminder goes off at 10:00 on its day
+STOCK_MIN_DAYS = 3
+
+
+def stamp(value):
+    try:
+        return datetime.strptime(str(value)[:16], "%Y-%m-%dT%H:%M")
+    except ValueError:
+        return None
+
+
+def stock_plan(setting, items, now):
+    """Diapers left, the daily use, the day they run out and when to remind about buying, or None if not set up."""
+    if not isinstance(setting, dict) or not isinstance(setting.get("count"), int) or stamp(setting.get("at")) is None:
+        return None
+    since, counted = stamp(setting["at"]), now - timedelta(days=DAYS)
+    changes = [t for t in (stamp(x.get("date")) for x in items if isinstance(x, dict) and x.get("type") == "diaper") if t]
+    left = max(0, setting["count"] - sum(1 for t in changes if since < t <= now))
+    recent = [t for t in changes if counted < t <= now]
+    days = {t.date() for t in recent}
+    daily = round(len(recent) / len(days), 1) if len(days) >= STOCK_MIN_DAYS else None
+    plan = {"left": left, "daily": daily, "runout": None, "alarm": None}
+    if daily:
+        runout = now + timedelta(days=left / daily)
+        alert = datetime.combine((runout - timedelta(days=setting.get("alertDays", 3))).date(), time(STOCK_HOUR))
+        # Already due when it is set up (few left): remind a few minutes after the stock was entered.
+        plan.update(runout=runout, alarm=max(alert, since + timedelta(minutes=5)))
+    return plan
+
+
 def setting_value(enabled, username, now=None):
     return {"enabled": True, "by": username, "at": (now or local_now()).isoformat(timespec="minutes")} if enabled else None
 
+
+class StockAlarm(CalendarAlarm):
+    """A reminder to buy diapers a few days before they run out; on that day 기저귀 also joins the shopping list."""
+    TABLE, SETTING = "google_stock_alarm", "diaper_stock"
+
+    def plan(self, db, now=None):
+        now = now or local_now()
+        setting = stock_setting(db)
+        plan = stock_plan(setting, records_of(db), now) or {"left": None, "daily": None, "runout": None, "alarm": None}
+        plan.update(setting=setting, now=now, key=f"{(setting or {}).get('at', '')}|{plan['alarm'].isoformat() if plan['alarm'] else ''}")
+        return plan
+
+    def words(self, plan):
+        days = plan["left"] / plan["daily"]
+        return (f"🧷 기저귀 살 때예요 (약 {plan['left']}개 · {days:.0f}일분)",
+                f"하루 평균 {plan['daily']}개를 써서 {plan['runout'].strftime('%m/%d')}쯤 다 써요. 솜하우스 구매 목록에 기저귀를 넣어 둘게요.\n"
+                "산 뒤 구매 목록에서 ‘✓ 샀어요’를 누르고 산 팩 수를 입력하면 재고에 더해져요.")
+
+    def sync(self):
+        super().sync()
+        with self.store.connect() as db:
+            plan = self.plan(db)
+        setting, alarm = plan["setting"], plan["alarm"]
+        if not alarm or plan["now"] < alarm or setting.get("listed") == plan["key"]:
+            return
+        with self.store.lock, self.store.connect() as db:
+            pending = any(item.get("done") != "yes" and STOCK_ITEM in str(item.get("title", ""))
+                          for item in (json.loads(row[0]) for row in db.execute("SELECT body FROM items WHERE kind='shopping'")))
+            if not pending:
+                item = {"id": "stock-" + secrets.token_hex(8), "title": STOCK_ITEM, "quantity": "1팩", "done": "no",
+                        "memo": f"솜하우스 재고 알림 · 남은 기저귀 약 {plan['left']}개"}
+                db.execute("INSERT INTO items VALUES ('shopping',?,?)", (item["id"], json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))))
+                self.calendar.records.queue(db, "shopping", item["id"], item, "save")
+            db.execute("UPDATE family_settings SET value=? WHERE key='diaper_stock'",
+                       (json.dumps({**setting, "listed": plan["key"]}, ensure_ascii=False, sort_keys=True, separators=(",", ":")),))
+
+    def status(self, db):
+        plan = self.plan(db)
+        return {"left": plan["left"], "daily": plan["daily"],
+                "runout": plan["runout"].isoformat(timespec="minutes") if plan["runout"] else None,
+                "next": plan["alarm"].isoformat(timespec="minutes") if plan["alarm"] else None}

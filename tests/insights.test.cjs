@@ -151,3 +151,58 @@ test('a two-week summary for the pediatrician, with AI questions from the number
  assert.match(asked[1],/"memo":"열 37\.8도"/);
  assert.doesNotMatch(asked[1],/PRIVATE/);
 });
+
+test('diaper stock: set it up, count changes off it, remind before it runs out, add bought packs',async()=>{
+ const f=family();
+ const sent=[],base=f.b.context.fetch;let stock=null;
+ f.b.context.fetch=async(url,options)=>{
+  if(url.endsWith('/api/diaper-stock')){
+   const body=JSON.parse(options.body);sent.push(body);
+   const now=f.b.eval('Somhouse.localDateTime()');
+   if(body.off)stock=null;
+   else if('add' in body)stock={...stock,count:f.b.eval('stockPlan().left')+Math.round(body.add*stock.perPack),at:now};
+   else stock={perPack:body.perPack,count:Math.round(body.packs*body.perPack)+body.loose,at:now,alertDays:body.alertDays,listed:''};
+   f.server.settings={children:[],diaperStock:stock}; // the Mac keeps it, so later refreshes return it
+   return {ok:true,json:async()=>({data:f.server.data,settings:f.server.settings})};
+  }
+  return base(url,options);
+ };
+ // 8 changes a day for the last 5 days.
+ const changes=[];for(let d=1;d<=5;d++)for(let h=8;h<16;h++)changes.push({id:`d${d}-${h}`,type:'diaper',date:`${f.day(-d)}T${String(h).padStart(2,'0')}:00`,category:'소변',memo:''});
+ await f.load('records',changes);
+ let html=await f.open('shopping');
+ assert.match(html,/🧷 기저귀 재고/);
+ assert.match(html,/포장에 적힌 숫자를 넣어 주세요/);
+ f.b.get('#stock-per-pack').value='60';f.b.get('#stock-packs').value='0.5';f.b.get('#stock-loose').value='';f.b.get('#stock-alert').value='3';
+ await f.click({stockSave:'1'});
+ assert.deepEqual(sent[0],{perPack:60,packs:0.5,loose:0,alertDays:3});
+ html=f.b.get('#content').innerHTML;
+ assert.match(html,/남은 기저귀 <strong>약 30개<\/strong>/);
+ assert.match(html,/하루 평균 8개를 써서 <strong>약 3일분<\/strong>/);
+ // Under 3 days left with a 3-day reminder: due a few minutes after setting it up.
+ assert.match(html,/구매 알림: <strong>[^<]+<\/strong> \(다 쓰기 3일 전\) · 그날 홈과 이 화면에서 알려 드려요/);
+ assert.match(f.b.get('#connection-status').textContent,/기저귀 30개로 재고를 맞췄어요/);
+ // A diaper change takes one off; home shows what is left.
+ // (Counted from the minute after it was entered, like on the Mac.)
+ f.b.eval("shared.settings.diaperStock.at=Somhouse.localDateTime(new Date(Date.now()-60000))");stock.at=f.b.eval('shared.settings.diaperStock.at');
+ await f.load('records',[{id:'now',type:'diaper',date:f.b.eval('Somhouse.localDateTime()'),category:'대변',memo:''}]);
+ assert.match(await f.open('home'),/남은 기저귀 약 29개 · \d일분/);
+ // When it is due, one tap puts 기저귀 on the shopping list (the Mac does it by itself with Google Calendar).
+ // Set an hour ago with 5 left: the reminder (5 minutes after setting it) has passed.
+ stock.at=f.b.eval('Somhouse.localDateTime(new Date(Date.now()-3600000))');stock.count=5;f.b.eval(`shared.settings.diaperStock.at='${stock.at}';shared.settings.diaperStock.count=5`);
+ html=await f.open('shopping');
+ assert.match(html,/기저귀 살 때예요<\/strong><button type="button" class="small" data-stock-list="1">/);
+ await f.click({stockList:'1'});
+ const item=f.server.data.shopping.find(x=>x.title==='기저귀');
+ assert.deepEqual([item.quantity,item.done],['1팩','no']);
+ assert.doesNotMatch(f.b.get('#content').innerHTML,/data-stock-list/);
+ // '✓ 샀어요' on it asks how many packs and adds them.
+ f.b.context.prompt=()=>'2';
+ await f.b.events.get('click')({target:{closest:sel=>sel==='a'?null:{dataset:{action:'toggle',key:'shopping',id:item.id}}}});
+ assert.deepEqual(sent.at(-1),{add:2});
+ assert.match(f.b.get('#content').innerHTML,/남은 기저귀 <strong>약 124개<\/strong>/);
+ // Turning it off.
+ await f.click({stockOff:'1'});
+ assert.deepEqual(sent.at(-1),{off:true});
+ assert.match(f.b.get('#content').innerHTML,/포장에 적힌 숫자를 넣어 주세요/);
+});
