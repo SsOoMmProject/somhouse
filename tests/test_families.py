@@ -93,13 +93,18 @@ class Families(unittest.TestCase):
             service.ask.return_value = {"answer": "시험 답변"}
             chatgpt_plan.save(other_store, other, {"email": "mine@example.com", "model": "my-model", "refresh": "SECRET"})
             status = self.request("/api/ai", token=other)[1]["chatgptPlan"]
-            self.assertEqual(status, {"connected": True, "email": "mine@example.com", "model": "my-model"})
+            self.assertEqual(status, {"connected": True, "email": "mine@example.com", "model": "my-model", "models": None})
             for token in (home, second_device):
                 self.assertFalse(self.request("/api/ai", token=token)[1]["chatgptPlan"]["connected"])
             self.assertEqual(self.request("/api/chatgpt/ask", "POST", {"question": "hi", "scope": "feeding"}, other)[0], 400)
             self.assertEqual(self.request("/api/chatgpt/ask", "POST", {"question": "hi", "scope": "none"}, other),
                              (200, {"answer": "시험 답변"}))
-            service.ask.assert_called_once_with(other_store, other, "hi")
+            service.ask.assert_called_once_with(other_store, other, "hi", None)
+            service.models.return_value = {"model": "my-model", "models": [{"slug": "my-model", "name": "My Model"}]}
+            self.assertEqual(self.request("/api/chatgpt/models", "POST", {}, other), (200, service.models.return_value))
+            service.models.assert_called_once_with(other_store, other)
+            self.assertEqual(self.request("/api/chatgpt/ask", "POST", {"question": "hi", "model": "chosen"}, other)[0], 200)
+            service.ask.assert_called_with(other_store, other, "hi", "chosen")
             with self.store.connect() as db:
                 guest = self.store.new_session(db, "guest")
             self.assertNotIn("chatgptPlan", self.request("/api/ai", token=guest)[1])

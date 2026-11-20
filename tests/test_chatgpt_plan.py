@@ -53,6 +53,9 @@ class PersonalPlan(unittest.TestCase):
         self.client = 'oaiapp_test'
         self.tokens = {'access_token': 'personal-access', 'refresh_token': 'personal-refresh', 'expires_in': 3600,
                        'token_type': 'Bearer', 'scope': plan.SCOPES}
+        self.catalog = [{'visibility': 'hide', 'slug': 'hidden'},
+                        {'visibility': 'list', 'slug': 'available'},
+                        {'visibility': 'list', 'slug': 'second', 'display_name': '두 번째'}]
         self.calls = []
         self.enterContext(patch.object(self.plan.keys, 'get_signing_key_from_jwt', return_value=SimpleNamespace(key=self.signer.public_key())))
         self.enterContext(patch.object(plan, 'request', side_effect=self.remote))
@@ -64,7 +67,7 @@ class PersonalPlan(unittest.TestCase):
                 return dict(self.tokens, access_token='renewed', refresh_token='rotated')
             return self.tokens
         if url.endswith('/models'):
-            return {'models': [{'visibility': 'hide', 'slug': 'other'}, {'visibility': 'list', 'slug': 'available'}]}
+            return {'models': self.catalog}
         if url.endswith('/responses'):
             return {'answer': '내 구독 답변', 'truncated': False}
         if url.endswith('/revoke'):
@@ -112,6 +115,37 @@ class PersonalPlan(unittest.TestCase):
         self.assertEqual(self.calls[-1][1]['fields']['token'], 'rotated')
         with self.assertRaises(AIError):
             self.plan.ask(self.store, self.owner, '안녕')
+
+    def test_picker_upgrades_existing_session_and_sends_only_a_listed_model(self):
+        self.plan.finish(self.store, self.owner, self.start())
+        key = plan.session_key(self.owner)
+        with self.store.connect() as db:
+            old = plan.profile(db, key)
+        del old['models']
+        plan.save(self.store, self.owner, old)
+        self.catalog.extend([{'visibility': 'list', 'slug': 'second'}, {'visibility': 'list'}, None])
+        catalog = self.plan.models(self.store, self.owner)
+        self.assertEqual(catalog['models'], [{'slug': 'available', 'name': 'available'},
+                                             {'slug': 'second', 'name': '두 번째'}])
+        self.assertEqual(set(catalog), {'connected', 'email', 'model', 'models'})
+        self.assertEqual(catalog['model'], 'available')
+        with self.assertRaises(AIError):
+            self.plan.models(self.store, self.other)
+        for invalid in ('hidden', '', {'slug': 'second'}):
+            with self.assertRaises(AIError):
+                self.plan.ask(self.store, self.owner, 'hello', invalid)
+        self.assertFalse(any(url.endswith('/responses') for url, _ in self.calls))
+        self.plan.ask(self.store, self.owner, 'hello', 'second')
+        self.assertEqual(self.calls[-1][1]['payload']['model'], 'second')
+        self.assertEqual(self.plan.models(self.store, self.owner)['model'], 'second')
+        self.catalog = self.catalog[:2]
+        self.assertEqual(self.plan.models(self.store, self.owner)['model'], 'available')
+        with self.assertRaises(AIError):
+            self.plan.ask(self.store, self.owner, 'hello', 'second')
+        self.catalog = []
+        self.assertEqual(self.plan.models(self.store, self.owner)['models'], [])
+        with self.assertRaises(AIError):
+            self.plan.ask(self.store, self.owner, 'hello')
 
     def test_cross_session_receipt_declined_scope_and_forged_id_token(self):
         receipt = self.start()

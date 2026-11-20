@@ -729,7 +729,7 @@ class Handler(BaseHTTPRequestHandler):
                 personal = {}
                 if self.server.chatgpt and not guest:
                     grant = chatgpt_plan.profile(db, chatgpt_plan.session_key(token))
-                    personal["chatgptPlan"] = {"connected": bool(grant), "email": grant.get("email"), "model": grant.get("model")}
+                    personal["chatgptPlan"] = chatgpt_plan.public_profile(grant)
             # `enabled` says whether this account can ask; each provider says whether it is connected.
             status = {"providers": ai.status(), "enabled": bool(ai.connected())}
             if not family.home:
@@ -786,6 +786,8 @@ class Handler(BaseHTTPRequestHandler):
         body = self.body(16 * 1024)
         if action == "finish":
             return plan.finish(store, token, body.get("receipt"))
+        if action == "models":
+            return plan.models(store, token)
         if action == "disconnect":
             return plan.disconnect(store, token)
         if action == "ask":
@@ -793,7 +795,7 @@ class Handler(BaseHTTPRequestHandler):
             if scope != "none":
                 raise Problem(400, "ChatGPT 구독에는 입력한 질문만 보낼 수 있어요.")
             with self.server.ai.slot(username if family.home else (family.id, username)):
-                return plan.ask(store, token, question)
+                return plan.ask(store, token, question, body.get("model"))
         raise Problem(404, "API를 찾을 수 없습니다.")
 
     @staticmethod

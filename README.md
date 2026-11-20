@@ -258,7 +258,7 @@ launchctl kickstart -k "gui/$(id -u)/com.ssoomm.somhouse"
 
 ### 개인 ChatGPT 구독으로 질문하기
 
-연결을 설정한 서버에서는 **AI → 내 ChatGPT 구독 → ChatGPT로 계속하기**를 누릅니다. 본인의 ChatGPT 계정을 선택하고 플랜 사용에 동의한 뒤 솜하우스에서 질문합니다. 앱은 계정에 허용된 모델 목록의 첫 번째 표시 모델을 쓰고, 모델 이름과 **사용량 관리** 링크를 보여 줍니다. 이번 버전은 입력한 질문만 전송합니다. 사용 한도나 권한 오류는 그 자리에서 안내합니다. 사용량은 ChatGPT에서 관리하며 별도 결제 수단으로 자동 재시도하지 않습니다.
+연결을 설정한 서버에서는 **AI → 내 ChatGPT 구독 → ChatGPT로 계속하기**를 누릅니다. 본인의 ChatGPT 계정을 선택하고 플랜 사용에 동의한 뒤 솜하우스에서 질문합니다. 처음에는 계정에 표시되는 첫 모델을 사용합니다. **ChatGPT 모델**에서 다른 모델을 골라 질문하면 다음 방문에도 마지막으로 질문에 사용한 모델이 선택됩니다. 사용 가능한 모델이 바뀌면 **모델 목록 새로고침**을 누르세요. 이번 버전은 입력한 질문만 전송합니다. 사용 한도나 권한 오류는 그 자리에서 안내합니다. 사용량은 ChatGPT에서 관리하며 별도 결제 수단으로 자동 재시도하지 않습니다.
 
 연결은 현재 기기의 솜하우스 로그인 세션에 귀속됩니다. 가족이 같은 솜하우스 아이디로 다른 기기에 로그인해도 각자 연결해야 합니다. 토큰은 서버의 가족별 비공개 SQLite에 저장합니다. 가족 기록 JSON 백업과 브라우저 저장소에는 포함하지 않습니다. 로그아웃하거나 구독 연결을 해제하면 로컬 인증 정보가 삭제됩니다. OpenAI 측 권한은 ChatGPT 설정에서도 해제할 수 있습니다.
 
@@ -281,7 +281,7 @@ python3 -m venv /tmp/somhouse-chatgpt-venv
 }
 ```
 
-[OpenAI 호스팅 앱 신청](https://developers.openai.com/siwc/request-client-id) · [개인 설치형 인증](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) · [플랜 사용량 관리](https://chatgpt.com/settings/usage)
+[OpenAI 호스팅 앱 신청](https://developers.openai.com/siwc/request-client-id) · [개인 설치형 인증](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) · [모델 목록과 질문 전송](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference) · [플랜 사용량 관리](https://chatgpt.com/settings/usage)
 
 ### 검증
 

@@ -477,7 +477,7 @@ function saveAIKey(id,value){
 function aiOptions(){
  const config=ai.config,keys=aiKeys(),list=[];
  if(!config)return list;
- if(config.chatgptPlan?.connected&&!config.readOnly)list.push({value:'plan:chatgpt',mode:'plan',p:{id:'chatgpt',name:'ChatGPT'},summaries:false});
+ if(config.chatgptPlan?.connected&&config.chatgptPlan.model&&!config.readOnly)list.push({value:'plan:chatgpt',mode:'plan',p:{id:'chatgpt',name:'ChatGPT'},summaries:false});
  for(const p of config.providers){
   if(p.enabled&&config.enabled)list.push({value:'mac:'+p.id,mode:'mac',p,summaries:p.recordSummaries===true});
   const key=keys[p.id];
@@ -493,12 +493,15 @@ function aiProvidersView(){
  const plan=config.chatgptPlan,personal=options.find(o=>o.mode==='plan');
  let planCard='';
  if(plan&&!config.readOnly){
-  const controls=personal
-   ?radio(personal,'내 ChatGPT 구독으로 질문하기',esc([plan.email,plan.model].filter(Boolean).join(' · ')))
+  const models=plan.models||(plan.model?[{slug:plan.model,name:plan.model}]:[]);
+  const controls=plan.connected
+   ?(personal?radio(personal,'내 ChatGPT 구독으로 질문하기',esc(plan.email||'')):'')
+     +(models.length?`<label class="field ai-model">ChatGPT 모델<select data-ai-model="chatgpt">${models.map(m=>`<option value="${esc(m.slug)}"${m.slug===plan.model?' selected':''}>${esc(m.name)}</option>`).join('')}</select></label>`:'<p>이 계정에서 선택할 수 있는 모델이 없어요.</p>')
+     +'<button type="button" class="secondary" data-plan="models">모델 목록 새로고침</button>'
      +'<p><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">사용량 관리</a></p>'
      +'<button type="button" class="secondary" data-plan="start" data-oai-siwc-button>다시 연결</button> <button type="button" class="plain" data-plan="disconnect">구독 연결 해제</button>'
    :'<p>본인의 ChatGPT 플랜 사용을 허용하면 구독 한도에서 답해요. 입력한 질문만 OpenAI로 보내요.</p><button type="button" data-plan="start" data-oai-siwc-button>ChatGPT로 계속하기</button>';
-  planCard=`<details class="ai-provider" data-provider="chatgpt" open><summary><strong>내 ChatGPT 구독</strong><span class="badge${personal?'':' off'}">${personal?'연결됨':'연결하기'}</span></summary><div class="body">${controls}</div></details>`;
+  planCard=`<details class="ai-provider" data-provider="chatgpt" open><summary><strong>내 ChatGPT 구독</strong><span class="badge${plan.connected?'':' off'}">${plan.connected?'연결됨':'연결하기'}</span></summary><div class="body">${controls}</div></details>`;
  }
  return planCard+[...config.providers].sort((a,b)=>Number(usable(b))-Number(usable(a))).map(p=>{
   const id=esc(p.id),name=esc(p.name),info=aiDirect?.PROVIDERS[p.id];
@@ -557,8 +560,16 @@ async function checkAI(){
   const config=await shared.aiStatus();
   if(ai!==state)return;
   state.config={...config,providers:Array.isArray(config.providers)?config.providers:[]};
+  let catalogError='';
+  if(config.chatgptPlan?.connected&&!Array.isArray(config.chatgptPlan.models)){
+   // Connections made before the model picker only stored a single model.
+   try{state.config.chatgptPlan=await shared.request('/api/chatgpt/models','POST',{});}
+   catch(error){if(error.status===401)throw error;catalogError=error.message;}
+   if(ai!==state)return;
+  }
   chooseAI(state.planConnected?'plan:chatgpt':null);
   if(state.planNotice){$('#ai-status').textContent=state.planNotice;state.planNotice='';}
+  if(catalogError)$('#ai-status').textContent=catalogError;
   state.planConnected=false;
  }catch(error){
   if(ai!==state)return;
@@ -589,6 +600,14 @@ function disconnectAIKey(id){
  $('#ai-status').textContent=`${info.keyName}를 이 기기에서 지웠어요. 키 자체를 없애려면 AI 회사 사이트에서 삭제해 주세요.`;
 }
 function chooseAIModel(id,model){
+ if(id==='chatgpt'){
+  const plan=ai.config?.chatgptPlan;
+  if(plan?.models?.some(m=>m.slug===model)){
+   plan.model=model;
+   chooseAI('plan:chatgpt');
+  }
+  return;
+ }
  const key=aiKeys()[id];
  if(key?.models?.includes(model)&&saveAIKey(id,{...key,model}))$('#ai-status').textContent=`모델을 ${model}(으)로 바꿨어요.`;
 }
@@ -604,6 +623,10 @@ async function planAction(action){
    const url=new URL(result.url);
    if(url.origin!=='https://auth.openai.com')throw Error('OpenAI 로그인 주소를 확인하지 못했어요.');
    location.assign(url.href);
+  }else if(action==='models'){
+   state.config.chatgptPlan=result;
+   chooseAI(result.model?'plan:chatgpt':null);
+   $('#ai-status').textContent='ChatGPT 모델 목록을 새로고침했어요.';
   }else{
    state.config.chatgptPlan={connected:false};chooseAI();
    $('#ai-status').textContent=result.revoked?'ChatGPT 구독 연결을 해제했어요.':'이 기기의 연결을 해제했어요. ChatGPT 설정에서 앱 권한 해제도 확인해 주세요.';
@@ -621,7 +644,7 @@ async function askAI(e){
  state.pending=true;connectionView();
  $('#ai-status').textContent=`${picked.p.name} 답변을 기다리고 있어요…`;
  try{
-  const result=picked.mode==='plan'?await shared.request('/api/chatgpt/ask','POST',{question,scope:'none'},shared.base,shared.token,55000)
+  const result=picked.mode==='plan'?await shared.request('/api/chatgpt/ask','POST',{question,scope:'none',model:state.config.chatgptPlan.model},shared.base,shared.token,55000)
    :picked.mode==='mac'?await shared.askAI(question,scope,picked.p.id)
    :await aiDirect.ask(picked.p.id,picked.key,question,scope==='none'?null:{scope,summary:aiDirect.summarize(scope,data,Somhouse.localDateTime().slice(0,10))});
   if(ai!==state)return;

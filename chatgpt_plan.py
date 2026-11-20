@@ -130,6 +130,28 @@ def save(store, token, grant):
         db.execute('INSERT OR REPLACE INTO chatgpt_sessions VALUES(?,?)', (session_key(token), json.dumps(grant)))
 
 
+def update_models(grant):
+    catalog = request(RESOURCE + '/models', headers={'Authorization': 'Bearer ' + grant['access']})
+    entries = catalog.get('models')
+    if not isinstance(entries, list):
+        raise AIError(502, 'ChatGPT 모델 목록을 읽지 못했어요. 다시 시도해 주세요.')
+    models = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get('visibility') != 'list':
+            continue
+        slug, name = entry.get('slug'), entry.get('display_name')
+        if isinstance(slug, str) and slug.strip() and slug not in models:
+            models[slug] = name if isinstance(name, str) and name.strip() else slug
+    grant['models'] = [{'slug': slug, 'name': name} for slug, name in models.items()]
+    if grant.get('model') not in models:
+        grant['model'] = next(iter(models), None)
+
+
+def public_profile(grant):
+    return {'connected': bool(grant), 'email': grant.get('email'), 'model': grant.get('model'),
+            'models': grant.get('models')}
+
+
 def valid_client(value):
     return isinstance(value, str) and bool(re.fullmatch(r'oaiapp_[A-Za-z0-9_-]{1,250}', value))
 
@@ -259,13 +281,11 @@ class ChatGPTPlan:
                                 code=pending['code'], code_verifier=pending['verifier'], redirect_uri=self.redirect, resource=RESOURCE))
             identity = self.identity(tokens.get('id_token'), pending)
             grant = self.credentials(tokens)
-            catalog = request(RESOURCE + '/models', headers={'Authorization': 'Bearer ' + grant['access']})
-            model = next((m.get('slug') for m in catalog.get('models', []) if isinstance(m, dict)
-                          and m.get('visibility') == 'list' and isinstance(m.get('slug'), str) and m['slug']), None)
-            if not model:
+            update_models(grant)
+            if not grant['models']:
                 raise AIError(403, '이 ChatGPT 계정에서 사용할 수 있는 구독 모델이 없어요.')
             grant.update(subject=identity['sub'], email=identity.get('email') if identity.get('email_verified') is True else '',
-                         client_id=client, model=model, link_id=secrets.token_urlsafe(16))
+                         client_id=client, link_id=secrets.token_urlsafe(16))
             save(store, token, grant)
         return {'connected': True}
 
@@ -284,19 +304,41 @@ class ChatGPTPlan:
                 return False
         return True
 
-    def ask(self, store, token, question):
-        with self.lock(token):
-            with store.connect() as db:
-                grant = profile(db, session_key(token))
-            if not grant:
+    def active_grant(self, store, token):
+        # Call under the session lock so a rotating refresh token is only used once.
+        with store.connect() as db:
+            grant = profile(db, session_key(token))
+        if not grant:
+            raise AIError(409, RECONNECT)
+        if grant['expires'] < time.time() + 30:
+            if not grant.get('refresh'):
                 raise AIError(409, RECONNECT)
-            if grant['expires'] < time.time() + 30:
-                if not grant.get('refresh'):
-                    raise AIError(409, RECONNECT)
-                refreshed = self.oauth('token', dict(client_id=grant['client_id'], grant_type='refresh_token',
-                                       refresh_token=grant['refresh'], resource=RESOURCE))
-                grant = self.credentials(refreshed, grant)
+            refreshed = self.oauth('token', dict(client_id=grant['client_id'], grant_type='refresh_token',
+                                   refresh_token=grant['refresh'], resource=RESOURCE))
+            grant = self.credentials(refreshed, grant)
+            save(store, token, grant)
+        return grant
+
+    def models(self, store, token):
+        with self.lock(token):
+            grant = self.active_grant(store, token)
+            update_models(grant)
+            save(store, token, grant)
+            return public_profile(grant)
+
+    def ask(self, store, token, question, model=None):
+        with self.lock(token):
+            grant = self.active_grant(store, token)
+            if model is None:
+                model = grant.get('model')  # Older clients omit the model.
+            if 'models' not in grant:
+                update_models(grant)
+                save(store, token, grant)
+            if not any(item['slug'] == model for item in grant['models']):
+                raise AIError(400, '모델 목록을 새로고침하고 사용할 모델을 선택해 주세요.')
+            if grant['model'] != model:
+                grant['model'] = model
                 save(store, token, grant)
         return request(RESOURCE + '/responses', headers={'Authorization': 'Bearer ' + grant['access']},
-                       payload=dict(model=grant['model'], instructions=SYSTEM, input=question,
+                       payload=dict(model=model, instructions=SYSTEM, input=question,
                                     store=False, stream=True), stream=True)

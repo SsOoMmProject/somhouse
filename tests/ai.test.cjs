@@ -215,6 +215,7 @@ test('personal plan stays inside the app and never falls back to another billing
   let result={data:blank()};
   if(url.endsWith('/api/chatgpt/finish'))result={connected:true};
   if(url.endsWith('/api/ai'))result={providers:providers(['codex']),enabled:true,chatgptPlan:{connected:true,model:'personal-model',email:'a@example.test'}};
+  if(url.endsWith('/api/chatgpt/models'))result={connected:true,model:'personal-model',models:[{slug:'personal-model',name:'First'},{slug:'second',name:'Second & Plus'}]};
   if(url.endsWith('/api/chatgpt/ask')){
    if(limited)return {ok:false,status:429,json:async()=>({error:'ChatGPT 사용 한도'})};
    result={answer:'구독으로 답했어요.'};
@@ -224,6 +225,9 @@ test('personal plan stays inside the app and never falls back to another billing
  await b.settle();await b.settle();
  assert.equal(b.eval('ai.selected'),'plan:chatgpt');
  assert.match(b.get('#ai-providers').innerHTML,/사용량 관리/);
+ assert.match(b.get('#ai-providers').innerHTML,/<option value="personal-model" selected>First/);
+ b.get('#ai-providers').onchange({target:{dataset:{aiModel:'chatgpt'},value:'second'}});
+ assert.match(b.get('#ai-providers').innerHTML,/<option value="second" selected>Second &amp; Plus/);
  assert.equal(b.get('#ai-scope-field').hidden,true);
  const form=b.get('#ai-form');form.values={question:'Hello',scope:'feeding'};
  await form.onsubmit({preventDefault(){},target:form});
@@ -233,6 +237,6 @@ test('personal plan stays inside the app and never falls back to another billing
  assert.equal(b.get('#ai-answer').textContent,'구독으로 답했어요.');
  const asks=calls.filter(x=>x.url.endsWith('/api/chatgpt/ask'));
  assert.equal(asks.length,2);
- assert.deepEqual(JSON.parse(asks[0].options.body),{question:'Hello',scope:'none'});
+ assert.deepEqual(JSON.parse(asks[0].options.body),{question:'Hello',scope:'none',model:'second'});
  assert.ok(!calls.some(x=>x.url.endsWith('/api/ai')&&x.options.method==='POST'));
 });
