@@ -14,7 +14,7 @@ function valid(d){
 // The old device key is read only, and is automatically merged after login.
 const shared=window.SomhouseShared?new window.SomhouseShared.Client():null;
 let mode=shared?.token?'shared':'login', sharedReady=false, busy=false, refreshing=false, refreshTask=null, migratedRaw, legacyWarning='', needsRender=false;
-let ai={config:null,checking:false,pending:false}, googleStatusHtml='', dashboardHtml='', missedPolls=0, googleFooter='';
+let ai={config:null,checking:false,pending:false,selected:''}, googleStatusHtml='', dashboardHtml='', missedPolls=0, googleFooter='';
 function message(text){$('#connection-status').textContent=text;}
 function accountMessage(text){
  const status=$('#account-status');
@@ -53,7 +53,9 @@ function connectionView(){
  document.querySelectorAll('#connection button, #connection input').forEach(el=>el.disabled=busy);
  document.querySelectorAll('#password-form button, #password-form input').forEach(el=>el.disabled=busy);
  document.querySelectorAll('#content button[data-add], #content button[data-action]').forEach(el=>el.disabled=busy||!sharedReady);
- $('#ai-fields').disabled=!connected||busy||!ai.config?.enabled||ai.checking||ai.pending;
+ const aiLocked=!connected||busy||ai.checking||ai.pending;
+ $('#ai-fields').disabled=aiLocked||!aiOption(ai.selected);
+ document.querySelectorAll('#ai-providers input, #ai-providers select, #ai-providers button').forEach(el=>el.disabled=aiLocked);
 }
 function showGoogleStatus(connected){
  const element=$('#google-status'), status=connected&&sharedReady?shared.googleStatus:null;
@@ -80,8 +82,8 @@ function showGoogleStatus(connected){
 }
 function showLogin(text){
  shared.clear();mode='login';sharedReady=false;data=empty();migratedRaw=undefined;
- ai={config:null,checking:false,pending:false};
- $('#ai-form').reset();$('#ai-scope-field').hidden=true;$('#ai-result').hidden=true;
+ ai={config:null,checking:false,pending:false,selected:''};
+ $('#ai-form').reset();$('#ai-scope-field').hidden=true;$('#ai-result').hidden=true;$('#ai-providers').innerHTML='';
  for(const selector of ['#ai-status','#ai-asked','#ai-answer'])$(selector).textContent='';
  for(const dialog of [$('#dialog'),$('#password-dialog'),$('#family-dialog')])if(dialog.open)dialog.close();
  accountMessage('');render();message(text);
@@ -456,45 +458,146 @@ async function manageChildren(){
  if(after.length===before.length)before.forEach((old,i)=>{if(old!==after[i])rename[old]=after[i];});
  if(await saveChildren(after,Object.keys(rename).length?rename:undefined))render();
 }
+const AI_PICK='somhouse-ai-provider',AI_KEYS='somhouse-ai-keys-v1',aiDirect=typeof SomhouseAI!=='undefined'?SomhouseAI:null;
+// API keys stay in this browser, per signed-in account, and are never sent to the Mac.
+function aiAccount(){return shared?`${shared.base}|${shared.username}`:'';}
+function aiKeyStore(){try{const all=JSON.parse(localStorage.getItem(AI_KEYS)||'{}');return all&&typeof all==='object'?all:{};}catch{return {};}}
+function aiKeys(){const mine=aiKeyStore()[aiAccount()];return mine&&typeof mine==='object'?mine:{};}
+function saveAIKey(id,value){
+ try{
+  const all=aiKeyStore(),mine={...aiKeys()};
+  if(value)mine[id]=value;else delete mine[id];
+  if(Object.keys(mine).length)all[aiAccount()]=mine;else delete all[aiAccount()];
+  localStorage.setItem(AI_KEYS,JSON.stringify(all));return true;
+ }catch{return false;}
+}
+// Each way to ask: the Mac's CLI (original family only) or this device's own key.
+function aiOptions(){
+ const config=ai.config,keys=aiKeys(),list=[];
+ if(!config)return list;
+ for(const p of config.providers){
+  if(p.enabled&&config.enabled)list.push({value:'mac:'+p.id,mode:'mac',p,summaries:p.recordSummaries===true});
+  const key=keys[p.id];
+  if(key?.key&&key.model&&!config.readOnly&&aiDirect?.PROVIDERS[p.id])list.push({value:'key:'+p.id,mode:'key',p,key,summaries:true});
+ }
+ return list;
+}
+function aiOption(value){return value?aiOptions().find(x=>x.value===value)||null:null;}
+// One folded card per AI. Only cards with a way to ask are open, and only those can be picked.
+function aiProvidersView(){
+ const config=ai.config,options=aiOptions(),usable=p=>options.some(o=>o.p.id===p.id);
+ const radio=(o,text,caption)=>`<label class="ai-pick"><input type="radio" name="provider" value="${esc(o.value)}"${ai.selected===o.value?' checked':''}> ${text}</label><p class="caption">${caption}</p>`;
+ return [...config.providers].sort((a,b)=>Number(usable(b))-Number(usable(a))).map(p=>{
+  const id=esc(p.id),name=esc(p.name),info=aiDirect?.PROVIDERS[p.id];
+  const mac=options.find(o=>o.value==='mac:'+p.id),own=options.find(o=>o.value==='key:'+p.id);
+  let body='';
+  if(mac)body+=radio(mac,`맥미니 ${name}로 질문하기`,`관리자 계정으로 답해요 · 모델: ${esc(p.model||'CLI 기본값')} · ${p.recordSummaries?'가족 기록 집계를 함께 보낼 수 있어요.':'질문만 보내요.'}`);
+  if(own){
+   const models=Array.isArray(own.key.models)&&own.key.models.length?own.key.models:[own.key.model];
+   body+=radio(own,`내 ${esc(info.keyName)}로 질문하기`,'이 기기에서 바로 AI 회사로 보내요. 사용한 만큼 키 주인에게 요금이 청구돼요.')
+    +`<label class="field ai-model">모델<select data-ai-model="${id}">${models.map(m=>`<option value="${esc(m)}"${m===own.key.model?' selected':''}>${esc(m)}</option>`).join('')}</select></label>`
+    +`<div class="actions"><button type="button" class="secondary" data-ai-disconnect="${id}">키 연결 해제</button></div>`;
+  }else if(info&&!config.readOnly){
+   const form=`<label class="field">${esc(info.keyName)}로 연결<input type="password" id="ai-key-${id}" autocomplete="off" spellcheck="false" placeholder="키를 붙여 넣어 주세요"></label>`
+    +`<div class="actions"><button type="button" data-ai-connect="${id}">연결</button></div>`
+    +`<p class="caption">키는 이 기기에만 저장되고 솜하우스 서버로는 보내지 않아요. 사용한 만큼 AI 회사가 키 주인에게 요금을 청구해요. 공용 기기에서는 연결하지 마세요. <a href="${esc(info.keyPage)}" target="_blank" rel="noopener">키 발급받기</a></p>`;
+   // With the Mac already answering, a key is optional: keep its form folded.
+   body+=mac?`<details class="ai-admin"><summary>내 ${esc(info.keyName)}로도 연결하기</summary>${form}</details>`:form;
+  }
+  if(!mac&&!own&&!p.enabled&&!config.homeOnly&&!config.readOnly)body+=`<details class="ai-admin"><summary>맥미니에 연결하기 (관리자)</summary><p class="caption">관리자가 맥미니에서 ${name} CLI에 로그인한 뒤 아래 명령을 실행하면 키 없이 쓸 수 있어요.</p><p class="caption"><code>python3 server.py ai-config --provider ${id}</code></p></details>`;
+  if(!body)body='<p class="caption">게스트 보기에서는 연결할 수 없어요.</p>';
+  const open=Boolean(mac||own),badge=mac&&own?'연결됨':mac?'맥미니 연결됨':own?'내 키 연결됨':'연결 안 됨';
+  return `<details class="ai-provider" data-provider="${id}"${open?' open':''}><summary><strong>${name}</strong><span class="caption">${esc(p.company)}</span><span class="badge${open?'':' off'}">${badge}</span></summary><div class="body">${body}</div></details>`;
+ }).join('');
+}
+function aiStatusText(){
+ const config=ai.config,picked=aiOption(ai.selected);
+ if(config.readOnly)return '게스트 보기에서는 질문할 수 없어요. 가족 계정으로 로그인하면 질문을 보낼 수 있어요.';
+ if(picked)return `${picked.mode==='mac'?'맥미니 ':'내 키로 '}${picked.p.name}에게 질문해요. 질문마다 새로 답해요.`;
+ if(!aiOptions().length)return config.homeOnly?'아래에서 AI를 골라 내 API 키를 연결하면 질문할 수 있어요.':'아직 연결된 AI가 없어요. 아래에서 AI를 골라 내 API 키를 연결하거나, 관리자가 맥미니에 연결하면 질문할 수 있어요.';
+ return '질문할 AI를 골라 주세요.';
+}
+function pickAI(value){
+ const picked=aiOption(value);
+ ai.selected=picked?picked.value:'';
+ if(picked)try{localStorage.setItem(AI_PICK,picked.value);}catch{}
+ $('#ai-scope-field').hidden=!picked?.summaries;
+ if(!picked?.summaries)$('#ai-scope').value='none';
+ if(ai.config)$('#ai-status').textContent=aiStatusText();
+ connectionView();
+}
+function chooseAI(preferred){
+ let remembered='';try{remembered=localStorage.getItem(AI_PICK)||'';}catch{}
+ const options=aiOptions(),choice=[preferred,ai.selected,remembered].find(v=>v&&options.some(o=>o.value===v))||options[0]?.value||'';
+ ai.selected=choice;
+ $('#ai-providers').innerHTML=aiProvidersView();
+ pickAI(choice);
+}
 async function checkAI(){
  const state=ai;
  if(state.checking||state.pending)return;
  state.checking=true;connectionView();
- $('#ai-status').textContent='Antigravity CLI 설정을 확인하고 있어요…';
+ $('#ai-status').textContent='연결된 AI를 확인하고 있어요…';
  try{
   const config=await shared.aiStatus();
   if(ai!==state)return;
-  state.config=config;
-  $('#ai-scope-field').hidden=!config.recordSummaries;
-  if(!config.recordSummaries)$('#ai-scope').value='none';
-  $('#ai-status').textContent=config.homeOnly?'AI 대화는 아직 처음 만든 가족만 쓸 수 있어요.':config.readOnly?'게스트 보기에서는 질문할 수 없어요. 가족 계정으로 로그인하면 질문을 보낼 수 있어요.':config.enabled?'질문마다 새로 답해요.':'관리자가 맥미니에 Antigravity CLI를 연결하면 질문할 수 있어요.';
+  state.config={...config,providers:Array.isArray(config.providers)?config.providers:[]};
+  chooseAI();
  }catch(error){
   if(ai!==state)return;
   state.config=null;
   if(error.status===401)showLogin(error.message);else $('#ai-status').textContent=error.message;
  }finally{state.checking=false;connectionView();}
 }
+async function connectAIKey(id){
+ const state=ai,info=aiDirect?.PROVIDERS[id];
+ if(!info||!state.config||state.config.readOnly||state.pending||state.checking||busy)return;
+ const input=$('#ai-key-'+id);
+ state.pending=true;connectionView();
+ $('#ai-status').textContent=`${info.keyName}를 확인하고 있어요…`;
+ try{
+  const saved=await aiDirect.connect(id,input?.value);
+  if(ai!==state)return;
+  if(!saveAIKey(id,saved))throw Error('이 기기에 키를 저장하지 못했어요. 브라우저 저장 공간을 확인해 주세요.');
+  state.pending=false;
+  chooseAI('key:'+id);
+  $('#ai-status').textContent=`${info.keyName}를 연결했어요. 모델: ${saved.model}`;
+ }catch(error){if(ai===state)$('#ai-status').textContent=error.message;}
+ finally{if(ai===state){state.pending=false;connectionView();}}
+}
+function disconnectAIKey(id){
+ const info=aiDirect?.PROVIDERS[id];
+ if(!info||ai.pending||!confirm(`이 기기에 저장한 ${info.keyName}를 지울까요?`))return;
+ saveAIKey(id,null);chooseAI();
+ $('#ai-status').textContent=`${info.keyName}를 이 기기에서 지웠어요. 키 자체를 없애려면 AI 회사 사이트에서 삭제해 주세요.`;
+}
+function chooseAIModel(id,model){
+ const key=aiKeys()[id];
+ if(key?.models?.includes(model)&&saveAIKey(id,{...key,model}))$('#ai-status').textContent=`모델을 ${model}(으)로 바꿨어요.`;
+}
 async function askAI(e){
  e.preventDefault();
- const state=ai;
- if(busy||state.pending||state.checking||!state.config?.enabled||!shared.token)return;
+ const state=ai,picked=aiOption(state.selected);
+ if(busy||state.pending||state.checking||!picked||!shared.token||shared.readOnly)return;
  const values=new FormData(e.target);
- const question=values.get('question').trim(),scope=state.config.recordSummaries?values.get('scope'):'none';
+ const question=String(values.get('question')||'').trim(),scope=picked.summaries?values.get('scope')||'none':'none';
  if(!question){$('#ai-status').textContent='질문을 입력해 주세요.';return;}
  state.pending=true;connectionView();
- $('#ai-status').textContent='AI 답변을 기다리고 있어요…';
+ $('#ai-status').textContent=`${picked.p.name} 답변을 기다리고 있어요…`;
  try{
-  const result=await shared.askAI(question,scope);
+  const result=picked.mode==='mac'?await shared.askAI(question,scope,picked.p.id)
+   :await aiDirect.ask(picked.p.id,picked.key,question,scope==='none'?null:{scope,summary:aiDirect.summarize(scope,data,Somhouse.localDateTime().slice(0,10))});
   if(ai!==state)return;
   if(typeof result.answer!=='string'||!result.answer.trim())throw Error('답변을 확인하지 못했어요. 다시 시도해 주세요.');
+  $('#ai-result-title').textContent=`${picked.p.name} 답변`;
   $('#ai-asked').textContent=question;
   $('#ai-answer').textContent=result.answer;
   $('#ai-result').hidden=false;
   $('#ai-question').value='';
-  $('#ai-status').textContent=result.truncated?'답변이 길어 일부만 표시했어요.':'답변을 받았어요.';
+  $('#ai-status').textContent=result.truncated?'답변이 길어 일부만 표시했어요.':`${picked.p.name} 답변을 받았어요.`;
  }catch(error){
   if(ai!==state)return;
-  if(error.status===401)showLogin(error.message);else $('#ai-status').textContent=error.message;
+  if(error.status===401&&picked.mode==='mac')showLogin(error.message);else $('#ai-status').textContent=error.message;
  }finally{state.pending=false;connectionView();}
 }
 function render(){
@@ -752,6 +855,11 @@ takeInvite();
 route();
 if(shared){
  $('#ai-form').onsubmit=askAI;
+ const aiBox=$('#ai-providers');
+ aiBox.onchange=e=>{const t=e.target;if(t?.name==='provider')pickAI(t.value);else if(t?.dataset?.aiModel)chooseAIModel(t.dataset.aiModel,t.value);};
+ aiBox.onclick=e=>{const b=e.target?.closest?.('button');if(b?.dataset.aiConnect)connectAIKey(b.dataset.aiConnect);else if(b?.dataset.aiDisconnect)disconnectAIKey(b.dataset.aiDisconnect);};
+ // Enter in a key field connects that key instead of sending the question form.
+ aiBox.onkeydown=e=>{if(e.key==='Enter'&&e.target?.id?.startsWith('ai-key-')){e.preventDefault();connectAIKey(e.target.id.slice(7));}};
  $('#login-form').onsubmit=async e=>{
   e.preventDefault();if(busy||refreshing)return;
   const form=e.target,values=new FormData(form);busy=true;connectionView();message('로그인하고 있어요…');

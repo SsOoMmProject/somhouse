@@ -23,9 +23,9 @@
 
 개인 DB·백업·초기 비밀번호·토큰·API 키는 저장소에 넣지 않는다. 운영법은 README를 참조한다.
 
-## Antigravity CLI 연동
+## AI CLI 연동 (Codex · Claude · Antigravity)
 
-맥미니의 Antigravity CLI를 통해 로그인한 가족의 질문에 답한다. 기본 설정은 질문만 전송한다. 계정 로그인 후 개인정보가 없는 한국어 시험 질문으로 응답을 확인한다. 운영 절차는 [README](../README.md#antigravity-cli-연결)를 참조한다.
+맥미니에 연결한 AI CLI(Codex, Claude, Antigravity, 처음 만든 가족만) 또는 기기에 저장한 가족 자신의 API 키 중 사용자가 고른 하나로 질문에 답한다. 기본 설정은 질문만 전송한다. 계정 로그인 후 개인정보가 없는 한국어 시험 질문으로 응답을 확인한다. 운영 절차는 [README](../README.md#ai-연결-codex--claude--antigravity)를 참조한다.
 
 AI가 기록을 추가·수정하는 기능을 확장할 때 사용자 확인을 포함한다.
 

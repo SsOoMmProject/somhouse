@@ -108,6 +108,14 @@ class Families(unittest.TestCase):
         self.assertEqual(self.request("/api/merge", "POST", {"records": [], "schedule": [], "shopping": []}, other["token"])[0], 403)
         self.assertEqual(self.request("/api/ai", token=other["token"])[1]["enabled"], False)
         self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, other["token"])[0], 403)
+        # The Mac's AI answers only the home family; others see every card unconnected and use their own keys.
+        from ai import Claude
+        self.server.ai.providers["claude"] = Claude(self.store.directory, Path(sys.executable))
+        status = self.request("/api/ai", token=other["token"])[1]
+        self.assertTrue(status["homeOnly"])
+        self.assertEqual([(p["id"], p["enabled"]) for p in status["providers"]],
+                         [("codex", False), ("claude", False), ("antigravity", False)])
+        self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕", "provider": "claude"}, other["token"])[0], 403)
         self.assertEqual(self.request("/api/family", token=other["token"])[1]["google"]["connected"], False)
         self.assertEqual(self.request("/api/password", "POST", {"currentPassword": "x", "newPassword": "y" * 12}, other["token"])[0], 403)
         self.assertEqual(self.request("/api/me", token=other["token"])[1]["family"]["home"], False)
