@@ -115,7 +115,9 @@ test('a review item the rules could not read opens the form with the AI reading'
  const f=family({reply:JSON.stringify({items:[{type:'feeding',date:'2026-11-21T07:30',category:'분유',amount:'90',memo:''}]}),
   googleStatus:{review:1,review_items:[{key:'k1',title:'아침에 분유 구십',when:'2026-11-21T07:30',source:'Calendar',status:'확인 필요',suggest:{}}]}});
  await f.open('review');
- assert.match(f.html(),/data-ai-review="k1">✨ AI로 해석/);
+ // Read in the background as the page opens; the button opens the form with that reading.
+ assert.match(f.html(),/✨ AI 추정: 🍼 분유 · 90ml · 2026-11-21 07:30/);
+ assert.match(f.html(),/data-ai-review="k1">✨ AI 추정대로 확인/);
  await f.click({aiReview:'k1'});await f.b.settle();
  assert.match(JSON.parse(f.asked[0].contents[0].parts[0].text).question,/지금은 2026-11-21 07:30/);
  assert.equal(f.b.get('#dialog').open,true);
@@ -222,4 +224,26 @@ test('a stats button opens the AI tab with that summary chosen',async()=>{
  assert.equal(sent.records.scope,'sleep');
  assert.deepEqual(sent.records.summary[day],{count:1,minutes:60});
  assert.doesNotMatch(JSON.stringify(sent),/PRIVATE/);
+});
+
+test('opening the review page reads up to 5 items in the background and keeps the readings',async()=>{
+ const items=Array.from({length:7},(_,i)=>({key:'k'+i,title:i===1?'알 수 없는 말':'분유 구십',when:'2026-11-21T07:3'+i,source:'Calendar',status:'확인 필요',suggest:{}}));
+ let n=0;
+ const f=family({googleStatus:{review:7,review_items:items},reply:()=>++n===2?'{"items":[]}':JSON.stringify({items:[{type:'feeding',date:'2026-11-21T07:30',category:'분유',amount:'90'}]})});
+ await f.open('review');
+ for(let i=0;i<10;i++)await f.b.settle();
+ assert.equal(f.asked.length,5);
+ const html=f.html();
+ assert.equal((html.match(/✨ AI 추정: 🍼 분유 · 90ml · 2026-11-21 07:30/g)||[]).length,4);
+ assert.match(html,/AI도 수유나 수면으로 확실히 읽지 못했어요/);
+ assert.match(html,/data-ai-review="k0">✨ AI 추정대로 확인/);
+ // The 6th and 7th wait for their button, even after more renders; a reading already made opens the form
+ // without asking again.
+ assert.match(html,/data-ai-review="k5">✨ AI로 해석/);
+ f.b.eval('render()');await new Promise(r=>setTimeout(r,20));for(let i=0;i<5;i++)await f.b.settle();
+ assert.equal(f.asked.length,5);
+ await f.click({aiReview:'k0'});
+ assert.equal(f.asked.length,5);
+ assert.equal(f.b.get('#dialog').open,true);
+ assert.match(f.b.get('#formtitle').textContent,/확인 필요 정정 · 수유 기록/);
 });

@@ -70,3 +70,4 @@ nav button{display:inline-flex;gap:6px}nav .ic{font-size:16px}
 .checks-card{min-height:0;margin-bottom:14px;background:#fffaf2;border-color:#ecd9bd}.checks-card h2{font-size:17px;margin:0 0 4px}.check-row{border-top:1px solid #ecd9bd;padding:10px 0}.check-row p{margin:0}.check-row .actions{justify-content:flex-start;margin-top:6px}
 .report-link{justify-content:flex-start;margin:0 0 12px}.report .card{min-height:0;margin-bottom:12px}.report-list{margin:0;padding-left:18px;line-height:1.7}.report-table small{color:#89928b}
 @media print{header,nav,#connection,#dashboard,#ai-panel,#toast,.no-print,.report-link{display:none!important}main{padding:0;max-width:none}.card{border:1px solid #ccc;break-inside:avoid}body{background:#fff}}
+.ai-guess{margin:6px 0 0;padding:8px 10px;border-radius:10px;background:#f3f7f2;color:#343f39}

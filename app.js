@@ -204,7 +204,7 @@ function reviewCard(x){
  const conflict=x.status==='웹 기록 유지',guess=[x.suggest?.category&&x.suggest.category!=='기타'?x.suggest.category:'',x.suggest?.amount||''].filter(Boolean).join(' ');
  const why=conflict?'웹에서 고친 기록과 캘린더 일정의 내용이 서로 달라요. 지금 기록은 웹에서 고친 그대로예요.':x.suggest?.amount?'내용을 확실히 알 수 없어 저장하지 않았어요.':'양이 없어서 저장하지 않았어요. 양을 입력해 주세요.';
  const buttons=conflict?['캘린더 내용으로 고치기','지금 기록 그대로 두기']:['내용 확인하고 저장','기록하지 않음'];
- return `<div class="item"><strong>${esc(x.title||'(제목 없음)')}</strong> <span class="badge">${esc(x.source)}</span><p>${esc((x.when||'').replace('T',' ')||'시각 정보 없음')}${guess?` · 추정 ${esc(guess)}`:''}<br>${why}</p><div class="actions">${aiReviewButton(x)}<button data-review-key="${esc(x.key)}" data-review-action="save">${buttons[0]}</button><button class="secondary" data-review-key="${esc(x.key)}" data-review-action="dismiss">${buttons[1]}</button></div></div>`;
+ return `<div class="item"><strong>${esc(x.title||'(제목 없음)')}</strong> <span class="badge">${esc(x.source)}</span><p>${esc((x.when||'').replace('T',' ')||'시각 정보 없음')}${guess?` · 추정 ${esc(guess)}`:''}<br>${why}</p>${aiReviewGuess(x)}<div class="actions">${aiReviewButton(x)}<button data-review-key="${esc(x.key)}" data-review-action="save">${buttons[0]}</button><button class="secondary" data-review-key="${esc(x.key)}" data-review-action="dismiss">${buttons[1]}</button></div></div>`;
 }
 function reviewView(){
  const cards=reviewItems().map(reviewCard).join('');
@@ -791,6 +791,7 @@ function render(){
  const past=document.querySelector('details.past');if(past)schedulePastOpen=past.open;
  showGoogleStatus(true);
  $('#content').innerHTML=page==='home'?homeView():page==='stats'?statsView():page==='review'?reviewView():page==='report'?reportView():listView(page);
+ if(page==='review'&&reviewItems().length)Promise.resolve().then(aiReviewAuto); // after this render, in the background
  connectionView();
  const form=$('#filter-form');if(form){const apply=e=>{e?.preventDefault?.();const next=Object.fromEntries(new FormData(form));if(next.from&&next.to&&next.from>next.to){alert('시작 날짜는 마지막 날짜보다 늦을 수 없어요.');return}filters[page]=next;render()};form.onsubmit=apply;form.onchange=apply;}
 }
