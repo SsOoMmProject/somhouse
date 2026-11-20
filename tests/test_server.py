@@ -306,10 +306,23 @@ class FamilyAPI(unittest.TestCase):
                              ("모유", "15분", "2026-11-20T10:00", "직수 타이머 · 좌 8분 · 우 7분"))
             records = {x["id"]: x for x in done["data"]["records"]}
             self.assertEqual(records["s1"]["end"], "2026-11-20T10:00")
-            # Cancel leaves no record; the guest cannot touch either.
-            self.request("/api/timer", "POST", {"action": "start"}, token)
-            self.assertIsNone(self.request("/api/timer", "POST", {"action": "cancel"}, token)[1]["settings"]["timer"])
-            self.assertEqual(len(self.request("/api/data", token=token)[1]["data"]["records"]), 2)
+            # Starting the timer ends the open sleep at once (same minute too, as at least 1 minute);
+            # cancelling leaves no feeding and reopens that sleep.
+            self.request("/api/items/records/s2", "PUT", {"id": "s2", "type": "sleep", "date": "2026-11-20T11:00",
+                                                         "end": "", "category": "낮잠"}, token)
+            with patch.object(server_module, "local_now", lambda: "2026-11-20T11:00:20"):
+                started = self.request("/api/timer", "POST", {"action": "start"}, token)[1]
+            self.assertEqual(started["woke"], {"id": "s2", "end": "2026-11-20T11:01"})
+            self.assertEqual({x["id"]: x for x in started["data"]["records"]}["s2"]["end"], "2026-11-20T11:01")
+            cancelled = self.request("/api/timer", "POST", {"action": "cancel"}, token)[1]
+            self.assertIsNone(cancelled["settings"]["timer"])
+            self.assertEqual({x["id"]: x for x in cancelled["data"]["records"]}["s2"]["end"], "")
+            self.assertEqual(len(cancelled["data"]["records"]), 3)
+            # A feeding saved in the same minute as 수면 시작 ends that sleep too.
+            self.request("/api/items/records/f9", "PUT", {"id": "f9", "type": "feeding", "date": "2026-11-20T11:00",
+                                                         "category": "분유", "amount": "60ml"}, token)
+            records = {x["id"]: x for x in self.request("/api/data", token=token)[1]["data"]["records"]}
+            self.assertEqual(records["s2"]["end"], "2026-11-20T11:01")
             self.store.password("guest", "guest-password-1")
             guest = self.request("/api/login", "POST", {"username": "guest", "password": "guest-password-1"})[1]["token"]
             self.assertEqual(self.request("/api/timer", "POST", {"action": "start"}, guest)[0], 403)

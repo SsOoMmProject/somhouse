@@ -247,7 +247,7 @@ function ago(from,now){
  return minutes===null?'방금':minutes<1?'방금':Somhouse.duration(minutes)+' 전';
 }
 // The first thing a parent needs: when the baby last ate and slept.
-// Same rule as the server (sleep_wake.py): the latest sleep without a wake time, started before `at`, within 16 hours.
+// Same rule as the server (sleep_wake.py): the latest sleep without a wake time, started at or before `at`, within 16 hours.
 function openSleep(at=Somhouse.localDateTime(),inclusive=true){
  return data.records.filter(x=>x.type==='sleep'&&!x.end&&x.date&&(inclusive?x.date<=at:x.date<at)&&(Somhouse.sleepMinutes({date:x.date,end:at})??0)<=16*60)
   .sort((a,b)=>b.date.localeCompare(a.date))[0]||null;
@@ -646,7 +646,7 @@ $('#form').onsubmit=async e=>{
  if(x.url&&!link(x.url)){alert('http 또는 https 상품 링크를 입력해 주세요.');return;}
  if(kind==='feeding'&&!Somhouse.hasFeedingUnit(x.amount)&&!confirm('양에 단위가 없어요. 120ml이나 15분처럼 단위를 붙이면 통계와 빠른 기록에 쓰여요.\n이대로 저장할까요?'))return;
  const submit=$('#form button[type="submit"]');submit.disabled=true;
- const review=reviewKey,remembered=JSON.stringify(shared.aliases||{}),asleep=kind==='feeding'?openSleep(x.date,false):null;
+ const review=reviewKey,remembered=JSON.stringify(shared.aliases||{}),asleep=kind==='feeding'?openSleep(x.date):null;
  try{if(await (review?sharedChange(()=>shared.resolveReview(review,'save',k,x)):changeItem(k,x))){$('#dialog').close();const word=Object.keys(shared.aliases||{}).find(w=>shared.aliases[w]===x.category&&JSON.parse(remembered)[w]!==x.category);if(word)message(`저장했어요. 앞으로 ‘${word}’는 ${x.category}로 기억할게요.`);const woke=asleep&&data.records.find(r=>r.id===asleep.id&&r.end);if(woke)message(`수유를 기록해서 ${woke.category}을 ${woke.end.slice(11)}에 끝냈어요 (${Somhouse.duration(Somhouse.sleepMinutes(woke))}).`);render();}}finally{submit.disabled=false;}
 };
 // One tap saves at once; a toast offers undo (which also reopens a sleep the feeding ended) and edit.
@@ -666,7 +666,7 @@ function undoActions(record,woke){
   }},{label:'수정',run:()=>{const x=data.records.find(r=>r.id===record.id);if(x)openForm(x.type,x);}}];
 }
 async function quickSave(record,label){
- const asleep=record.type==='feeding'?openSleep(record.date,false):null;
+ const asleep=record.type==='feeding'?openSleep(record.date):null;
  if(!await changeItem('records',record))return;
  const woke=asleep&&data.records.find(r=>r.id===asleep.id&&r.end);
  render();
@@ -674,14 +674,17 @@ async function quickSave(record,label){
 }
 async function timerAction(action,side){
  if(action==='cancel'&&!confirm('직수 타이머를 기록 없이 취소할까요?'))return;
- const asleep=action==='finish'?openSleep(Somhouse.localDateTime(),false):null;
- let saved=null;
- if(!await sharedChange(async()=>{const r=await shared.timer(action,side);saved=r.saved||null;return r.data;}))return;
+ const asleep=action==='finish'?openSleep(Somhouse.localDateTime()):null;
+ let saved=null,wokeAtStart=null;
+ if(!await sharedChange(async()=>{const r=await shared.timer(action,side);saved=r.saved||null;wokeAtStart=r.woke||null;return r.data;}))return;
  render();
  if(saved){
   const woke=asleep&&data.records.find(r=>r.id===asleep.id&&r.end);
   showToast(`🤱 직수 ${saved.amount} 저장했어요${saved.memo.includes('·')?` (${saved.memo.split('· ').slice(1).join('· ')})`:''}`,undoActions(saved,woke));
- }else if(action==='start')message(`${side==='우'?'오른쪽':'왼쪽'}부터 직수 타이머를 시작했어요. 다른 휴대폰에서도 보이고 이어서 끝낼 수 있어요.`);
+ }else if(action==='start'){
+  const slept=wokeAtStart&&data.records.find(r=>r.id===wokeAtStart.id);
+  message(`${side==='우'?'오른쪽':'왼쪽'}부터 직수 타이머를 시작했어요.${slept?` ${slept.category}은 ${slept.end.slice(11)}에 끝냈어요(취소하면 다시 이어져요).`:''} 다른 휴대폰에서도 보이고 이어서 끝낼 수 있어요.`);
+ }
 }
 async function handoffAction(action){
  const current=shared?.settings?.handoff?.text||'';
