@@ -137,3 +137,16 @@ test('follow-ups send only recent, short, text-only turns in each AI format',asy
  await direct.ask('codex',{key:'k',model:'m'},'안녕',null);
  assert.equal(JSON.parse(calls[0].options.body).input,JSON.stringify({question:'안녕'}));
 });
+
+test('a photo goes with the new question in each AI format',async()=>{
+ const image={mime:'image/png',data:'QUJD'};
+ let calls=serve({'https://api.anthropic.com/v1/messages':[200,{stop_reason:'end_turn',content:[{type:'text',text:'ok'}]}]});
+ await direct.ask('claude',{key:'k',model:'m'},'일정',null,[],image);
+ assert.deepEqual(JSON.parse(calls[0].options.body).messages[0].content[0],{type:'image',source:{type:'base64',media_type:'image/png',data:'QUJD'}});
+ calls=serve({'https://api.openai.com/v1/responses':[200,{output:[{type:'message',content:[{type:'output_text',text:'ok'}]}]}]});
+ await direct.ask('codex',{key:'k',model:'m'},'일정',null,[],image);
+ assert.deepEqual(JSON.parse(calls[0].options.body).input[0].content[0],{type:'input_image',image_url:'data:image/png;base64,QUJD'});
+ calls=serve({'https://generativelanguage.googleapis.com/v1beta/models/m:generateContent':[200,{candidates:[{content:{parts:[{text:'ok'}]}}]}]});
+ await direct.ask('antigravity',{key:'k',model:'m'},'일정',null,[],image);
+ assert.deepEqual(JSON.parse(calls[0].options.body).contents[0].parts[0],{inlineData:{mimeType:'image/png',data:'QUJD'}});
+});

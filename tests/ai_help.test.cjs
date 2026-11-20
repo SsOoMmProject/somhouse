@@ -123,3 +123,50 @@ test('a review item the rules could not read opens the form with the AI reading'
  assert.match(f.b.get('#fields').innerHTML,/value="90"/);
  assert.match(f.b.get('#fields').innerHTML,/음성 원문: 아침에 분유 구십/);
 });
+
+test('a sentence or a photo becomes schedule entries to check',async()=>{
+ const f=family({reply:JSON.stringify({items:[
+  {date:'2099-12-01T10:30',title:'소아과 예방접종',place:'튼튼소아과',who:'아기',memo:'수첩 챙기기',time_unknown:false},
+  {date:'2099-12-03T09:00',title:'문화센터',place:'',who:'이웃집',memo:'',time_unknown:true},
+  {date:'',title:'',place:'',who:'',memo:''},
+ ]})});
+ f.b.context.FileReader=class{readAsDataURL(){this.result='data:image/jpeg;base64,UEhPVE8=';this.onload();}};
+ await f.open('schedule');
+ assert.match(f.html(),/✨ 문장이나 사진으로 일정 만들기/);
+ assert.match(f.html(),/data-ai-image="schedule"/);
+ await f.b.events.get('change')({target:{dataset:{aiImage:'schedule'},files:[{type:'image/jpeg',name:'예약.jpg',size:1000}]}});
+ assert.match(f.html(),/<span class="badge">예약\.jpg<\/span>/);
+ f.type('schedule','다음 주 화요일 예방접종');
+ await f.click({aiRun:'schedule'});await f.b.settle();
+ const parts=f.asked[0].contents.at(-1).parts;
+ assert.deepEqual(parts[0],{inlineData:{mimeType:'image/jpeg',data:'UEhPVE8='}});
+ assert.match(JSON.parse(parts[1].text).question,/사진과 문장에서 가족 일정을 찾아/);
+ const html=f.html();
+ assert.match(html,/소아과 예방접종 · 튼튼소아과/);
+ // An unknown "who" becomes 가족; an unknown time is a note, not a blocker; an empty entry must be fixed.
+ assert.match(html,/who-가족">가족<\/span> 문화센터/);
+ assert.match(html,/시각을 몰라 09:00으로 넣었어요/);
+ assert.match(html,/일정 이름을 입력해 주세요/);
+ await f.click({aiSave:'schedule'});await f.b.settle();
+ assert.deepEqual(f.b.server.data.schedule.map(x=>[x.date,x.title,x.who]).sort(),[['2099-12-01T10:30','소아과 예방접종','아기'],['2099-12-03T09:00','문화센터','가족']]);
+ assert.equal(f.b.server.data.schedule[0].type,undefined);
+ // The photo stays until every entry is handled.
+ assert.match(f.html(),/예약\.jpg/);
+ await f.click({aiDrop:'schedule:0'});
+ assert.doesNotMatch(f.html(),/data-ai-cancel/);
+});
+
+test('only an own-key AI is offered photos; the Mac gets text only',async()=>{
+ const f=family({key:false,connected:['claude'],mac:JSON.stringify({items:[]})});
+ await f.open('schedule');
+ assert.doesNotMatch(f.html(),/data-ai-image/);
+ assert.match(f.html(),/사진은 내 API 키로 연결한 AI만 읽을 수 있어요/);
+ f.b.eval("aiHelp.schedule.image={mime:'image/jpeg',data:'x',name:'a.jpg'}");
+ await f.click({aiRun:'schedule'});await f.b.settle();
+ assert.equal(f.asked.length,0);
+ assert.match(f.html(),/사진은 AI 탭에서 내 API 키로 연결한 AI만 읽을 수 있어요/);
+ f.b.eval("aiHelp.schedule.image=null");
+ f.type('schedule','내일 3시 미용실');
+ await f.click({aiRun:'schedule'});await f.b.settle();
+ assert.match(f.html(),/일정으로 바꿀 내용을 찾지 못했어요/);
+});
