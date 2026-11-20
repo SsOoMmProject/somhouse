@@ -44,7 +44,7 @@ ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA = Path.home() / "Library/Application Support/Somhouse"
 DEFAULT_RETURN = "https://ssoommproject.github.io/somhouse/"
 KINDS = ("records", "schedule", "shopping")
-STATIC = {"index.html", "app.js", "ai-direct.js", "ai-help.js", "service.js", "shared.js", "config.js", "style.css",
+STATIC = {"index.html", "app.js", "ai-direct.js", "ai-help.js", "insights.js", "service.js", "shared.js", "config.js", "style.css",
           "manifest.webmanifest", "icon-192.png", "icon-512.png", "about.html", "privacy.html", "terms.html"}
 ITERATIONS = 600_000
 MAX_BODY = 4 * 1024 * 1024
@@ -127,8 +127,11 @@ def timer_feeding(timer, ended):
     minutes = {side: round(value / 60) for side, value in seconds.items()}
     total = max(1, round(sum(seconds.values()) / 60))
     sides = " · ".join(f"{side} {minutes[side]}분" for side in TIMER_SIDES if seconds[side] >= 30)
+    # The side fed first and last (a side under 30 seconds was a slip), for "이번엔 어느 쪽부터".
+    order = [segment["side"] for segment in timer["segments"] if seconds[segment["side"]] >= 30] or [timer["segments"][0]["side"]]
     return {"id": "timer-" + secrets.token_hex(12), "type": "feeding", "date": timer["segments"][0]["start"][:16],
-            "category": "모유", "amount": f"{total}분", "memo": ("직수 타이머 · " + sides) if sides else "직수 타이머"}
+            "category": "모유", "amount": f"{total}분", "memo": ("직수 타이머 · " + sides) if sides else "직수 타이머",
+            "firstSide": order[0], "lastSide": order[-1]}
 
 
 def valid_children(value):
@@ -205,9 +208,10 @@ class Store:
     @staticmethod
     def settings(db):
         values = {key: json.loads(value) for key, value in db.execute(
-            "SELECT key,value FROM family_settings WHERE key IN ('children','handoff','timer','feeding_alarm')")}
+            "SELECT key,value FROM family_settings WHERE key IN ('children','handoff','timer','feeding_alarm','nap_alarm')")}
         return {"children": values.get("children", []), "handoff": values.get("handoff"), "timer": values.get("timer"),
-                "feedingAlarm": bool((values.get("feeding_alarm") or {}).get("enabled"))}
+                "feedingAlarm": bool((values.get("feeding_alarm") or {}).get("enabled")),
+                "napAlarm": bool((values.get("nap_alarm") or {}).get("enabled"))}
 
     @staticmethod
     def put_setting(db, key, value):
@@ -1054,13 +1058,15 @@ class Handler(BaseHTTPRequestHandler):
                 elif path == "/api/handoff" and self.command == "POST":
                     result = self.handoff_request(db, store, username)
                 elif path == "/api/feeding-alarm" and self.command == "POST":
-                    # A Calendar reminder when a usual feeding time passes; it needs the family's Google Calendar.
-                    enabled = self.body(1024).get("enabled")
-                    if not isinstance(enabled, bool):
-                        raise Problem(400, "밥 알람 설정을 확인해 주세요.")
+                    # Calendar reminders when a usual feeding time passes ("feeding") or the baby has been awake
+                    # longer than usual ("nap"); they need the family's Google Calendar.
+                    body = self.body(1024)
+                    enabled, kind = body.get("enabled"), body.get("kind", "feeding")
+                    if not isinstance(enabled, bool) or kind not in ("feeding", "nap"):
+                        raise Problem(400, "알람 설정을 확인해 주세요.")
                     if enabled and (google is None or google.calendar is None):
-                        raise Problem(409, "Google 캘린더를 연결하면 밥 알람을 켤 수 있어요.")
-                    store.put_setting(db, "feeding_alarm", alarm_setting(enabled, username))
+                        raise Problem(409, "Google 캘린더를 연결하면 " + ("밥" if kind == "feeding" else "낮잠") + " 알람을 켤 수 있어요.")
+                    store.put_setting(db, kind + "_alarm", alarm_setting(enabled, username))
                     result = {"data": store.state(db), "settings": store.settings(db)}
                     if google is not None:
                         result["sources"] = google.sources()

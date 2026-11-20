@@ -1,4 +1,4 @@
-"""Feeding alarm: the times of day the baby usually eats, and one Calendar reminder when a usual time passes
+"""Feeding and nap alarms. Feeding: the times of day the baby usually eats, and one Calendar reminder when a usual time passes
 without a feeding.
 
 The usual times come from the last 7 days of feedings (no AI). When a usual time plus a grace period goes by
@@ -21,6 +21,9 @@ GRACE = timedelta(minutes=30)    # the alarm goes off 30 minutes after the usual
 KEEP = timedelta(minutes=20)     # an alarm that just went off stays put for a while before moving on
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS google_feeding_alarm (
+    binding TEXT PRIMARY KEY, event_id TEXT NOT NULL, alarm_at TEXT NOT NULL, slot TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS google_nap_alarm (
     binding TEXT PRIMARY KEY, event_id TEXT NOT NULL, alarm_at TEXT NOT NULL, slot TEXT NOT NULL
 );
 """
@@ -91,58 +94,58 @@ def next_alarm(feedings, now, slots):
     return None, None
 
 
-class FeedingAlarm:
-    """Keeps at most one alarm event in the feeding calendar, for families who turned the alarm on."""
+def records_of(db):
+    return [json.loads(row[0]) for row in db.execute("SELECT body FROM items WHERE kind='records'")]
+
+
+def setting_on(db, key):
+    row = db.execute("SELECT value FROM family_settings WHERE key=?", (key,)).fetchone()
+    return bool(row and (json.loads(row[0]) or {}).get("enabled"))
+
+
+class CalendarAlarm:
+    """Keeps at most one alarm event in the app's feeding calendar, moved to the next alarm time.
+
+    A subclass names its table and setting, plans the next alarm and writes the event's words.
+    """
+    TABLE = SETTING = ""
 
     def __init__(self, calendar):
         self.calendar, self.store, self.binding = calendar, calendar.store, calendar.binding
 
     def plan(self, db, now=None):
-        now = now or local_now()
-        setting = db.execute("SELECT value FROM family_settings WHERE key='feeding_alarm'").fetchone()
-        enabled = bool(setting and (json.loads(setting[0]) or {}).get("enabled"))
-        feedings = feeding_times(json.loads(row[0]) for row in db.execute("SELECT body FROM items WHERE kind='records'"))
-        slots = usual_times(feedings, now)
-        alarm, slot = next_alarm(feedings, now, slots) if enabled else (None, None)
-        return enabled, slots, alarm, slot
+        raise NotImplementedError
 
-    def status(self, db):
-        enabled, slots, alarm, slot = self.plan(db)
-        return {"enabled": enabled, "slots": [{"time": s["time"], "days": s["days"]} for s in slots],
-                "next": alarm.isoformat(timespec="minutes") if alarm else None,
-                "usual": slot["time"] if slot else None}
+    def words(self, plan):
+        raise NotImplementedError
 
     def sync(self):
         with self.store.connect() as db:
-            _, _, alarm, slot = self.plan(db)
-            row = db.execute("SELECT event_id,alarm_at,slot FROM google_feeding_alarm WHERE binding=?",
-                             (self.binding,)).fetchone()
-        wanted = (alarm.isoformat(timespec="minutes"), slot["time"]) if alarm else None
+            plan = self.plan(db)
+            row = db.execute(f"SELECT event_id,alarm_at,slot FROM {self.TABLE} WHERE binding=?", (self.binding,)).fetchone()
+        alarm = plan.get("alarm")
+        wanted = (alarm.isoformat(timespec="minutes"), plan["key"]) if alarm else None
         if row and wanted == (row[1], row[2]):
             return
         if wanted is None:
             if row:
                 self.calendar.remove_event(row[0])
                 with self.store.lock, self.store.connect() as db:
-                    db.execute("DELETE FROM google_feeding_alarm WHERE binding=? AND event_id=?", (self.binding, row[0]))
+                    db.execute(f"DELETE FROM {self.TABLE} WHERE binding=? AND event_id=?", (self.binding, row[0]))
             return
         event_id = row[0] if row else secrets.token_hex(20)
         if not row:
             # Saved first, so a crash after creating the event cannot leave an untracked one behind.
             with self.store.lock, self.store.connect() as db:
-                db.execute("INSERT OR REPLACE INTO google_feeding_alarm VALUES (?,?,?,?)", (self.binding, event_id, "", ""))
-        event_id = self.write(event_id, alarm, slot, new=row is None)
+                db.execute(f"INSERT OR REPLACE INTO {self.TABLE} VALUES (?,?,?,?)", (self.binding, event_id, "", ""))
+        event_id = self.write(event_id, alarm, *self.words(plan), new=row is None)
         with self.store.lock, self.store.connect() as db:
-            db.execute("INSERT OR REPLACE INTO google_feeding_alarm VALUES (?,?,?,?)",
-                       (self.binding, event_id, wanted[0], wanted[1]))
+            db.execute(f"INSERT OR REPLACE INTO {self.TABLE} VALUES (?,?,?,?)", (self.binding, event_id, *wanted))
 
-    def write(self, event_id, alarm, slot, *, new):
+    def write(self, event_id, alarm, summary, description, *, new):
         start = alarm.replace(tzinfo=SEOUL)
         payload = {
-            "summary": f"🍼 아기 밥 시간이 지났어요 (평소 {slot['time']})",
-            "description": (f"최근 7일 중 {slot['days']}일은 {slot['time']}쯤 수유했는데, "
-                            f"{(alarm - GRACE - BEFORE).strftime('%H:%M')} 이후 수유 기록이 없어요.\n"
-                            "수유를 기록하면 이 알림은 다음 수유 시간대로 옮겨져요. 솜하우스 통계 화면에서 끌 수 있어요."),
+            "summary": summary, "description": description,
             "start": {"dateTime": start.isoformat(), "timeZone": "Asia/Seoul"},
             "end": {"dateTime": (start + timedelta(minutes=5)).isoformat(), "timeZone": "Asia/Seoul"},
             "transparency": "transparent",
@@ -165,6 +168,114 @@ class FeedingAlarm:
     def calendar_url(self):
         from calendar_records import calendar_url
         return calendar_url(self.calendar.outbox)
+
+
+class FeedingAlarm(CalendarAlarm):
+    """When a usual feeding time passes without a feeding."""
+    TABLE, SETTING = "google_feeding_alarm", "feeding_alarm"
+
+    def plan(self, db, now=None):
+        now = now or local_now()
+        enabled = setting_on(db, self.SETTING)
+        feedings = feeding_times(records_of(db))
+        slots = usual_times(feedings, now)
+        alarm, slot = next_alarm(feedings, now, slots) if enabled else (None, None)
+        return {"enabled": enabled, "slots": slots, "alarm": alarm, "slot": slot, "key": slot["time"] if slot else ""}
+
+    def words(self, plan):
+        slot, alarm = plan["slot"], plan["alarm"]
+        return (f"🍼 아기 밥 시간이 지났어요 (평소 {slot['time']})",
+                f"최근 7일 중 {slot['days']}일은 {slot['time']}쯤 수유했는데, "
+                f"{(alarm - GRACE - BEFORE).strftime('%H:%M')} 이후 수유 기록이 없어요.\n"
+                "수유를 기록하면 이 알림은 다음 수유 시간대로 옮겨져요. 솜하우스 통계 화면에서 끌 수 있어요.")
+
+    def status(self, db):
+        plan = self.plan(db)
+        return {"enabled": plan["enabled"], "slots": [{"time": s["time"], "days": s["days"]} for s in plan["slots"]],
+                "next": plan["alarm"].isoformat(timespec="minutes") if plan["alarm"] else None,
+                "usual": plan["slot"]["time"] if plan["slot"] else None}
+
+
+# Wake windows: how long the baby stays awake in the daytime before sleeping again.
+DAY_START, DAY_END = 7, 20       # daytime hours: wake-ups counted, and alarms allowed until DAY_END + 1
+WAKE_MIN, WAKE_MAX = 20, 6 * 60  # a wake window outside 20 minutes ~ 6 hours is a missing record
+WAKE_SAMPLES = 5
+
+
+def sleeps_of(items):
+    out = []
+    for item in items:
+        if not isinstance(item, dict) or item.get("type") != "sleep":
+            continue
+        try:
+            start = datetime.strptime(str(item.get("date", ""))[:16], "%Y-%m-%dT%H:%M")
+            end = datetime.strptime(str(item["end"])[:16], "%Y-%m-%dT%H:%M") if item.get("end") else None
+        except ValueError:
+            continue
+        out.append((start, end))
+    return sorted(out)
+
+
+def wake_windows(sleeps, now):
+    """Minutes from a daytime wake-up to the next sleep, over the last 7 days."""
+    since, windows = now - timedelta(days=DAYS), []
+    for (_, woke), (slept, _) in zip(sleeps, sleeps[1:]):
+        if woke and since <= woke < slept <= now and DAY_START <= woke.hour < DAY_END:
+            minutes = (slept - woke).total_seconds() / 60
+            if WAKE_MIN <= minutes <= WAKE_MAX:
+                windows.append(minutes)
+    return windows
+
+
+def usual_wake(windows):
+    """The median wake window to 5 minutes, once there are enough of them."""
+    if len(windows) < WAKE_SAMPLES:
+        return None
+    ordered = sorted(windows)
+    middle = len(ordered) // 2
+    median = ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+    return int(round(median / 5) * 5)
+
+
+def next_nap(sleeps, now, usual):
+    """When the baby has been awake for the usual time in the daytime, as (alarm, woke), or (None, None)."""
+    past = [(start, end) for start, end in sleeps if start <= now]
+    if not usual or not past:
+        return None, None
+    start, end = past[-1]
+    if end is None or end > now:
+        return None, None  # asleep (or the last sleep has no wake time yet)
+    alarm = end + timedelta(minutes=usual)
+    if not DAY_START <= end.hour < DAY_END or alarm.hour >= DAY_END + 1 or alarm.date() != end.date() or alarm <= now - KEEP:
+        return None, None
+    return alarm, end
+
+
+class NapAlarm(CalendarAlarm):
+    """When the baby has been awake longer than usual in the daytime."""
+    TABLE, SETTING = "google_nap_alarm", "nap_alarm"
+
+    def plan(self, db, now=None):
+        now = now or local_now()
+        enabled = setting_on(db, self.SETTING)
+        sleeps = sleeps_of(records_of(db))
+        windows = wake_windows(sleeps, now)
+        usual = usual_wake(windows)
+        alarm, woke = next_nap(sleeps, now, usual) if enabled else (None, None)
+        return {"enabled": enabled, "usual": usual, "samples": len(windows), "alarm": alarm, "woke": woke,
+                "key": woke.isoformat(timespec="minutes") if woke else ""}
+
+    def words(self, plan):
+        usual, woke = plan["usual"], plan["woke"]
+        length = f"{usual // 60}시간 {usual % 60}분" if usual >= 60 else f"{usual}분"
+        return (f"😴 낮잠 시간이에요 (깬 지 {length})",
+                f"최근 7일 낮에는 깬 뒤 보통 {length} 지나 다시 잠들었어요. {woke.strftime('%H:%M')}에 깬 뒤 수면 기록이 없어요.\n"
+                "수면을 기록하면 이 알림은 사라져요. 솜하우스 통계 화면에서 끌 수 있어요.")
+
+    def status(self, db):
+        plan = self.plan(db)
+        return {"enabled": plan["enabled"], "usual_minutes": plan["usual"], "samples": plan["samples"],
+                "next": plan["alarm"].isoformat(timespec="minutes") if plan["alarm"] else None}
 
 
 def setting_value(enabled, username, now=None):

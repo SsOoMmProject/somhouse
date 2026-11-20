@@ -5,7 +5,7 @@
    app computes; record text is never sent. Loaded before app.js and only called after it has run. */
 const aiHelp={loading:false,records:null,schedule:null,stats:null,scope:''};
 function aiHelpReset(){
- aiHelp.loading=false;aiHelp.scope='';
+ aiHelp.loading=false;aiHelp.scope='';aiHelp.guesses=new Map();aiHelp.guessing=false;aiHelp.autoCount=0;
  aiHelp.records={text:'',items:null,status:'',working:false};
  aiHelp.schedule={text:'',image:null,items:null,status:'',working:false};
  aiHelp.stats={summary:'',by:'',at:'',status:'',working:false};
@@ -154,22 +154,56 @@ function aiHelpDrop(k,index){
 }
 
 // ② Voice or Calendar input the rules could not read: the AI suggests a reading, the form opens to check it.
-async function aiHelpReview(key){
- const entry=reviewItems().find(x=>x.key===key),picked=aiHelpOption(),state=ai;
- if(!entry||!picked||aiHelp.records.working)return;
+// Opening the review page reads up to 5 items in the background (5 in all until logout, so the AI's limits are
+// not used up); each reading is kept until logout. The rest wait for their button.
+const REVIEW_AUTO=5;
+async function aiGuess(picked,entry){
  const now=aiStamp(entry.when)||Somhouse.localDateTime();
- aiHelp.records.working=true;message(`${aiName(picked)}가 ‘${entry.title||'입력'}’을 해석하고 있어요…`);connectionView();
+ const answer=await aiHelpAsk(picked,aiRecordPrompt(now,String(entry.title||'').slice(0,AI_INPUT_MAX)));
+ return aiRecordItems(aiJSON(answer),now).find(x=>['feeding','sleep'].includes(x.record.type))||null;
+}
+function aiGuessForm(entry,found){
+ openForm(found.record.type,null,{...found.record,memo:found.record.memo||(entry.title?'음성 원문: '+entry.title:'')},entry.key);
+}
+async function aiReviewAuto(){
+ const picked=aiHelpOption(),state=ai;
+ if(!picked||aiHelp.guessing)return;
+ const todo=reviewItems().filter(x=>x.status!=='웹 기록 유지'&&!aiHelp.guesses.has(x.key)).slice(0,REVIEW_AUTO-aiHelp.autoCount);
+ if(!todo.length)return;
+ aiHelp.guessing=true;
  try{
-  const answer=await aiHelpAsk(picked,aiRecordPrompt(now,String(entry.title||'').slice(0,AI_INPUT_MAX)));
+  for(const entry of todo){
+   if(ai!==state||page!=='review')break;
+   aiHelp.autoCount++;aiHelp.guesses.set(entry.key,{state:'working'});if(!editingScreen())render();
+   try{const found=await aiGuess(picked,entry);if(ai!==state)return;aiHelp.guesses.set(entry.key,found?{state:'done',found}:{state:'none'});}
+   catch(error){
+    if(ai!==state)return;
+    aiHelp.guesses.set(entry.key,{state:'error',message:error.message});
+    if(error.status===401&&picked.mode!=='key'){showLogin(error.message);return;}
+    break; // a limit or a network problem: leave the rest for the button
+   }
+   if(!editingScreen())render();
+  }
+ }finally{if(ai===state){aiHelp.guessing=false;if(page==='review'&&!editingScreen())render();}}
+}
+async function aiHelpReview(key){
+ const entry=reviewItems().find(x=>x.key===key),picked=aiHelpOption(),state=ai,cached=aiHelp.guesses.get(key);
+ if(!entry||!picked)return;
+ if(cached?.state==='done'){aiGuessForm(entry,cached.found);return;}
+ if(aiHelp.records.working||cached?.state==='working')return;
+ aiHelp.records.working=true;aiHelp.guesses.set(key,{state:'working'});message(`${aiName(picked)}가 ‘${entry.title||'입력'}’을 해석하고 있어요…`);render();
+ try{
+  const found=await aiGuess(picked,entry);
   if(ai!==state)return;
-  const found=aiRecordItems(aiJSON(answer),now).find(x=>['feeding','sleep'].includes(x.record.type));
+  aiHelp.guesses.set(key,found?{state:'done',found}:{state:'none'});
   if(!found){message('AI도 이 입력을 수유나 수면으로 확실히 읽지 못했어요. 직접 확인해 주세요.');return;}
   message(`${aiName(picked)}가 해석한 내용이에요. 확인하고 저장해 주세요.`);
-  openForm(found.record.type,null,{...found.record,memo:found.record.memo||(entry.title?'음성 원문: '+entry.title:'')},entry.key);
+  aiGuessForm(entry,found);
  }catch(error){
   if(ai!==state)return;
+  aiHelp.guesses.set(key,{state:'error',message:error.message});
   if(error.status===401&&picked.mode!=='key')showLogin(error.message);else message(error.message);
- }finally{if(ai===state){aiHelp.records.working=false;connectionView();}}
+ }finally{if(ai===state){aiHelp.records.working=false;connectionView();if(!$('#dialog').open)render();}}
 }
 
 function aiHelpCard(k){
@@ -188,7 +222,19 @@ function aiHelpCard(k){
  return `<section class="card ai-help" aria-label="${title.slice(2)}"><h2>${title}</h2><p class="caption">${example} · ${esc(aiName(picked))}가 정리하면 확인하고 저장해요.</p><textarea data-ai-input="${k}" maxlength="${AI_INPUT_MAX}" placeholder="${records?'있었던 일을 편하게 적어 주세요':'일정 내용을 적어 주세요'}">${esc(draft.text)}</textarea><div class="actions ai-help-actions">${photo}<button type="button" data-ai-run="${k}"${draft.working?' disabled':''}>${draft.working?'정리하는 중…':'AI로 정리'}</button></div>${draft.status?`<p class="caption" role="status">${esc(draft.status)}</p>`:''}${list}${save}</section>`;
 }
 function aiReviewButton(x){
- return aiHelpOption()&&x.status!=='웹 기록 유지'?`<button class="secondary" data-ai-review="${esc(x.key)}">✨ AI로 해석</button>`:'';
+ if(!aiHelpOption()||x.status==='웹 기록 유지')return '';
+ const g=aiHelp.guesses.get(x.key);
+ if(g?.state==='done')return `<button data-ai-review="${esc(x.key)}">✨ AI 추정대로 확인</button>`;
+ if(g?.state==='working')return '<button class="secondary" disabled>✨ 해석하는 중…</button>';
+ if(g?.state==='none')return '';
+ return `<button class="secondary" data-ai-review="${esc(x.key)}">✨ AI로 해석</button>`;
+}
+function aiReviewGuess(x){
+ const g=aiHelp.guesses.get(x.key);
+ if(g?.state==='done'){const r=g.found.record;return `<p class="ai-guess">✨ AI 추정: ${desc(r,'records')} · ${esc(r.date.replace('T',' '))}${g.found.problems.length?` <span class="badge warn">${esc(g.found.problems[0])}</span>`:''}</p>`;}
+ if(g?.state==='none')return '<p class="ai-guess caption">✨ AI도 수유나 수면으로 확실히 읽지 못했어요.</p>';
+ if(g?.state==='error')return `<p class="ai-guess caption">✨ ${esc(g.message)}</p>`;
+ return '';
 }
 
 // ④ The week in three lines. The app computes the numbers (complete days only: the 7 days up to

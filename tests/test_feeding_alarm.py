@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from feeding_alarm import FeedingAlarm, feeding_times, next_alarm, usual_times
+from feeding_alarm import FeedingAlarm, feeding_times, next_alarm, next_nap, sleeps_of, usual_times, usual_wake, wake_windows
 from google_records import GoogleError, GoogleRecords, encode
 from server import Store
 
@@ -178,6 +178,77 @@ class CalendarAlarm(unittest.TestCase):
         self.assertEqual(status["feeding_alarm"]["next"], "2026-11-21T14:35")
         self.assertTrue(settings["feedingAlarm"])
         self.assertEqual(json.loads(json.dumps(status))["feeding_alarm"]["usual"], "14:05")
+
+
+
+def naps(days=range(1, 8), awake=110):
+    """Each day: night sleep until 07:00, a nap after `awake` minutes (1 hour long), then another after `awake` again."""
+    items = []
+    for d in days:
+        day = (NOW - timedelta(days=d)).replace(hour=0, minute=0)
+        first = day.replace(hour=7) + timedelta(minutes=awake)
+        second = first + timedelta(minutes=60 + awake)
+        items += [{"type": "sleep", "date": (day - timedelta(hours=3)).isoformat(timespec="minutes"), "end": day.replace(hour=7).isoformat(timespec="minutes")},
+                  {"type": "sleep", "date": first.isoformat(timespec="minutes"), "end": (first + timedelta(minutes=60)).isoformat(timespec="minutes")},
+                  {"type": "sleep", "date": second.isoformat(timespec="minutes"), "end": (second + timedelta(minutes=60)).isoformat(timespec="minutes")}]
+    return items
+
+
+class NapTiming(unittest.TestCase):
+    def test_usual_daytime_wake_window(self):
+        windows = wake_windows(sleeps_of(naps()), NOW)
+        self.assertEqual(set(windows), {110.0})
+        self.assertEqual(usual_wake(windows), 110)
+        self.assertIsNone(usual_wake([100, 120, 90, 80]))  # fewer than 5
+        self.assertEqual(usual_wake([60, 70, 80, 90, 500, 100]), 85)
+        # A wake-up at night or a gap over 6 hours (a missing record) does not count.
+        night = sleeps_of([{"type": "sleep", "date": "2026-11-20T01:00", "end": "2026-11-20T02:00"},
+                           {"type": "sleep", "date": "2026-11-20T03:00", "end": "2026-11-20T08:00"},
+                           {"type": "sleep", "date": "2026-11-20T15:00", "end": "2026-11-20T16:00"}])
+        self.assertEqual(wake_windows(night, NOW), [])
+
+    def test_alarm_after_the_usual_time_awake_in_the_daytime(self):
+        woke = NOW.replace(hour=11, minute=0)
+        sleeps = [(woke - timedelta(hours=1), woke)]
+        self.assertEqual(next_nap(sleeps, NOW, 110), (woke + timedelta(minutes=110), woke))
+        # Asleep now, no usual time yet, or woke in the evening: no alarm.
+        self.assertEqual(next_nap([(NOW.replace(hour=11), None)], NOW, 110), (None, None))
+        self.assertEqual(next_nap(sleeps, NOW, None), (None, None))
+        evening = NOW.replace(hour=20, minute=30)
+        self.assertEqual(next_nap([(evening - timedelta(hours=1), evening)], evening, 60), (None, None))
+        # Gone off over 20 minutes ago: dropped.
+        self.assertEqual(next_nap(sleeps, woke + timedelta(minutes=140), 110), (None, None))
+
+
+class CalendarNapAlarm(unittest.TestCase):
+    """The nap alarm uses its own event, next to the feeding alarm's."""
+    setUp, api = CalendarAlarm.setUp, CalendarAlarm.api
+
+    def test_nap_alarm_follows_the_last_wake_up(self):
+        with self.store.connect() as db:
+            for i, item in enumerate(naps() + [{"type": "sleep", "date": "2026-11-21T09:00", "end": "2026-11-21T11:00"}]):
+                db.execute("INSERT INTO items VALUES ('records',?,?)", (f"s{i}", encode({"id": f"s{i}", "category": "낮잠", **item})))
+            self.store.put_setting(db, "nap_alarm", {"enabled": True})
+            with patch("feeding_alarm.local_now", return_value=NOW):
+                self.assertEqual(self.bridge.status(db)["nap_alarm"],
+                                 {"enabled": True, "usual_minutes": 110, "samples": 12, "next": "2026-11-21T12:50"})
+        with patch("feeding_alarm.local_now", return_value=NOW), patch.object(self.bridge.api, "request", side_effect=self.api):
+            self.bridge.calendar.nap_alarm.sync()
+        method, _, body = self.calls[0]
+        self.assertEqual((method, body["start"]["dateTime"]), ("POST", "2026-11-21T12:50:00+09:00"))
+        self.assertEqual(body["summary"], "😴 낮잠 시간이에요 (깬 지 1시간 50분)")
+        self.assertIn("11:00에 깬 뒤 수면 기록이 없어요", body["description"])
+        # Falling asleep removes it; the feeding alarm's table is untouched.
+        with self.store.connect() as db:
+            db.execute("INSERT INTO items VALUES ('records','nap',?)",
+                       (encode({"id": "nap", "type": "sleep", "date": "2026-11-21T12:30", "end": "", "category": "낮잠"}),))
+        with patch("feeding_alarm.local_now", return_value=NOW.replace(hour=12, minute=35)), \
+                patch.object(self.bridge.api, "request", side_effect=self.api):
+            self.bridge.calendar.nap_alarm.sync()
+        self.assertEqual(self.calls[1][:2], ("DELETE", body["id"]))
+        with self.store.connect() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM google_nap_alarm").fetchone())
+            self.assertIsNone(db.execute("SELECT 1 FROM google_feeding_alarm").fetchone())
 
 
 if __name__ == "__main__":
