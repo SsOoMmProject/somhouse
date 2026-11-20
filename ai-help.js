@@ -191,6 +191,48 @@ function aiReviewButton(x){
  return aiHelpOption()&&x.status!=='웹 기록 유지'?`<button class="secondary" data-ai-review="${esc(x.key)}">✨ AI로 해석</button>`:'';
 }
 
+// ④ The week in three lines. The app computes the numbers (complete days only: the 7 days up to
+// yesterday against the 7 before); the AI only puts them into words.
+function aiWeekNumbers(now=new Date()){
+ const yesterday=Somhouse.addDays(Somhouse.localDateTime(now).slice(0,10),-1),tenth=v=>Math.round(v*10)/10;
+ const week=(from,to)=>{
+  const s=Somhouse.rangeSummary(data.records,from,to,now);
+  const days=new Set(data.records.filter(x=>['feeding','sleep','diaper'].includes(x.type)&&x.date.slice(0,10)>=from&&x.date.slice(0,10)<=to).map(x=>x.date.slice(0,10))).size;
+  return {from,to,days_with_records:days,feedings_per_day:tenth(s.count/7),measured_ml_per_day:s.measuredCount?tenth(s.volume/7):null,
+   breastfeeding_minutes_per_day:s.timedCount?tenth(s.minutes/7):null,sleep_hours_per_day:tenth(s.sleepMinutes/7/60),
+   diapers_per_day:tenth(s.diaperCount/7),poo_per_day:tenth(s.pooCount/7)};
+ };
+ return {this_week:week(Somhouse.addDays(yesterday,-6),yesterday),last_week:week(Somhouse.addDays(yesterday,-13),Somhouse.addDays(yesterday,-7))};
+}
+function aiSummaryPrompt(numbers){
+ return `아래는 아기 기록을 앱이 계산한 하루 평균 숫자예요. this_week는 어제까지 최근 7일, last_week는 그 전 7일이고 null은 그 종류의 기록이 없다는 뜻이에요.
+세 줄 이내로 한국어로 요약하세요. 첫 줄은 수유, 둘째 줄은 수면, 셋째 줄은 기저귀이고, 지난주와 비교해 늘었는지 줄었는지 숫자와 함께 말하세요.
+숫자에 없는 내용은 추측하지 마세요. days_with_records가 7보다 적으면 기록이 빠진 날이 있을 수 있다고 알려 주세요.
+의료 판단은 하지 말고, 걱정되는 변화가 있으면 소아과 상담을 권하세요.
+숫자: ${JSON.stringify(numbers)}`;
+}
+async function aiHelpSummary(){
+ const draft=aiHelp.stats,picked=aiHelpOption(),state=ai;
+ if(!picked||draft.working)return;
+ const numbers=aiWeekNumbers();
+ if(!numbers.this_week.days_with_records&&!numbers.last_week.days_with_records){draft.status='요약할 기록이 아직 없어요. 며칠 기록한 뒤 다시 눌러 주세요.';render();return;}
+ draft.working=true;draft.status=`${aiName(picked)}가 요약하고 있어요…`;render();
+ try{
+  const answer=await aiHelpAsk(picked,aiSummaryPrompt(numbers));
+  if(ai!==state)return;
+  Object.assign(draft,{summary:answer.trim().slice(0,1000),by:aiName(picked),at:Somhouse.localDateTime(),status:''});
+ }catch(error){
+  if(ai!==state)return;
+  if(error.status===401&&picked.mode!=='key'){showLogin(error.message);return;}
+  draft.status=error.message;
+ }finally{if(ai===state){draft.working=false;if(!editingScreen())render();}}
+}
+function aiSummaryCard(){
+ const picked=aiHelpOption();if(!picked)return '';
+ const draft=aiHelp.stats;
+ return `<section class="card ai-help ai-summary" aria-label="AI 주간 요약"><h2>✨ AI 주간 요약</h2><p class="caption">어제까지 7일을 그 전 7일과 비교해요. 기록 원문은 보내지 않고 앱이 계산한 하루 평균 숫자만 ${esc(aiName(picked))}에게 보내요.</p>${draft.summary?`<p class="ai-summary-text">${esc(draft.summary)}</p><p class="caption">${esc(draft.by)} · ${esc(draft.at.replace('T',' '))}</p>`:''}<div class="actions"><button type="button" data-ai-summary="1"${draft.working?' disabled':''}>${draft.working?'요약하는 중…':draft.summary?'다시 요약':'요약 받기'}</button></div>${draft.status?`<p class="caption" role="status">${esc(draft.status)}</p>`:''}</section>`;
+}
+
 // Called from the app's click handler; true when the click was ours.
 async function aiHelpClick(b){
  const d=b.dataset||{};
@@ -202,6 +244,7 @@ async function aiHelpClick(b){
  if(d.aiDrop){const [k,i]=pick(d.aiDrop);if(k)aiHelpDrop(k,i);return true;}
  if(d.aiPhotoClear){aiHelp.schedule.image=null;render();return true;}
  if(d.aiReview){await aiHelpReview(d.aiReview);return true;}
+ if(d.aiSummary){await aiHelpSummary();return true;}
  return false;
 }
 // Typing is kept in memory so a refresh from another phone does not wipe it.

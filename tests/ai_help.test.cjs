@@ -170,3 +170,36 @@ test('only an own-key AI is offered photos; the Mac gets text only',async()=>{
  await f.click({aiRun:'schedule'});await f.b.settle();
  assert.match(f.html(),/일정으로 바꿀 내용을 찾지 못했어요/);
 });
+
+test('the weekly summary sends only the numbers the app computed',async()=>{
+ const f=family({reply:'수유는 하루 2회로 지난주보다 늘었어요.\n수면은 비슷해요.\n기저귀는 기록이 적어요.'});
+ const day=n=>f.b.eval(`Somhouse.addDays(Somhouse.localDateTime().slice(0,10),${n})`);
+ f.b.server.data.records.push(
+  {id:'a',type:'feeding',date:day(-1)+'T08:00',category:'분유',amount:'100ml',memo:'PRIVATE'},
+  {id:'b',type:'feeding',date:day(-2)+'T08:00',category:'모유',amount:'14분',memo:''},
+  {id:'c',type:'feeding',date:day(-9)+'T08:00',category:'분유',amount:'70ml',memo:''},
+  {id:'d',type:'sleep',date:day(-3)+'T13:00',end:day(-3)+'T14:24',category:'낮잠',memo:''},
+  {id:'e',type:'diaper',date:day(-1)+'T09:00',category:'둘 다',memo:''},
+  {id:'today',type:'feeding',date:day(0)+'T00:01',category:'분유',amount:'999ml',memo:''});
+ await f.b.settle();await f.b.eval('refreshShared(true)');
+ await f.open('stats');
+ assert.match(f.html(),/✨ AI 주간 요약/);
+ await f.click({aiSummary:'1'});await f.b.settle();
+ const question=JSON.parse(f.asked[0].contents[0].parts[0].text).question;
+ const numbers=JSON.parse(question.slice(question.indexOf('숫자: ')+4));
+ assert.deepEqual(numbers.this_week,{from:day(-7),to:day(-1),days_with_records:3,feedings_per_day:0.3,measured_ml_per_day:14.3,breastfeeding_minutes_per_day:2,sleep_hours_per_day:0.2,diapers_per_day:0.1,poo_per_day:0.1});
+ assert.equal(numbers.last_week.measured_ml_per_day,10);
+ // Today's partial day and record text never go.
+ assert.doesNotMatch(question,/PRIVATE|999/);
+ assert.match(f.html(),/<p class="ai-summary-text">수유는 하루 2회로 지난주보다 늘었어요\.\n수면은 비슷해요\./);
+ assert.match(f.html(),/Gemini · \d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
+ assert.match(f.html(),/다시 요약/);
+});
+
+test('the summary waits for some records',async()=>{
+ const f=family();
+ await f.open('stats');
+ await f.click({aiSummary:'1'});await f.b.settle();
+ assert.equal(f.asked.length,0);
+ assert.match(f.html(),/요약할 기록이 아직 없어요/);
+});
