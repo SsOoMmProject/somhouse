@@ -500,7 +500,7 @@ function aiProvidersView(){
   }else if(info&&!config.readOnly){
    const form=`<label class="field">${esc(info.keyName)}로 연결<input type="password" id="ai-key-${id}" autocomplete="off" spellcheck="false" placeholder="키를 붙여 넣어 주세요"></label>`
     +`<div class="actions"><button type="button" data-ai-connect="${id}">연결</button></div>`
-    +`<p class="caption">키는 이 기기에만 저장되고 솜하우스 서버로는 보내지 않아요. 사용한 만큼 AI 회사가 키 주인에게 요금을 청구해요. 공용 기기에서는 연결하지 마세요. <a href="${esc(info.keyPage)}" target="_blank" rel="noopener">키 발급받기</a></p>`;
+    +`<p class="caption">키는 이 기기에만 저장되고 솜하우스 서버로는 보내지 않아요. 사용한 만큼 AI 회사가 키 주인에게 요금을 청구해요. 공용 기기에서는 연결하지 마세요. <a href="${esc(info.guide)}" target="_blank" rel="noopener">키 받는 방법</a> · <a href="${esc(info.keyPage)}" target="_blank" rel="noopener noreferrer">키 발급 페이지</a></p>`;
    // With the Mac already answering, a key is optional: keep its form folded.
    body+=mac?`<details class="ai-admin"><summary>내 ${esc(info.keyName)}로도 연결하기</summary>${form}</details>`:form;
   }

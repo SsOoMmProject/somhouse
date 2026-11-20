@@ -94,6 +94,7 @@ test('AI cards stay folded unless connected, and the picked AI answers the quest
  assert.deepEqual(cards(html),[['codex',true],['claude',true],['antigravity',false]]);
  assert.match(html,/python3 server\.py ai-config --provider antigravity/);
  assert.match(html,/id="ai-key-antigravity"/);
+ assert.match(html,/href="ai-keys\.html#gemini"/);
  assert.doesNotMatch(html,/value="mac:antigravity"/);
  assert.match(html,/value="mac:codex" checked/);
  assert.equal(b.get('#ai-scope-field').hidden,true);

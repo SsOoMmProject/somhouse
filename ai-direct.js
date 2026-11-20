@@ -9,9 +9,9 @@
     + '기록을 생성하거나 변경했다고 말하지 마세요. 의료 진단이나 처방을 제공하지 마세요.';
   const MAX_ANSWER_LENGTH = 8000, TIMEOUT_MS = 60000;
   const PROVIDERS = {
-    codex: {keyName: 'OpenAI API 키', keyPage: 'https://platform.openai.com/api-keys'},
-    claude: {keyName: 'Anthropic API 키', keyPage: 'https://console.anthropic.com/settings/keys'},
-    antigravity: {keyName: 'Gemini API 키', keyPage: 'https://aistudio.google.com/apikey'},
+    codex: {keyName: 'OpenAI API 키', keyPage: 'https://platform.openai.com/api-keys', guide: 'ai-keys.html#openai'},
+    claude: {keyName: 'Anthropic API 키', keyPage: 'https://platform.claude.com/settings/keys', guide: 'ai-keys.html#anthropic'},
+    antigravity: {keyName: 'Gemini API 키', keyPage: 'https://aistudio.google.com/apikey', guide: 'ai-keys.html#gemini'},
   };
   const CLAUDE_MODEL = 'claude-opus-5-5';
   const ANTHROPIC = {'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true'};
