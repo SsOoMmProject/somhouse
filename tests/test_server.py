@@ -274,6 +274,16 @@ class FamilyAPI(unittest.TestCase):
         from google_records import task_title
         self.assertEqual(task_title("records", diaper), "기저귀 · 소변 05:55")
 
+    def test_feeding_alarm_needs_google_calendar(self):
+        token = self.login(1)
+        self.assertEqual(self.request("/api/feeding-alarm", "POST", {"enabled": "yes"}, token)[0], 400)
+        code, body, _ = self.request("/api/feeding-alarm", "POST", {"enabled": True}, token)
+        self.assertEqual((code, body["error"]), (409, "Google 캘린더를 연결하면 밥 알람을 켤 수 있어요."))
+        # Turning it off always works and is shared through the family settings.
+        code, body, _ = self.request("/api/feeding-alarm", "POST", {"enabled": False}, token)
+        self.assertEqual((code, body["settings"]["feedingAlarm"]), (200, False))
+        self.assertFalse(self.request("/api/data", token=token)[1]["settings"]["feedingAlarm"])
+
     def test_handoff_note_and_shared_breastfeeding_timer(self):
         import server as server_module
         token, other = self.login(1), self.login(2)
