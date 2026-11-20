@@ -515,8 +515,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise Problem(409, "처음 연결은 관리자가 맥에서 해야 해요. 연결된 뒤부터 여기서 다시 연결할 수 있어요.")
             state["session"] = hashlib.sha256(auth[7:].encode()).hexdigest()
             state["family"] = family.id
-            # Another family's first connection asks for Calendar too: Nest voice usually lands there.
-            calendar = family.google.calendar if family.google is not None else True
+            # Another family always asks for Calendar too (Nest voice usually lands there), so a family that
+            # left it out at first can add the feeding calendar by reconnecting.
+            calendar = True if not family.home else family.google.calendar
             scopes = GOOGLE_SCOPES + (CALENDAR_SCOPES if calendar else ())
         elif mode == "login":
             scopes = google_web.LOGIN_SCOPES
@@ -585,6 +586,8 @@ class Handler(BaseHTTPRequestHandler):
             connected = read_google_config(family.store.directory) or {}
         if family.google is None:
             return self.first_connect(family, client, tokens, who, connected, fail, back)
+        if not family.home:
+            return self.reconnect_family(family, client, tokens, who, connected, fail, back)
         if not connected.get("subject") or who["sub"] != connected["subject"]:
             return fail("이 가족에 연결된 Google 계정으로 다시 연결해 주세요.")
         google = family.google
@@ -629,8 +632,36 @@ class Handler(BaseHTTPRequestHandler):
             provision(family.store.directory, GoogleAPI(config, tokens["access_token"]), config, calendar)
         except (GoogleError, KeyError, TypeError, ValueError, OSError):
             return fail("Google에 솜하우스 시트·Tasks·캘린더를 만들지 못했어요. 다시 연결하면 만든 것까지 이어서 진행해요.")
-        self.server.start_bridge(family.id, GoogleRecords(family.store, config))
+        bridge = GoogleRecords(family.store, config)
+        with family.store.lock, family.store.connect() as db:
+            bridge.backfill(db)  # records saved before connecting go to the new sheet, Tasks and calendar
+        self.server.start_bridge(family.id, bridge)
         return self.redirect(back + "#google-connected=" + ("new" if calendar else "new-no-calendar"))
+
+    def reconnect_family(self, family, client, tokens, who, connected, fail, back):
+        """Another family's reconnect: renew the grant, add the calendar if newly allowed, and remake a sheet,
+        Tasks list or feeding calendar the family deleted (the bridge then resends what lived there)."""
+        if not connected.get("subject") or who["sub"] != connected["subject"]:
+            return fail("이 가족에 연결된 Google 계정으로 다시 연결해 주세요.")
+        if not tokens.get("refresh_token"):
+            return fail("Google이 계속 연결 권한을 주지 않았어요. 모든 권한에 체크하고 다시 시도해 주세요.")
+        granted = set(str(tokens.get("scope", "")).split())
+        if not set(GOOGLE_SCOPES[2:]) <= granted:
+            return fail("Google Tasks와 Drive(솜하우스가 만든 파일만) 권한이 필요해요. 모든 권한에 체크하고 다시 시도해 주세요.")
+        calendar = set(CALENDAR_SCOPES) <= granted
+        if not calendar and connected.get("calendar_outbox"):
+            return fail("이 가족은 수유 캘린더를 쓰고 있어요. 캘린더 권한까지 모두 체크하고 다시 연결해 주세요.")
+        config = {**connected, "client_id": client["client_id"], "client_secret": client["client_secret"],
+                  "refresh_token": tokens["refresh_token"]}
+        if calendar:
+            config["calendar_write"] = True
+        try:
+            made = provision(family.store.directory, GoogleAPI(config, tokens["access_token"]), config, calendar,
+                             recreate=True)
+        except (GoogleError, KeyError, TypeError, ValueError, OSError):
+            return fail("Google의 솜하우스 시트·Tasks·캘린더를 확인하지 못해 이전 연결을 유지했어요. 잠시 후 다시 시도해 주세요.")
+        family.google.renew(config, tokens["access_token"], made)
+        return self.redirect(back + "#google-connected=" + (",".join(sorted(made)) if made else "1"))
 
     def body(self, max_size=MAX_BODY):
         if self.headers.get("Transfer-Encoding"):

@@ -72,7 +72,9 @@ function showGoogleStatus(connected){
  const note='<p class="caption">웹 기록은 맥미니에 저장됩니다. 음성으로 만든 원본 Task·일정은 웹에서 수정하거나 삭제해도 바뀌지 않아요. 수정 이력은 원본 시트에 남습니다.</p>';
  googleFooter=healthy?`<details class="google-footer"><summary>🟢 Google 연동 정상 · ${waiting?`전송 대기 ${esc(waiting)}건`:'모두 반영됨'}${latest?` · 마지막 전송 ${esc(latest.slice(11,16))}`:''}</summary><ul>${rows}</ul>${note}${reconnect}</details>`:'';
  if(healthy){element.hidden=true;element.innerHTML='';googleStatusHtml='';return;}
- const html=`<strong>${warning}</strong>${status.auth_state==='reconnect_required'?reconnect:''}<ul>${rows}</ul>${status.errors?.length?'<p>일부 연동을 확인하지 못했어요. 잠시 후 다시 시도합니다.</p>':''}${status.review?`<p>음성·캘린더 입력 ${esc(status.review)}건은 확인이 필요해요.</p><button type="button" class="secondary" data-page="review">확인 필요 ${esc(status.review)}건 정리하기</button>`:''}${note}`;
+ // Another family can remake a deleted sheet, Tasks list or calendar by reconnecting, so offer it on errors too.
+ const repair=!shared.family.home&&status.auth_state!=='reconnect_required'&&(failed||status.errors?.length);
+ const html=`<strong>${warning}</strong>${status.auth_state==='reconnect_required'?reconnect:''}<ul>${rows}</ul>${status.errors?.length?'<p>일부 연동을 확인하지 못했어요. 잠시 후 다시 시도합니다.</p>':''}${repair?`<p>원본 시트·Tasks 목록·수유 캘린더를 지웠다면 ‘Google 다시 연결’을 누르면 새로 만들고 기록을 다시 보내요.</p>${reconnect}`:''}${status.review?`<p>음성·캘린더 입력 ${esc(status.review)}건은 확인이 필요해요.</p><button type="button" class="secondary" data-page="review">확인 필요 ${esc(status.review)}건 정리하기</button>`:''}${note}`;
  // Rewriting on every poll would close an opened <details>; the browser adds `open` to innerHTML, so compare our own copy.
  if(googleStatusHtml!==html){element.innerHTML=html;googleStatusHtml=html;}
 }
@@ -625,7 +627,7 @@ function familyView(){
 }
 // Another family connects its own Google account: its Tasks list, source sheet and feeding calendar are made there.
 function googleSection(g){
- if(g.connected)return `<h3>Google 연동</h3><p class="caption">🟢 ${esc(g.email||'이 가족의 Google 계정')}에 연결돼 있어요. 그 계정의 음성 입력을 가져오고, 웹 기록을 그 계정의 원본 시트·Tasks${g.calendar?'·수유 캘린더':''}에 남겨요.</p><div class="actions" style="justify-content:flex-start;margin-top:8px"><button type="button" class="secondary" data-family-google="1">다시 연결</button></div>`;
+ if(g.connected)return `<h3>Google 연동</h3><p class="caption">🟢 ${esc(g.email||'이 가족의 Google 계정')}에 연결돼 있어요. 그 계정의 음성 입력을 가져오고, 웹 기록을 그 계정의 원본 시트·Tasks${g.calendar?'·수유 캘린더':''}에 남겨요.${g.calendar?'':' 수유 캘린더도 쓰려면 다시 연결하면서 캘린더 권한에 체크해 주세요.'} 원본 시트·Tasks 목록·수유 캘린더를 지웠다면 다시 연결할 때 새로 만들고 기록을 다시 보내요.</p><div class="actions" style="justify-content:flex-start;margin-top:8px"><button type="button" class="secondary" data-family-google="1">다시 연결</button></div>`;
  return `<h3>Google 연동</h3><p class="caption">연결하기 전에는 웹 기록만 저장돼요. 이 가족이 네스트·휴대폰에서 쓰는 Google 계정으로 연결하면 그 계정에 ‘솜하우스 원본 기록’ 시트, ‘솜하우스 웹 기록’ Tasks 목록, 수유 캘린더를 만들고 그 계정의 음성 입력을 가져와요. 승인 화면에서 모든 권한에 체크해 주세요.</p><div class="actions" style="justify-content:flex-start;margin-top:8px"><button type="button" data-family-google="1">Google 연결하기</button></div>`;
 }
 async function familyChange(body,done){
@@ -769,7 +771,8 @@ if(shared){
   if(returned.has('google-error')){clearHash();forgetInvite();message(returned.get('google-error'));}
   if(returned.has('google-connected')){
    const first=returned.get('google-connected');clearHash();
-   accountMessage(first==='new'?'Google을 연결했어요. 원본 시트·Tasks 목록·수유 캘린더를 만들었고, 이 계정의 음성 입력을 가져오기 시작해요.':first==='new-no-calendar'?'Google을 연결했어요. 캘린더 권한이 없어 원본 시트와 Tasks만 써요. 캘린더도 쓰려면 가족 관리에서 다시 연결하고 모든 권한에 체크해 주세요.':'Google을 다시 연결했어요. 멈춰 있던 전송을 이어서 진행해요.');
+   const names={sheet:'원본 시트',tasks:'Tasks 목록',calendar:'수유 캘린더'},made=first.split(',').filter(x=>names[x]);
+   accountMessage(first==='new'?'Google을 연결했어요. 원본 시트·Tasks 목록·수유 캘린더를 만들었고, 이 계정의 음성 입력을 가져오기 시작해요. 연결 전에 저장한 기록도 함께 보내요.':first==='new-no-calendar'?'Google을 연결했어요. 캘린더 권한이 없어 원본 시트와 Tasks만 써요. 캘린더도 쓰려면 가족 관리에서 다시 연결하고 캘린더 권한에 체크해 주세요.':made.length?`Google을 다시 연결하고 ${made.map(x=>names[x]).join('·')}을 새로 만들었어요. 기록을 그쪽으로 다시 보내고 있어요.`:'Google을 다시 연결했어요. 멈춰 있던 전송을 이어서 진행해요.');
   }
   if(mode==='shared'){if(!returned.has('google-error'))message('가족의 기록을 불러오고 있어요…');refreshShared(true);}
  }
