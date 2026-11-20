@@ -45,3 +45,29 @@ test('home suggests the other side to start breastfeeding after a timed feed',as
  // Older than a day: no suggestion.
  assert.equal(f.b.eval(`nextSide('${f.day(2)}T${now.slice(11)}')`),null);
 });
+
+test('records to double-check: a double entry and a long stretch with nothing recorded',async()=>{
+ const f=family();
+ const at=h=>f.b.eval(`Somhouse.localDateTime(new Date(Date.now()-${h}*3600000))`);
+ const twinA=at(20),twinB=f.b.eval(`Somhouse.localDateTime(new Date(Date.now()-20*3600000+3*60000))`);
+ await f.load('records',[
+  {id:'v',type:'feeding',date:twinA,category:'분유',amount:'120ml',memo:'음성'},
+  {id:'w',type:'feeding',date:twinB,category:'분유',amount:'120ml',memo:''},
+  {id:'x',type:'feeding',date:at(12),category:'분유',amount:'100ml',memo:''},
+  {id:'s',type:'sleep',date:at(11),end:at(4),category:'밤잠',memo:''},
+  {id:'y',type:'diaper',date:at(3),category:'소변',memo:''}]);
+ let html=await f.open('records');
+ assert.match(html,/🔎 확인해 볼 기록/);
+ assert.match(html,/같은 기록이 두 번 있어요/);
+ assert.match(html,/data-check-remove="w"/);
+ // 20h → 12h ago has nothing for 8 hours; the sleep covers 11h → 4h ago, so that is not a gap.
+ assert.equal((html.match(/동안 기록이 없어요/g)||[]).length,1);
+ assert.match(html,/7시간 57분 동안 기록이 없어요/);
+ // "둘 다 맞아요" hides it on this device; removing the later one deletes it.
+ await f.click({checkOk:f.b.eval("recordChecks().find(x=>x.kind==='gap').key")});
+ html=f.b.get('#content').innerHTML;
+ assert.doesNotMatch(html,/동안 기록이 없어요/);
+ await f.click({checkRemove:'w',checkKey:f.b.eval("recordChecks()[0].key")});
+ assert.equal(f.server.data.records.some(x=>x.id==='w'),false);
+ assert.doesNotMatch(f.b.get('#content').innerHTML,/확인해 볼 기록/);
+});

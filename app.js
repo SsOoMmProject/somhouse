@@ -483,7 +483,7 @@ function listView(k){
   const kids=k==='schedule'?`<p class="caption kids">👶 아기: ${children().map(esc).join(', ')||'아직 등록하지 않았어요'} <button class="plain small" data-manage-children="1">${children().length?'아기 이름 관리':'＋ 아기 등록'}</button></p>`:'';
  const add=k==='records'?'<button data-add="feeding">수유 추가</button><button class="secondary" data-add="sleep">수면 추가</button><button class="secondary" data-add="diaper">기저귀 추가</button><button class="secondary" data-add="hospital">병원 추가</button>':`<button data-add="${k}">추가하기</button>`;
  const body=k==='schedule'?scheduleItems(items):k==='shopping'?shoppingItems(items):items.length?recordGroups(items):'';
- return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p>${kids}${k==='shopping'?'':aiHelpCard(k)}<div class="heading"><h2>${head}</h2><div class="quick">${add}</div></div>${filterView(k)}${body||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}${k==='records'?voiceHelp():''}`;
+ return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p>${kids}${k==='shopping'?'':aiHelpCard(k)}${k==='records'?checksCard():''}<div class="heading"><h2>${head}</h2><div class="quick">${add}</div></div>${filterView(k)}${body||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}${k==='records'?voiceHelp():''}`;
 }
 function shoppingItems(items){
  if(!items.length)return '';
@@ -837,7 +837,7 @@ document.addEventListener('click',async e=>{
  if(b.dataset.page){location.hash=b.dataset.page;if(page===b.dataset.page)render();}
  if(b.dataset.reset){filters[b.dataset.reset]={};render();}
  if(busy||mode!=='shared'||!sharedReady)return;
- if(await aiHelpClick(b))return;
+ if(await aiHelpClick(b)||await insightsClick(b))return;
  if(['on','off'].includes(b.dataset.alarm)&&['feeding','nap'].includes(b.dataset.alarmKind)){await alarmSwitch(b.dataset.alarmKind,b.dataset.alarm==='on');return;}
  if(b.dataset.step){
   const input=document.querySelector('#fields input[name="amount"]'),category=document.querySelector('#fields select[name="category"]')?.value,unit=units[category];
