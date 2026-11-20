@@ -183,12 +183,15 @@ class Families(unittest.TestCase):
         family = other[2:18]
         made = []
 
-        def fake_provision(directory, api, config, calendar):
+        def fake_provision(directory, api, config, calendar, recreate=False):
             made.append((Path(directory).name, calendar, api.token))
-            config.update(task_list="web-list", spreadsheet="sheet-1", ready=True,
-                          **({"calendar_inbox": "primary", "calendar_outbox": "cal-out"} if calendar else {}))
+            created = {"tasks", "sheet"} - ({"tasks", "sheet"} if config.get("task_list") else set())
+            config.update(task_list="web-list", spreadsheet="sheet-1", ready=True)
+            if calendar and not config.get("calendar_outbox"):
+                config.update(calendar_inbox="primary", calendar_outbox="cal-out")
+                created.add("calendar")
             save_config(directory, config)
-            return config
+            return created
 
         full = "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/tasks " \
                "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/calendar.events.owned " \
@@ -215,7 +218,7 @@ class Families(unittest.TestCase):
         home = self.request("/api/data", token=self.google("HOME", "s@gmail.com")["token"])[1]
         self.assertEqual((home["google_status"]["auth_state"], "sources" in home), ("configuration_error", False))
 
-        # A record saved by this family is queued for this family's Google only.
+        # Records saved before connecting were queued for the new sheet; one saved now is too, for this family only.
         self.save(other, "o-1", "70ml")
         with self.server.family_store(family).connect() as db:
             self.assertTrue(db.execute("SELECT COUNT(*) FROM google_record_events").fetchone()[0] >= 1)
@@ -226,14 +229,89 @@ class Families(unittest.TestCase):
         third = self.google("S3", "third@gmail.com")["token"]
         with patch.object(server_module, "provision", fake_provision), patch.object(GoogleRecords, "run", lambda self: None):
             self.assertIn("이미 다른 가족", self.connect(third, "S2", full))
-            with patch.object(google_web, "check_access", return_value=True):
-                self.assertEqual(self.connect(other, "S2", full, refresh="r2"), "google-connected=1")
-                self.assertIn("이 가족에 연결된", self.connect(other, "S9", full))
+            self.assertEqual(self.connect(other, "S2", full, refresh="r2"), "google-connected=1")
+            self.assertIn("이 가족에 연결된", self.connect(other, "S9", full))
+            # Leaving Calendar out on a reconnect would break the feeding calendar this family uses.
+            self.assertIn("캘린더 권한까지", self.connect(other, "S2", full.rsplit(" ", 2)[0]))
         self.assertEqual(read_config(self.directory / "families" / family)["refresh_token"], "r2")
         # A family with a Google connection is never set aside, even without records: its last member stays.
         self.request("/api/items/records/o-1", "DELETE", token=other)
         self.assertEqual(self.request("/api/family", "POST", {"action": "remove_member", "email": "other@gmail.com"}, other)[0], 409)
         self.assertTrue((self.directory / "families" / family).exists())
+
+    def test_reconnect_adds_the_calendar_and_remakes_deleted_resources(self):
+        import server as server_module
+        from google_records import GoogleRecords, read_config
+        token = self.google("S2", "other@gmail.com")["token"]
+        family = token[2:18]
+        self.save(token, "early", "60ml")  # saved before connecting
+        created = []
+
+        def fake_provision(directory, api, config, calendar, recreate=False):
+            made = set(created.pop(0)) if created else set()
+            config.update(ready=True)
+            for name in made | ({"tasks", "sheet"} if not config.get("task_list") else set()):
+                key = {"tasks": "task_list", "sheet": "spreadsheet", "calendar": "calendar_outbox"}[name]
+                config[key] = name + "-" + str(len(config))
+            if calendar:
+                config.setdefault("calendar_inbox", "primary")
+                if not config.get("calendar_outbox"):
+                    config["calendar_outbox"] = "cal-1"; made.add("calendar")
+            save_config(directory, config)
+            return made
+
+        tasks_only = "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/tasks " \
+                     "https://www.googleapis.com/auth/drive.file"
+        full = tasks_only + " https://www.googleapis.com/auth/calendar.events.owned https://www.googleapis.com/auth/calendar.app.created"
+        store = self.server.family_store(family)
+        def count(sql):
+            with store.connect() as db:
+                return db.execute(sql).fetchone()[0]
+        with patch.object(server_module, "provision", fake_provision), patch.object(GoogleRecords, "run", lambda self: None):
+            # First connect without Calendar: sheet and Tasks only; the earlier record is sent too.
+            self.assertEqual(self.connect(token, "S2", tasks_only), "google-connected=new-no-calendar")
+            bridge = self.server.family_bridges[family]
+            self.assertIsNone(bridge.calendar)
+            self.assertEqual(count("SELECT COUNT(*) FROM google_record_events WHERE item_id='early'"), 1)
+            # The reconnect asks for Calendar again; granting it adds the feeding calendar with past feedings.
+            url = self.request("/api/google/start", "POST", {"mode": "connect", "returnTo": BACK}, token)[1]["url"]
+            self.assertIn("calendar.app.created", unquote(url))
+            self.assertEqual(self.connect(token, "S2", full, refresh="r2"), "google-connected=calendar")
+            self.assertIs(self.server.family_bridges[family], bridge)
+            self.assertEqual((bridge.calendar is not None, bridge.calendar.outbox), (True, "cal-1"))
+            self.assertEqual(count("SELECT COUNT(*) FROM google_calendar_jobs WHERE item_id='early'"), 1)
+            self.assertEqual(read_config(store.directory)["refresh_token"], "r2")
+
+            # Pretend everything was delivered, then the family deletes the sheet and the Tasks list.
+            with store.connect() as db:
+                db.execute("UPDATE google_record_events SET sheet_done=1, task_done=1")
+                db.execute("INSERT INTO google_task_links VALUES (?,?,?,?)", (bridge.binding, "records", "gone", "t-old"))
+                db.execute("INSERT OR REPLACE INTO google_task_links VALUES (?,?,?,?)", (bridge.binding, "records", "early", "t-1"))
+                db.execute("INSERT INTO google_delivery_retries VALUES (?,?,?,?,?,?,?)", (bridge.binding, "sheets", "1", 5, "Sheets 404", 9e9, 1))
+            self.request("/api/items/records/early", "PUT", {"id": "early", "type": "feeding", "date": "2026-11-20T09:00",
+                                                              "category": "분유", "amount": "65ml"}, token)
+            self.save(token, "removed", "10ml")
+            self.request("/api/items/records/removed", "DELETE", token=token)
+            with store.connect() as db:
+                db.execute("UPDATE google_record_events SET sheet_done=1, task_done=1")
+            created.append({"sheet", "tasks"})
+            self.assertEqual(self.connect(token, "S2", full, refresh="r3"), "google-connected=sheet,tasks")
+            # Every sheet row goes again (same rows); Tasks get the latest copy of records that still exist only.
+            self.assertEqual(count("SELECT COUNT(*) FROM google_record_events WHERE sheet_done=1"), 0)
+            self.assertEqual(count("SELECT COUNT(*) FROM google_record_events WHERE task_done=0"), 1)
+            self.assertEqual(count("SELECT item_id FROM google_record_events WHERE task_done=0"), "early")
+            self.assertEqual(count("SELECT COUNT(*) FROM google_task_links"), 0)
+            self.assertEqual(count("SELECT COUNT(*) FROM google_delivery_retries"), 0)
+            self.assertNotEqual(bridge.config["spreadsheet"], "sheet-3")
+
+            # A deleted feeding calendar is remade and every feeding is projected again.
+            with store.connect() as db:
+                db.execute("INSERT INTO google_calendar_links VALUES (?,?,?)", (bridge.binding, "early", "ev-old"))
+                db.execute("DELETE FROM google_calendar_jobs")
+            created.append({"calendar"})
+            self.assertEqual(self.connect(token, "S2", full, refresh="r4"), "google-connected=calendar")
+            self.assertEqual(count("SELECT COUNT(*) FROM google_calendar_links"), 0)
+            self.assertEqual(count("SELECT COUNT(*) FROM google_calendar_jobs WHERE item_id='early'"), 1)
 
     def test_removing_a_member_signs_them_out(self):
         home = self.google("HOME", "somsom@gmail.com")["token"]

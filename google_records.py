@@ -401,6 +401,52 @@ class GoogleRecords:
         self.auth_state = "ready"
         self.wake.set()
 
+    def renew(self, config, access_token, made):
+        """Adopt a reconnect from the phone that may also have (re)made resources (see google_setup.provision).
+
+        What lived in a recreated resource is sent again: every sheet row (same row numbers, so the history
+        is complete again), the current Tasks copy of each existing record, and each feeding in the calendar.
+        A calendar granted for the first time starts with the same projection.
+        """
+        from calendar_records import CalendarRecords
+
+        resources = {key: config[key] for key in ("task_list", "spreadsheet", "source_sheet_id", "calendar_inbox",
+                                                   "calendar_outbox", "calendar_write") if key in config}
+        # Hold the store lock throughout so the worker never pairs new resources with old links.
+        with self.store.lock:
+            self.adopt_credentials(config["client_id"], config["client_secret"], config["refresh_token"],
+                                   access_token, resources)
+            self.api.sheet_id, self.api.sheet_size = self.config.get("source_sheet_id"), None
+            if self.config.get("calendar_outbox"):
+                if self.calendar is None:
+                    self.calendar = CalendarRecords(self)
+                self.calendar.inbox = self.config["calendar_inbox"]
+                self.calendar.outbox = self.config["calendar_outbox"]
+            with self.store.connect() as db:
+                if "sheet" in made:
+                    db.execute("UPDATE google_record_events SET sheet_done=0 WHERE binding=?", (self.binding,))
+                    if self.api.sheet_id is not None:
+                        db.execute("INSERT OR REPLACE INTO google_sheet_state VALUES (?,?)", (self.binding, self.api.sheet_id))
+                    else:
+                        db.execute("DELETE FROM google_sheet_state WHERE binding=?", (self.binding,))
+                if "tasks" in made:
+                    db.execute("DELETE FROM google_task_links WHERE binding=?", (self.binding,))
+                    # Only the latest event of each record that still exists: deleted records leave nothing behind.
+                    db.execute("""UPDATE google_record_events SET task_done=0 WHERE seq IN (
+                        SELECT MAX(seq) FROM google_record_events e WHERE binding=? AND EXISTS (
+                            SELECT 1 FROM items i WHERE i.kind=e.kind AND i.id=e.item_id)
+                        GROUP BY kind, item_id)""", (self.binding,))
+                if "calendar" in made:
+                    db.execute("DELETE FROM google_calendar_links WHERE binding=?", (self.binding,))
+                    db.execute("DELETE FROM google_calendar_jobs WHERE binding=?", (self.binding,))
+                    for item_id, body in db.execute("SELECT id,body FROM items WHERE kind='records'").fetchall():
+                        self.calendar.queue(db, "records", item_id, json.loads(body), "save")
+                targets = {"sheet": "sheets", "tasks": "tasks", "calendar": "calendar"}
+                for name in made:
+                    db.execute("DELETE FROM google_delivery_retries WHERE binding=? AND target=?",
+                               (self.binding, targets[name]))
+        self.wake.set()
+
     @classmethod
     def load(cls, store):
         config = load_config(store.directory)
