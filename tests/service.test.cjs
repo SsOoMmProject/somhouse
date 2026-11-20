@@ -87,3 +87,24 @@ test('month grid counts schedules and only pending dated shopping per day',()=>{
  assert.equal(grid.filter(Boolean).reduce((n,c)=>n+c.schedule+c.shopping,0),3);
  assert.equal(monthGrid([],2026,11,now).find(c=>c&&c.day===20).schedule,0);
 });
+
+test('a day of sleep splits naps and night sleep, crosses midnight and keeps the longest stretch',()=>{
+ const S=require('../service.js'),now=new Date(2026,10,21,12,0);
+ const records=[
+  {type:'sleep',date:'2026-11-19T21:00',end:'2026-11-20T05:30',category:'밤잠'},
+  {type:'sleep',date:'2026-11-20T10:00',end:'2026-11-20T11:15',category:'낮잠'},
+  {type:'sleep',date:'2026-11-20T14:00',end:'2026-11-20T14:40',category:'낮잠'},
+  {type:'sleep',date:'2026-11-20T22:00',end:'2026-11-21T06:00',category:'밤잠'},
+  {type:'sleep',date:'2026-11-21T11:30',end:'',category:'낮잠'},
+  {type:'diaper',date:'2026-11-20T08:00',category:'둘 다'},{type:'diaper',date:'2026-11-20T09:00',category:'소변'},
+  {type:'diaper',date:'2026-11-21T13:00',category:'대변'},
+ ];
+ assert.deepEqual(S.sleepDay(records,'2026-11-20',now),{day:'2026-11-20',recorded:true,total:330+115+120,nap:115,night:450,naps:2,longest:480});
+ // The open nap is counted as a nap but adds no minutes yet.
+ assert.deepEqual(S.sleepDay(records,'2026-11-21',now),{day:'2026-11-21',recorded:true,total:360,nap:0,night:360,naps:1,longest:0});
+ assert.equal(S.sleepDay(records,'2026-11-18',now).recorded,false);
+ assert.deepEqual(S.diaperDay(records,'2026-11-20',now),{day:'2026-11-20',count:2,pee:2,poo:1});
+ // A diaper after now is not counted; the last poo is the 08:00 one.
+ assert.equal(S.diaperDay(records,'2026-11-21',now).count,0);
+ assert.equal(S.lastPoo(records,now).date,'2026-11-20T08:00');
+});
