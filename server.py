@@ -25,6 +25,7 @@ from ai import AIError, Assistants, parse_question, summarize_records, SCOPES
 from google_records import (GoogleAPI, GoogleError, GoogleRecords, SCHEMA as GOOGLE_SCHEMA, SCOPES as GOOGLE_SCOPES,
                             load_config as load_google_config, read_config as read_google_config)
 from calendar_records import FEEDING_KINDS, SLEEP_KINDS, SCHEMA as CALENDAR_SCHEMA, WritebackRefused, load_aliases, relearn
+from feeding_alarm import SCHEMA as ALARM_SCHEMA, setting_value as alarm_setting
 from shopping_records import SCHEMA as SHOPPING_SCHEMA
 from google_delivery import SCHEMA as DELIVERY_SCHEMA
 from holidays import HolidayFeed, SCHEMA as HOLIDAY_SCHEMA, listing as holiday_listing
@@ -173,7 +174,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS items(kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id));
                 CREATE TABLE IF NOT EXISTS imports(kind TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(kind,fingerprint));
                 CREATE TABLE IF NOT EXISTS family_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            """ + chatgpt_plan.SCHEMA + KEEP_SCHEMA + GOOGLE_SCHEMA + CALENDAR_SCHEMA + SHOPPING_SCHEMA + DELIVERY_SCHEMA + HOLIDAY_SCHEMA)
+            """ + chatgpt_plan.SCHEMA + KEEP_SCHEMA + GOOGLE_SCHEMA + CALENDAR_SCHEMA + ALARM_SCHEMA + SHOPPING_SCHEMA + DELIVERY_SCHEMA + HOLIDAY_SCHEMA)
             for table, column, definition in (
                 ("google_voice_receipts", "captured", "TEXT"),
                 ("google_calendar_inputs", "review", "INTEGER NOT NULL DEFAULT 0"),
@@ -204,8 +205,9 @@ class Store:
     @staticmethod
     def settings(db):
         values = {key: json.loads(value) for key, value in db.execute(
-            "SELECT key,value FROM family_settings WHERE key IN ('children','handoff','timer')")}
-        return {"children": values.get("children", []), "handoff": values.get("handoff"), "timer": values.get("timer")}
+            "SELECT key,value FROM family_settings WHERE key IN ('children','handoff','timer','feeding_alarm')")}
+        return {"children": values.get("children", []), "handoff": values.get("handoff"), "timer": values.get("timer"),
+                "feedingAlarm": bool((values.get("feeding_alarm") or {}).get("enabled"))}
 
     @staticmethod
     def put_setting(db, key, value):
@@ -1051,6 +1053,18 @@ class Handler(BaseHTTPRequestHandler):
                     result = {"data": store.state(db), "settings": store.settings(db), "moved": len(moved)}
                 elif path == "/api/handoff" and self.command == "POST":
                     result = self.handoff_request(db, store, username)
+                elif path == "/api/feeding-alarm" and self.command == "POST":
+                    # A Calendar reminder when a usual feeding time passes; it needs the family's Google Calendar.
+                    enabled = self.body(1024).get("enabled")
+                    if not isinstance(enabled, bool):
+                        raise Problem(400, "밥 알람 설정을 확인해 주세요.")
+                    if enabled and (google is None or google.calendar is None):
+                        raise Problem(409, "Google 캘린더를 연결하면 밥 알람을 켤 수 있어요.")
+                    store.put_setting(db, "feeding_alarm", alarm_setting(enabled, username))
+                    result = {"data": store.state(db), "settings": store.settings(db)}
+                    if google is not None:
+                        result["sources"] = google.sources()
+                        result["google_status"] = google.status(db)
                 elif path == "/api/timer" and self.command == "POST":
                     result = self.timer_request(db, store, google, keep, username)
                 elif path == "/api/merge" and self.command == "POST":
@@ -1152,7 +1166,7 @@ class Handler(BaseHTTPRequestHandler):
                     and (store.directory / "google-records.json").exists()):
                 result["google_status"] = {"auth_state": "configuration_error", "services": {}, "review": 0, "errors": []}
             sync = google or keep
-            if sync is not None and (path.startswith("/api/items/") or path in ("/api/review", "/api/confirm", "/api/calendar-writeback", "/api/settings", "/api/timer")):
+            if sync is not None and (path.startswith("/api/items/") or path in ("/api/review", "/api/confirm", "/api/calendar-writeback", "/api/settings", "/api/timer", "/api/feeding-alarm")):
                 sync.wake.set()
             self.respond(200, result)
         except (Problem, AIError) as error:

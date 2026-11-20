@@ -289,9 +289,10 @@ function nowCard(){
  const feed=data.records.filter(x=>x.type==='feeding'&&past(x)).sort((a,b)=>b.date.localeCompare(a.date))[0];
  const sleep=data.records.filter(x=>x.type==='sleep'&&past(x)).sort((a,b)=>b.date.localeCompare(a.date))[0];
  const day=v=>v.slice(0,10)===now.slice(0,10)?v.slice(11):v.slice(5).replace('-','/').replace('T',' ');
- const guess=Somhouse.nextFeeding(data.records),diaper=data.records.filter(x=>x.type==='diaper'&&past(x)).sort((a,b)=>b.date.localeCompare(a.date))[0];
+ const alarm=shared?.googleStatus?.feeding_alarm,guess=Somhouse.nextFeeding(data.records),diaper=data.records.filter(x=>x.type==='diaper'&&past(x)).sort((a,b)=>b.date.localeCompare(a.date))[0];
  const feedHtml=(feed?`<strong>${esc(ago(feed.date,now))}</strong><span>${esc(day(feed.date))} · ${esc(feed.category)} ${esc(feed.amount)}</span>`:'<strong>기록 없음</strong><span>수유를 기록해 보세요</span>')
-  +(guess?`<span class="guess">다음 예상 ${esc(day(guess.at))} 무렵 · 평균 ${esc(Somhouse.duration(guess.gap))} 간격</span>`:'');
+  +(guess?`<span class="guess">다음 예상 ${esc(day(guess.at))} 무렵 · 평균 ${esc(Somhouse.duration(guess.gap))} 간격</span>`:'')
+  +(alarm?.enabled&&alarm.next?`<span class="guess">⏰ 밥 알람 ${esc(day(alarm.next))} (평소 ${esc(alarm.usual)})</span>`:'');
  const diaperHtml=diaper?`<strong>${esc(ago(diaper.date,now))}</strong><span>${esc(day(diaper.date))} · ${esc(diaperIcons[diaper.category]||'')} ${esc(diaper.category)}</span>`:'<strong>기록 없음</strong><span>갈 때 바로 눌러 주세요</span>';
  let sleepHtml='<strong>기록 없음</strong><span>수면을 기록해 보세요</span>';
  const open=openSleep(now);
@@ -380,6 +381,28 @@ function patternView(){
  const axis=[0,6,12,18,24].map(h=>`<span style="left:${(h/24*100).toFixed(2)}%">${h}</span>`).join('');
  return `<section class="card pattern"><h2>최근 7일 하루 흐름</h2><p class="caption"><span class="lg sleep"></span>수면 <span class="lg feed"></span>수유 <span class="lg diaper"></span>기저귀 · 표시를 누르면 그 기록을 열어요. 자정을 넘긴 수면은 두 날에 나눠 그려요.</p><div class="pt-rows">${rows}</div><div class="pt-axis">${axis}</div></section>`;
 }
+// Usual feeding times from the last 7 days (computed on the Mac) and the Calendar alarm switch.
+function alarmView(){
+ const alarm=shared?.googleStatus?.feeding_alarm;if(!alarm||shared.readOnly)return '';
+ const slots=Array.isArray(alarm.slots)?alarm.slots:[];
+ const times=slots.length?`<div class="alarm-times">${slots.map(x=>`<span class="badge">${esc(x.time)} <small>${esc(x.days)}일</small></span>`).join(' ')}</div>`
+  :'<p class="caption">아직 뚜렷한 수유 시간대가 없어요. 최근 7일 중 3일 이상, 비슷한 시간에 먹은 기록이 쌓이면 보여요.</p>';
+ const state=alarm.enabled?(alarm.next?`다음 알람: <strong>${esc(alarm.next.replace('T',' '))}</strong> (평소 ${esc(alarm.usual)}에 먹는데 기록이 없으면)`:'수유 시간대가 생기면 알람을 맞춰요.'):'꺼져 있어요.';
+ return `<section class="card alarm-card"><h2>⏰ 밥 알람</h2><p class="caption">최근 7일 동안 자주 먹은 시간대예요 (숫자는 그 시간대에 먹은 날 수).</p>${times}<p>${state}</p><p class="caption">평소 시간이 30분 지나도록 그 전후 수유 기록이 없으면 Google 캘린더 ‘솜하우스 수유’에서 알림이 와요. 수유를 기록하면 알림은 다음 시간대로 옮겨져요. 휴대폰 Google 캘린더 앱에서 ‘솜하우스 수유’ 캘린더가 보이고 알림이 켜져 있어야 해요.</p><div class="actions"><button type="button" class="${alarm.enabled?'secondary':''}" data-feeding-alarm="${alarm.enabled?'off':'on'}">${alarm.enabled?'밥 알람 끄기':'밥 알람 켜기'}</button></div></section>`;
+}
+async function feedingAlarm(on){
+ if(busy||!shared?.token||shared.readOnly)return;
+ const token=shared.token;busy=true;connectionView();
+ try{
+  const result=await shared.request('/api/feeding-alarm','POST',{enabled:on});
+  if(shared.token!==token)return;
+  if(valid(result.data))data=result.data;
+  if(result.settings)shared.settings={...shared.settings,...result.settings};
+  if('google_status' in result){shared.sources=result.sources||shared.sources;shared.googleStatus=result.google_status||null;}
+  message(on?'밥 알람을 켰어요. 잠시 뒤 Google 캘린더에 다음 알람이 생겨요.':'밥 알람을 껐어요. 캘린더의 알람 일정도 곧 지워져요.');
+ }catch(error){if(shared.token===token){if(error.status===401)showLogin(error.message);else{message(error.message);alert(error.message);}}}
+ finally{busy=false;connectionView();render();}
+}
 function statsView(){
  const rows=Somhouse.dailyFeeding(data.records,statsDays);
  const max=Math.max(1,...rows.map(row=>row.volume).filter(Number.isFinite));
@@ -394,7 +417,7 @@ function statsView(){
  const gaps=feeds.slice(1).map((x,i)=>Somhouse.sleepMinutes({date:feeds[i].date,end:x.date})).filter(m=>m!==null&&m<=8*60);
  const count=rows.reduce((s,r)=>s+r.count,0),measured=rows.filter(r=>r.measuredCount&&Number.isFinite(r.volume)),volume=measured.reduce((s,r)=>s+r.volume,0);
  const cards=[['하루 평균 횟수',`${(count/statsDays).toFixed(1)}회`],['하루 평균 용량',measured.length?`${Math.round(volume/statsDays).toLocaleString('ko-KR')}ml`:'—'],['평균 수유 간격',gaps.length?Somhouse.duration(Math.round(gaps.reduce((s,m)=>s+m,0)/gaps.length)):'—'],[`${statsDays}일 합계`,`${count}회${measured.length?` · ${volume.toLocaleString('ko-KR')}ml`:''}`]];
- return `<h1>통계</h1>${aiSummaryCard()}${patternView()}<h2 class="section-head">수유</h2><div class="quick stats-period" aria-label="조회 기간">${periods}</div><div class="summary-cards stats-cards">${cards.map(([label,value])=>`<div class="summary-card"><p>${label}</p><strong>${esc(value)}</strong></div>`).join('')}</div><p class="caption">평균 간격은 연속된 두 수유 사이가 8시간 이하인 경우만 계산해요.</p><section class="card"><h2>최근 ${statsDays}일</h2><p class="caption">횟수에는 모든 수유를, 용량에는 ml·cc·밀리리터·미리·씨씨 단위가 있는 기록만 집계해요. 직수 시간과 단위 없는 값은 용량에 합산하지 않아요.</p><table class="stats-table"><thead><tr><th scope="col">날짜</th><th scope="col">수유 횟수</th><th scope="col">합계 용량</th><th scope="col">용량 비교</th></tr></thead><tbody>${table}</tbody></table></section>`;
+ return `<h1>통계</h1>${aiSummaryCard()}${alarmView()}${patternView()}<h2 class="section-head">수유</h2><div class="quick stats-period" aria-label="조회 기간">${periods}</div><div class="summary-cards stats-cards">${cards.map(([label,value])=>`<div class="summary-card"><p>${label}</p><strong>${esc(value)}</strong></div>`).join('')}</div><p class="caption">평균 간격은 연속된 두 수유 사이가 8시간 이하인 경우만 계산해요.</p><section class="card"><h2>최근 ${statsDays}일</h2><p class="caption">횟수에는 모든 수유를, 용량에는 ml·cc·밀리리터·미리·씨씨 단위가 있는 기록만 집계해요. 직수 시간과 단위 없는 값은 용량에 합산하지 않아요.</p><table class="stats-table"><thead><tr><th scope="col">날짜</th><th scope="col">수유 횟수</th><th scope="col">합계 용량</th><th scope="col">용량 비교</th></tr></thead><tbody>${table}</tbody></table></section>`;
 }
 function filterView(k){const f=filters[k];return `<form id="filter-form" class="filters" aria-label="목록 검색"><label>검색<input name="query" type="search" placeholder="메모, 병원, 품목 검색" value="${esc(f.query||'')}"></label>${k==='records'?`<label>기록 종류<select name="type"><option value="">전체</option><option value="feeding" ${f.type==='feeding'?'selected':''}>수유</option><option value="sleep" ${f.type==='sleep'?'selected':''}>수면</option><option value="diaper" ${f.type==='diaper'?'selected':''}>기저귀</option><option value="hospital" ${f.type==='hospital'?'selected':''}>병원</option></select></label>`:''}${k==='shopping'?`<label>구매 상태<select name="status"><option value="">전체</option><option value="pending" ${f.status==='pending'?'selected':''}>구매 예정</option><option value="done" ${f.status==='done'?'selected':''}>구매 완료</option></select></label>`:`<label>시작 날짜<input name="from" type="date" value="${esc(f.from||'')}"></label><label>마지막 날짜<input name="to" type="date" value="${esc(f.to||'')}"></label>`}<button type="submit" class="secondary">검색</button><button type="button" class="plain" data-reset="${k}">초기화</button></form>`}
 function shoppingOrder(items){
@@ -779,6 +802,7 @@ document.addEventListener('click',async e=>{
  if(b.dataset.reset){filters[b.dataset.reset]={};render();}
  if(busy||mode!=='shared'||!sharedReady)return;
  if(await aiHelpClick(b))return;
+ if(['on','off'].includes(b.dataset.feedingAlarm)){await feedingAlarm(b.dataset.feedingAlarm==='on');return;}
  if(b.dataset.step){
   const input=document.querySelector('#fields input[name="amount"]'),category=document.querySelector('#fields select[name="category"]')?.value,unit=units[category];
   if(!input||!unit)return;
