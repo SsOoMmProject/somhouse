@@ -257,3 +257,17 @@ test('personal plan stays inside the app and never falls back to another billing
  assert.deepEqual(JSON.parse(asks[0].options.body),{question:'Hello',scope:'none',model:'second'});
  assert.ok(!calls.some(x=>x.url.endsWith('/api/ai')&&x.options.method==='POST'));
 });
+
+test('a Gemini key saved earlier shows only the free shortlist with tiers',async()=>{
+ const b=browser({
+  session:{base:'http://127.0.0.1:8787',token:'existing',username:'mom'},
+  fetcher:async(url)=>({ok:true,json:async()=>url.endsWith('/api/ai')?{enabled:false,homeOnly:true,providers:providers([])}:{data:blank()}}),
+ });
+ b.context.localStorage.setItem('somhouse-ai-keys-v1',JSON.stringify({'http://127.0.0.1:8787|mom':{antigravity:{key:'AIza'+'c'.repeat(35),model:'gemini-3.1-pro-preview',models:['gemini-3.1-pro-preview','gemini-3.8-flash','gemini-3.1-flash-lite']}}}));
+ await b.settle();
+ b.context.location.hash='#ai';b.events.get('hashchange')();await b.settle();
+ const html=b.get('#ai-providers').innerHTML;
+ assert.match(html,/<option value="gemini-3\.8-flash" selected>상위 · gemini-3\.8-flash<\/option><option value="gemini-3\.1-flash-lite">하위 · gemini-3\.1-flash-lite<\/option><\/select>/);
+ assert.doesNotMatch(html,/pro-preview/);
+ assert.equal(b.eval("aiOption('key:antigravity').key.model"),'gemini-3.8-flash');
+});

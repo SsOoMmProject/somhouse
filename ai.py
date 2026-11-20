@@ -28,10 +28,12 @@ MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}")
 SCOPES = {"none": None, "feeding": "records", "schedule": "schedule", "shopping": "shopping"}
 VOLUME = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*(?:ml|미리|밀리리터)", re.IGNORECASE)
 SYSTEM = (
-    "솜하우스의 가족 기록 도우미로 한국어로 간결하게 답하세요. "
-    "제공된 집계의 날짜, 건수, 수유량만 근거로 삼고 누락된 기록이나 세부 내용을 지어내지 마세요. "
+    "솜하우스의 가족 도우미로 한국어로 간결하게 답하세요. "
+    "육아 상식, 제품 고르는 기준 같은 일반 질문은 알고 있는 지식으로 답하세요. "
+    "최신 리뷰 순위, 가격, 재고 같은 실시간 정보는 확인할 수 없다고 짧게 밝히고, 알고 있는 범위의 정보와 고르는 기준을 안내하세요. "
+    "가족 기록 질문은 제공된 집계의 날짜, 건수, 수유량만 근거로 삼고 누락된 기록이나 세부 내용을 지어내지 마세요. "
     "수유량 합계는 ml가 명시된 기록만 포함합니다. 가족 기록 질문에 필요한 집계가 없으면 이를 알리세요. "
-    "기록을 생성하거나 변경했다고 말하지 마세요. 의료 진단이나 처방을 제공하지 마세요."
+    "기록을 생성하거나 변경했다고 말하지 마세요. 의료 진단이나 처방은 하지 말고 필요하면 소아과 상담을 권하세요."
 )
 # Inherit the same macOS account for Keychain logins. Never pass API keys or the server's own settings.
 BASE_ENVIRONMENT = ("HOME", "USER", "LOGNAME", "TMPDIR", "LANG")

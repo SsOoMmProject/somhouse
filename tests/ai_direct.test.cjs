@@ -39,17 +39,20 @@ test('OpenAI: picks a current text model and reads the Responses output',async()
 test('Gemini: prefers a stable Flash model and sends the key in a header, not the URL',async()=>{
  const calls=serve({
   'https://generativelanguage.googleapis.com/v1beta/models':[200,{models:[
-   {name:'models/gemini-3.7-pro',supportedGenerationMethods:['generateContent']},
-   {name:'models/gemini-3.8-flash-preview',supportedGenerationMethods:['generateContent']},
-   {name:'models/gemini-3.7-flash',supportedGenerationMethods:['generateContent']},
-   {name:'models/gemini-3.8-flash',supportedGenerationMethods:['generateContent']},
+   ...['gemini-3.1-pro-preview','gemini-4-carbon','gemini-3.1-flash-lite','gemini-3-flash-preview','gemini-3.6-flash','gemini-2.5-flash',
+    'gemini-3.5-flash-lite','gemini-4-hydrogen','gemini-3.8-flash'].map(id=>({name:'models/'+id,supportedGenerationMethods:['generateContent']})),
    {name:'models/gemini-3.8-flash-image',supportedGenerationMethods:['generateContent']},
    {name:'models/gemini-embedding-2',supportedGenerationMethods:['embedContent']},
   ]}],
   'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent':[200,{candidates:[{content:{parts:[{text:'답'},{text:'변'}]}}]}],
  });
  const saved=await direct.connect('antigravity','AIza'+'b'.repeat(35));
- assert.deepEqual(saved.models,['gemini-3.8-flash','gemini-3.7-flash','gemini-3.8-flash-preview','gemini-3.7-pro']);
+ // Only free models, best first: top 2, middle 2, bottom 1. Paid, preview and retired ones are left out.
+ assert.deepEqual(saved.models,['gemini-3.8-flash','gemini-4-hydrogen','gemini-3.6-flash','gemini-3.5-flash-lite','gemini-3.1-flash-lite']);
+ assert.equal(saved.model,'gemini-3.8-flash');
+ assert.equal(direct.GEMINI_TIER['gemini-3.1-flash-lite'],'하위');
+ // If Google renames every free model, the account's own list still works.
+ assert.deepEqual(direct.geminiShortlist(['gemini-9-flash','gemini-9-pro']),['gemini-9-flash','gemini-9-pro']);
  assert.equal((await direct.ask('antigravity',saved,'안녕',null)).answer,'답변');
  for(const call of calls){assert.doesNotMatch(call.url,/key=/);assert.equal(call.options.headers['x-goog-api-key'],saved.key);}
  const body=JSON.parse(calls.at(-1).options.body);
