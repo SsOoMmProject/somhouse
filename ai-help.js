@@ -179,7 +179,7 @@ function aiHelpCard(k){
  const example=records?'예: 새벽 3시 분유 120 먹고 4시에 잠':'예: 다음 주 화요일 10시 반 소아과 예방접종 · 예약 문자나 안내문 사진도 돼요';
  const photo=!records?(picked.mode==='key'?`<label class="ai-photo">사진 고르기<input type="file" accept="image/*" data-ai-image="schedule"></label>${draft.image?` <span class="badge">${esc(draft.image.name)}</span> <button type="button" class="plain small" data-ai-photo-clear="1">사진 빼기</button>`:''}`:'<span class="caption">사진은 내 API 키로 연결한 AI만 읽을 수 있어요.</span>'):'';
  const list=(draft.items||[]).map((x,i)=>{
-  const r=x.record,line=records?desc(r,'records'):`${r.who?`<span class="who who-${whoClass(r.who)}">${esc(r.who)}</span> `:''}${esc(r.title)}${r.place?` · ${esc(r.place)}`:''}`;
+  const r=x.record,line=records?(r.type==='diaper'&&!r.category?'🧷 기저귀':desc(r,'records')):`${r.who?`<span class="who who-${whoClass(r.who)}">${esc(r.who)}</span> `:''}${esc(r.title)}${r.place?` · ${esc(r.place)}`:''}`;
   const flags=[...x.problems.map(p=>`<span class="badge warn">${esc(p)}</span>`),...x.notes.map(n=>`<span class="badge">${esc(n)}</span>`)].join(' ');
   return `<div class="ai-proposal"><p><strong>${line}</strong><br><span class="caption">${esc((r.date||'날짜 없음').replace('T',' '))}${r.memo?` · ${esc(r.memo)}`:''}</span>${flags?`<br>${flags}`:''}</p><div class="actions"><button type="button" class="secondary small" data-ai-edit="${k}:${i}">${x.problems.length?'고쳐서 저장':'고치기'}</button><button type="button" class="plain small" data-ai-drop="${k}:${i}">빼기</button></div></div>`;
  }).join('');
