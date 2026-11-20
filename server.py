@@ -43,7 +43,7 @@ ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA = Path.home() / "Library/Application Support/Somhouse"
 DEFAULT_RETURN = "https://ssoommproject.github.io/somhouse/"
 KINDS = ("records", "schedule", "shopping")
-STATIC = {"index.html", "app.js", "ai-direct.js", "service.js", "shared.js", "config.js", "style.css",
+STATIC = {"index.html", "app.js", "ai-direct.js", "ai-help.js", "service.js", "shared.js", "config.js", "style.css",
           "manifest.webmanifest", "icon-192.png", "icon-512.png", "about.html", "privacy.html", "terms.html"}
 ITERATIONS = 600_000
 MAX_BODY = 4 * 1024 * 1024

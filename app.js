@@ -84,13 +84,13 @@ function showGoogleStatus(connected){
 }
 function showLogin(text){
  shared.clear();mode='login';sharedReady=false;data=empty();migratedRaw=undefined;
- ai={config:null,checking:false,pending:false,selected:''};
+ ai={config:null,checking:false,pending:false,selected:''};aiHelpReset();
  $('#ai-form').reset();$('#ai-scope-field').hidden=true;$('#ai-providers').innerHTML='';
  $('#ai-status').textContent='';aiLogView();
  for(const dialog of [$('#dialog'),$('#password-dialog'),$('#family-dialog')])if(dialog.open)dialog.close();
  accountMessage('');render();message(text);
 }
-function editingScreen(){return $('#dialog').open||$('#password-dialog').open||$('#family-dialog').open||Boolean(document.activeElement?.closest?.('#filter-form'));}
+function editingScreen(){return $('#dialog').open||$('#password-dialog').open||$('#family-dialog').open||Boolean(document.activeElement?.closest?.('#filter-form,.ai-help'));}
 async function loadFamilyData(){
  let raw, original;
  // The guest sees made-up records only; this device's old family records are never sent with a guest login.
@@ -204,7 +204,7 @@ function reviewCard(x){
  const conflict=x.status==='웹 기록 유지',guess=[x.suggest?.category&&x.suggest.category!=='기타'?x.suggest.category:'',x.suggest?.amount||''].filter(Boolean).join(' ');
  const why=conflict?'웹에서 고친 기록과 캘린더 일정의 내용이 서로 달라요. 지금 기록은 웹에서 고친 그대로예요.':x.suggest?.amount?'내용을 확실히 알 수 없어 저장하지 않았어요.':'양이 없어서 저장하지 않았어요. 양을 입력해 주세요.';
  const buttons=conflict?['캘린더 내용으로 고치기','지금 기록 그대로 두기']:['내용 확인하고 저장','기록하지 않음'];
- return `<div class="item"><strong>${esc(x.title||'(제목 없음)')}</strong> <span class="badge">${esc(x.source)}</span><p>${esc((x.when||'').replace('T',' ')||'시각 정보 없음')}${guess?` · 추정 ${esc(guess)}`:''}<br>${why}</p><div class="actions"><button data-review-key="${esc(x.key)}" data-review-action="save">${buttons[0]}</button><button class="secondary" data-review-key="${esc(x.key)}" data-review-action="dismiss">${buttons[1]}</button></div></div>`;
+ return `<div class="item"><strong>${esc(x.title||'(제목 없음)')}</strong> <span class="badge">${esc(x.source)}</span><p>${esc((x.when||'').replace('T',' ')||'시각 정보 없음')}${guess?` · 추정 ${esc(guess)}`:''}<br>${why}</p><div class="actions">${aiReviewButton(x)}<button data-review-key="${esc(x.key)}" data-review-action="save">${buttons[0]}</button><button class="secondary" data-review-key="${esc(x.key)}" data-review-action="dismiss">${buttons[1]}</button></div></div>`;
 }
 function reviewView(){
  const cards=reviewItems().map(reviewCard).join('');
@@ -424,7 +424,7 @@ function listView(k){
   const kids=k==='schedule'?`<p class="caption kids">👶 아기: ${children().map(esc).join(', ')||'아직 등록하지 않았어요'} <button class="plain small" data-manage-children="1">${children().length?'아기 이름 관리':'＋ 아기 등록'}</button></p>`:'';
  const add=k==='records'?'<button data-add="feeding">수유 추가</button><button class="secondary" data-add="sleep">수면 추가</button><button class="secondary" data-add="diaper">기저귀 추가</button><button class="secondary" data-add="hospital">병원 추가</button>':`<button data-add="${k}">추가하기</button>`;
  const body=k==='schedule'?scheduleItems(items):k==='shopping'?shoppingItems(items):items.length?recordGroups(items):'';
- return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p>${kids}<div class="heading"><h2>${head}</h2><div class="quick">${add}</div></div>${filterView(k)}${body||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}${k==='records'?voiceHelp():''}`;
+ return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p>${kids}${k==='shopping'?'':aiHelpCard(k)}<div class="heading"><h2>${head}</h2><div class="quick">${add}</div></div>${filterView(k)}${body||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}${k==='records'?voiceHelp():''}`;
 }
 function shoppingItems(items){
  if(!items.length)return '';
@@ -724,6 +724,7 @@ function render(){
   if(openingAI){aiLogView();checkAI();}
   return;
  }
+ if(!ai.config&&!aiHelp.loading&&!shared.readOnly)aiHelpConfig();
  const dashboard=$('#dashboard');
  if(page==='schedule'){const board=calendarView();if(dashboardHtml!==board){dashboard.innerHTML=board;dashboardHtml=board;}dashboard.hidden=false;}
  else{dashboard.hidden=true;if(dashboardHtml){dashboard.innerHTML='';dashboardHtml='';}}
@@ -776,6 +777,7 @@ document.addEventListener('click',async e=>{
  if(b.dataset.page){location.hash=b.dataset.page;if(page===b.dataset.page)render();}
  if(b.dataset.reset){filters[b.dataset.reset]={};render();}
  if(busy||mode!=='shared'||!sharedReady)return;
+ if(await aiHelpClick(b))return;
  if(b.dataset.step){
   const input=document.querySelector('#fields input[name="amount"]'),category=document.querySelector('#fields select[name="category"]')?.value,unit=units[category];
   if(!input||!unit)return;

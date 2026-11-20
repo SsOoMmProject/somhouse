@@ -118,7 +118,8 @@
   }
   const REFUSED = 'AI가 이 질문에는 답하지 않았어요. 질문을 바꿔 다시 시도해 주세요.';
 
-  async function ask(provider, {key, model}, question, records, earlier = []) {
+  // `image` ({mime, data} in base64) goes with the new question only, for AIs that read pictures.
+  async function ask(provider, {key, model}, question, records, earlier = [], image = null) {
     const context = {question};
     if (records) context.records = records;
     const prompt = JSON.stringify(context);
@@ -128,7 +129,8 @@
         ...ANTHROPIC, 'x-api-key': key, 'content-type': 'application/json', 'anthropic-beta': 'server-side-fallback-2026-07-01',
       }, body: JSON.stringify({
         model, max_tokens: 16000, system: SYSTEM, output_config: {effort: 'low'}, fallbacks: 'default',
-        messages: [...turns('user', 'assistant', t => ({content: t})), {role: 'user', content: prompt}],
+        messages: [...turns('user', 'assistant', t => ({content: t})), {role: 'user', content: image
+          ? [{type: 'image', source: {type: 'base64', media_type: image.mime, data: image.data}}, {type: 'text', text: prompt}] : prompt}],
       })});
       if (body.stop_reason === 'refusal') throw failure(REFUSED);
       return reply((body.content || []).filter(x => x.type === 'text').map(x => x.text).join('\n'));
@@ -137,7 +139,8 @@
       const body = await call('https://api.openai.com/v1/responses', {method: 'POST', headers: {
         Authorization: 'Bearer ' + key, 'Content-Type': 'application/json',
       }, body: JSON.stringify({model, instructions: SYSTEM, store: false,
-        input: earlier.length ? [...turns('user', 'assistant', t => ({content: t})), {role: 'user', content: prompt}] : prompt})});
+        input: earlier.length || image ? [...turns('user', 'assistant', t => ({content: t})), {role: 'user', content: image
+          ? [{type: 'input_image', image_url: `data:${image.mime};base64,${image.data}`}, {type: 'input_text', text: prompt}] : prompt}] : prompt})});
       const text = (body.output || []).filter(x => x.type === 'message').flatMap(x => x.content || [])
         .filter(x => x.type === 'output_text').map(x => x.text).join('\n');
       if (!text && (body.output || []).some(x => (x.content || []).some(c => c.type === 'refusal'))) throw failure(REFUSED);
@@ -147,7 +150,8 @@
       const body = await call(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
         method: 'POST', headers: {'x-goog-api-key': key, 'Content-Type': 'application/json'},
         body: JSON.stringify({systemInstruction: {parts: [{text: SYSTEM}]},
-          contents: [...turns('user', 'model', t => ({parts: [{text: t}]})), {role: 'user', parts: [{text: prompt}]}]}),
+          contents: [...turns('user', 'model', t => ({parts: [{text: t}]})),
+            {role: 'user', parts: [...(image ? [{inlineData: {mimeType: image.mime, data: image.data}}] : []), {text: prompt}]}]}),
       });
       const candidate = (body.candidates || [])[0];
       if (body.promptFeedback?.blockReason || candidate?.finishReason === 'SAFETY') throw failure(REFUSED);
