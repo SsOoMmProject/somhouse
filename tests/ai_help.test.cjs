@@ -203,3 +203,23 @@ test('the summary waits for some records',async()=>{
  assert.equal(f.asked.length,0);
  assert.match(f.html(),/요약할 기록이 아직 없어요/);
 });
+
+test('a stats button opens the AI tab with that summary chosen',async()=>{
+ const f=family({reply:'답'});
+ const day=f.b.eval('Somhouse.localDateTime().slice(0,10)');
+ await f.b.settle();
+ f.b.server.data.records.push({id:'s',type:'sleep',date:day+'T00:10',end:day+'T01:10',category:'밤잠',memo:'PRIVATE'});
+ await f.b.eval('refreshShared(true)');
+ await f.open('stats');
+ assert.match(f.html(),/data-ai-ask-scope="sleep">😴 수면 기록으로 묻기/);
+ await f.click({aiAskScope:'sleep'});
+ assert.equal(f.b.context.location.hash,'ai');
+ f.b.context.location.hash='#ai';f.b.events.get('hashchange')();await f.b.settle();await f.b.settle();
+ assert.equal(f.b.get('#ai-scope').value,'sleep');
+ const form=f.b.get('#ai-form');form.values={question:'잠은 충분해?',scope:f.b.get('#ai-scope').value};
+ await form.onsubmit({preventDefault(){},target:form});
+ const sent=JSON.parse(f.asked.at(-1).contents.at(-1).parts[0].text);
+ assert.equal(sent.records.scope,'sleep');
+ assert.deepEqual(sent.records.summary[day],{count:1,minutes:60});
+ assert.doesNotMatch(JSON.stringify(sent),/PRIVATE/);
+});

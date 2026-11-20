@@ -6,7 +6,7 @@
   const SYSTEM = '솜하우스의 가족 도우미로 한국어로 간결하게 답하세요. '
     + '육아 상식, 제품 고르는 기준 같은 일반 질문은 알고 있는 지식으로 답하세요. '
     + '최신 리뷰 순위, 가격, 재고 같은 실시간 정보는 확인할 수 없다고 짧게 밝히고, 알고 있는 범위의 정보와 고르는 기준을 안내하세요. '
-    + '가족 기록 질문은 제공된 집계의 날짜, 건수, 수유량만 근거로 삼고 누락된 기록이나 세부 내용을 지어내지 마세요. '
+    + '가족 기록 질문은 제공된 집계의 날짜, 건수, 수유량, 수면 시간만 근거로 삼고 누락된 기록이나 세부 내용을 지어내지 마세요. '
     + '수유량 합계는 ml가 명시된 기록만 포함합니다. 가족 기록 질문에 필요한 집계가 없으면 이를 알리세요. '
     + '기록을 생성하거나 변경했다고 말하지 마세요. 의료 진단이나 처방은 하지 말고 필요하면 소아과 상담을 권하세요.';
   const MAX_ANSWER_LENGTH = 8000, TIMEOUT_MS = 60000;
@@ -163,7 +163,40 @@
   // The same numbers the Mac sends (ai.summarize_records): dates and counts only, never the records themselves.
   const VOLUME = /^([0-9]+(?:\.[0-9]+)?)\s*(?:ml|미리|밀리리터)$/i;
   function addDays(day, count) {const date = new Date(day + 'T12:00:00'); date.setDate(date.getDate() + count); return date.toISOString().slice(0, 10);}
+  // Minutes for a local "YYYY-MM-DDTHH:MM" (a real date only), like ai.minute_stamp.
+  function stamp(value) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(typeof value === 'string' ? value : '');
+    if (!m) return null;
+    const t = Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5]), d = new Date(t);
+    return d.getUTCMonth() === m[2] - 1 && d.getUTCDate() === +m[3] && +m[4] < 24 && +m[5] < 60 ? t / 60000 : null;
+  }
   function summarize(scope, data, today) {
+    if (scope === 'sleep' || scope === 'diaper') {
+      const keys = Array.from({length: 7}, (_, i) => addDays(today, i - 6)), days = {}, items = data.records || [];
+      if (scope === 'diaper') {
+        for (const key of keys) days[key] = {count: 0, pee: 0, poo: 0};
+        for (const item of items) {
+          const day = item.type === 'diaper' ? days[String(item.date || '').slice(0, 10)] : null;
+          if (!day) continue;
+          day.count++;
+          if (['소변', '둘 다'].includes(item.category)) day.pee++;
+          if (['대변', '둘 다'].includes(item.category)) day.poo++;
+        }
+        return days;
+      }
+      // Finished sleeps only; one that crosses midnight counts its minutes on each day it touches.
+      for (const key of keys) days[key] = {count: 0, minutes: 0};
+      for (const item of items) {
+        const start = item.type === 'sleep' ? stamp(item.date) : null, end = start === null ? null : stamp(item.end);
+        if (end === null || !(end - start > 0 && end - start <= 24 * 60)) continue;
+        if (days[item.date.slice(0, 10)]) days[item.date.slice(0, 10)].count++;
+        for (const key of keys) {
+          const dayStart = stamp(key + 'T00:00'), overlap = Math.min(end, dayStart + 1440) - Math.max(start, dayStart);
+          if (overlap > 0) days[key].minutes += overlap;
+        }
+      }
+      return days;
+    }
     if (scope === 'shopping') {
       const items = data.shopping || [], completed = items.filter(x => x.done === 'yes').length;
       return {completed, pending: items.length - completed};

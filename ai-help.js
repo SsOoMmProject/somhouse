@@ -3,9 +3,9 @@
    The AI only proposes: a sentence or a photo becomes records or schedule entries shown as cards,
    and nothing is saved until a person checks them. The weekly summary is written from numbers this
    app computes; record text is never sent. Loaded before app.js and only called after it has run. */
-const aiHelp={loading:false,records:null,schedule:null,stats:null};
+const aiHelp={loading:false,records:null,schedule:null,stats:null,scope:''};
 function aiHelpReset(){
- aiHelp.loading=false;
+ aiHelp.loading=false;aiHelp.scope='';
  aiHelp.records={text:'',items:null,status:'',working:false};
  aiHelp.schedule={text:'',image:null,items:null,status:'',working:false};
  aiHelp.stats={summary:'',by:'',at:'',status:'',working:false};
@@ -230,7 +230,7 @@ async function aiHelpSummary(){
 function aiSummaryCard(){
  const picked=aiHelpOption();if(!picked)return '';
  const draft=aiHelp.stats;
- return `<section class="card ai-help ai-summary" aria-label="AI 주간 요약"><h2>✨ AI 주간 요약</h2><p class="caption">어제까지 7일을 그 전 7일과 비교해요. 기록 원문은 보내지 않고 앱이 계산한 하루 평균 숫자만 ${esc(aiName(picked))}에게 보내요.</p>${draft.summary?`<p class="ai-summary-text">${esc(draft.summary)}</p><p class="caption">${esc(draft.by)} · ${esc(draft.at.replace('T',' '))}</p>`:''}<div class="actions"><button type="button" data-ai-summary="1"${draft.working?' disabled':''}>${draft.working?'요약하는 중…':draft.summary?'다시 요약':'요약 받기'}</button></div>${draft.status?`<p class="caption" role="status">${esc(draft.status)}</p>`:''}</section>`;
+ return `<section class="card ai-help ai-summary" aria-label="AI 주간 요약"><h2>✨ AI 주간 요약</h2><p class="caption">어제까지 7일을 그 전 7일과 비교해요. 기록 원문은 보내지 않고 앱이 계산한 하루 평균 숫자만 ${esc(aiName(picked))}에게 보내요.</p>${draft.summary?`<p class="ai-summary-text">${esc(draft.summary)}</p><p class="caption">${esc(draft.by)} · ${esc(draft.at.replace('T',' '))}</p>`:''}<div class="actions"><button type="button" data-ai-summary="1"${draft.working?' disabled':''}>${draft.working?'요약하는 중…':draft.summary?'다시 요약':'요약 받기'}</button></div>${draft.status?`<p class="caption" role="status">${esc(draft.status)}</p>`:''}${picked.summaries?`<p class="caption ai-ask-more">더 궁금하면 집계를 붙여 AI 탭에서 물어보세요.</p><div class="quick">${[['feeding','🍼 수유'],['sleep','😴 수면'],['diaper','🧷 기저귀']].map(([scope,label])=>`<button type="button" class="secondary small" data-ai-ask-scope="${scope}">${label} 기록으로 묻기</button>`).join('')}</div>`:''}</section>`;
 }
 
 // Called from the app's click handler; true when the click was ours.
@@ -245,6 +245,8 @@ async function aiHelpClick(b){
  if(d.aiPhotoClear){aiHelp.schedule.image=null;render();return true;}
  if(d.aiReview){await aiHelpReview(d.aiReview);return true;}
  if(d.aiSummary){await aiHelpSummary();return true;}
+ // Opens the AI tab with that week's numbers chosen; the AI tab applies it once the AI list loads.
+ if(['feeding','sleep','diaper'].includes(d.aiAskScope)){aiHelp.scope=d.aiAskScope;location.hash='ai';return true;}
  return false;
 }
 // Typing is kept in memory so a refresh from another phone does not wipe it.

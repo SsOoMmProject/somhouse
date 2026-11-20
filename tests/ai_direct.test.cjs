@@ -96,14 +96,24 @@ test('record summaries match the numbers the Mac sends',()=>{
    {type:'feeding',date:'2026-11-20T08:00',amount:'80ml',memo:'x'},{type:'feeding',date:'2026-11-20T11:00',amount:'10분'},
    {type:'feeding',date:'2026-11-14T23:00',amount:'100 미리'},{type:'feeding',date:'2026-11-13T23:00',amount:'50ml'},
    {type:'sleep',date:'2026-11-19T10:00'},{type:'feeding',date:'2026-11-19T10:00',amount:'72.5ml'},
+   {type:'sleep',date:'2026-11-19T23:30',end:'2026-11-20T01:15'},{type:'sleep',date:'2026-11-13T23:00',end:'2026-11-14T02:00'},
+   {type:'sleep',date:'2026-11-20T13:00',end:'2026-11-20T12:00'},{type:'sleep',date:'2026-11-18T10:00',end:'2026-11-20T10:00'},
+   {type:'sleep',date:'2026-02-30T10:00',end:'2026-03-01T10:00'},{type:'diaper',date:'2026-11-20T09:00',category:'둘 다'},
+   {type:'diaper',date:'2026-11-20T10:00',category:'소변'},{type:'diaper',date:'2026-11-19T10:00',category:'대변'},{type:'diaper',date:'2026-11-10T10:00',category:'소변'},
   ],
   schedule:[{date:'2026-11-20'},{date:'2026-11-26T09:00'},{date:'2026-11-27'},{date:'2026-11-19'}],
   shopping:[{done:'yes'},{done:'no'},{}],
  };
  const script='import json,sys\nfrom datetime import date\nfrom ai import summarize_records\nd=json.load(sys.stdin)\n'
-  +'print(json.dumps({s:summarize_records(s,d[{"feeding":"records"}.get(s,s)],date(2026,11,20)) for s in ("feeding","schedule","shopping")}))';
+  +'print(json.dumps({s:summarize_records(s,d[{"feeding":"records","sleep":"records","diaper":"records"}.get(s,s)],date(2026,11,20)) for s in ("feeding","sleep","diaper","schedule","shopping")}))';
  const python=JSON.parse(execFileSync('python3',['-c',script],{cwd:path.resolve(__dirname,'..'),input:JSON.stringify(data)}));
- for(const scope of ['feeding','schedule','shopping'])assert.deepEqual(direct.summarize(scope,data,today),python[scope],scope);
+ for(const scope of ['feeding','sleep','diaper','schedule','shopping'])assert.deepEqual(direct.summarize(scope,data,today),python[scope],scope);
+ // Midnight-crossing sleeps split by day; open, backwards, over-24h and impossible-date sleeps are skipped.
+ assert.deepEqual(python.sleep['2026-11-19'],{count:1,minutes:30});
+ assert.deepEqual(python.sleep['2026-11-20'],{count:0,minutes:75});
+ assert.deepEqual(python.sleep['2026-11-14'],{count:0,minutes:120});
+ assert.deepEqual(python.diaper['2026-11-20'],{count:2,pee:2,poo:1});
+ assert.equal(python.diaper['2026-11-10'],undefined);
 });
 
 test('follow-ups send only recent, short, text-only turns in each AI format',async()=>{

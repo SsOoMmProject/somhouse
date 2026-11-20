@@ -591,6 +591,7 @@ function pickAI(value){
  $('#ai-scope-field').hidden=!picked?.summaries;
  $('#ai-follow-field').hidden=picked?.mode!=='key';$('#ai-follow').checked=aiFollow();
  if(!picked?.summaries)$('#ai-scope').value='none';
+ else if(aiHelp.scope){$('#ai-scope').value=aiHelp.scope;aiHelp.scope='';}
  if(ai.config)$('#ai-status').textContent=aiStatusText();
  connectionView();
 }
