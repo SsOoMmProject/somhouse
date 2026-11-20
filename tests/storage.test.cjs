@@ -53,10 +53,11 @@ test('feeding statistics render both periods without a manual sync action',async
  const b=browser();await b.login();
  b.eval("page='stats';render()");
  assert.match(b.get('#content').innerHTML,/최근 7일/);
- assert.equal((b.get('#content').innerHTML.match(/scope="row"/g)||[]).length,7);
+ // One row per day in each of the feeding, sleep and diaper tables.
+ assert.equal((b.get('#content').innerHTML.match(/scope="row"/g)||[]).length,3*7);
  await b.events.get('click')({target:{closest:()=>({dataset:{statsDays:'30'}})}});
  assert.match(b.get('#content').innerHTML,/최근 30일/);
- assert.equal((b.get('#content').innerHTML.match(/scope="row"/g)||[]).length,30);
+ assert.equal((b.get('#content').innerHTML.match(/scope="row"/g)||[]).length,3*30);
  assert.doesNotMatch(b.get('#content').innerHTML,/시트 동기화/);
 });
 
