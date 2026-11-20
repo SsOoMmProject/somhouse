@@ -75,7 +75,8 @@ test('Claude: uses the current Opus with server-side fallbacks and reports refus
 
 test('API errors become plain explanations',async()=>{
  const cases=[[401,{error:{message:'invalid x-api-key'}},/API 키가 올바르지 않아요/],[429,{error:{type:'rate_limit_error'}},/한도/],
-  [400,{error:{message:'Your credit balance is too low'}},/크레딧/],[529,{error:{type:'overloaded_error'}},/잠시 후/],[404,{error:{message:'model: x'}},/다른 모델/]];
+  [400,{error:{message:'Your credit balance is too low'}},/크레딧/],[529,{error:{type:'overloaded_error'}},/잠시 후/],[404,{error:{message:'model: x'}},/다른 모델을 골라 주세요\. \(오류 404\)/],
+  [503,{error:{code:503,message:'The model is overloaded. Please try again later.',status:'UNAVAILABLE'}},/요청이 몰려 있어요.*\(오류 503\)/],[500,{error:{message:'Internal error'}},/잠시 응답하지 않아요.*\(오류 500\)/]];
  for(const [status,body,message] of cases){
   serve({'https://api.anthropic.com/v1/messages':[status,body]});
   await assert.rejects(direct.ask('claude',{key:'k',model:'m'},'안녕',null),message);

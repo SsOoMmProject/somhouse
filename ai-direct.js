@@ -46,9 +46,12 @@
     if (status === 429 || detail.includes('quota') || detail.includes('resource_exhausted'))
       throw failure('AI 사용 한도에 도달했어요. 잠시 후 다시 시도해 주세요.', 429);
     if (status === 403) throw failure('이 API 키로는 사용할 수 없는 기능이에요. 키 권한을 확인해 주세요.', 403);
-    if (status === 404 || detail.includes('model')) throw failure('고른 모델을 쓸 수 없어요. 다른 모델을 골라 주세요.', status);
-    if (status >= 500) throw failure('AI 회사 서버가 잠시 응답하지 않아요. 잠시 후 다시 시도해 주세요.', status);
-    throw failure('AI 답변을 받지 못했어요. 다시 시도해 주세요.', status);
+    // Before the model check: "The model is overloaded" (503) is a busy server, not a missing model.
+    if (status >= 500) throw failure(detail.includes('overloaded') || status === 503 || status === 529
+      ? `지금 이 모델에 요청이 몰려 있어요. 잠시 후 다시 시도하거나 다른 모델을 골라 주세요. (오류 ${status})`
+      : `AI 회사 서버가 잠시 응답하지 않아요. 잠시 후 다시 시도해 주세요. (오류 ${status})`, status);
+    if (status === 404 || detail.includes('model')) throw failure(`고른 모델을 쓸 수 없어요. 다른 모델을 골라 주세요. (오류 ${status})`, status);
+    throw failure(`AI 답변을 받지 못했어요. 다시 시도해 주세요. (오류 ${status})`, status);
   }
 
   // Connecting only lists the models: it checks the key without spending tokens.
