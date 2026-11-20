@@ -94,3 +94,21 @@ test('buying again: purchase days are kept and a usual gap suggests the next tim
  const b=f.server.data.shopping.find(x=>x.id==='b');
  assert.deepEqual([b.done,b.boughtAt],['yes',[d(-2),today].join(',')]);
 });
+
+test('the per-feeding amount is shown week by week for 4 weeks',async()=>{
+ const f=family();
+ const d=n=>f.day(n);
+ await f.load('records',[
+  {id:'1',type:'feeding',date:d(-22)+'T08:00',category:'분유',amount:'90ml',memo:''},
+  {id:'2',type:'feeding',date:d(-21)+'T08:00',category:'분유',amount:'100ml',memo:''},
+  {id:'3',type:'feeding',date:d(-3)+'T08:00',category:'분유',amount:'120ml',memo:''},
+  {id:'4',type:'feeding',date:d(-1)+'T08:00',category:'분유',amount:'130ml',memo:''},
+  {id:'5',type:'feeding',date:d(-1)+'T10:00',category:'모유',amount:'15분',memo:''},
+  {id:'6',type:'feeding',date:d(-1)+'T12:00',category:'기타',amount:'조금',memo:''}]);
+ const weeks=JSON.parse(f.b.eval('JSON.stringify(amountTrend())'));
+ assert.deepEqual(weeks.map(w=>[w.ml,w.mlCount,w.minutes]),[[95,2,null],[null,0,null],[null,0,null],[125,2,15]]);
+ const html=await f.open('stats');
+ assert.match(html,/1회 평균 수유량 \(주별\)/);
+ assert.match(html,new RegExp(`이번 주는 ${Number(d(-27).slice(5,7))}/${Number(d(-27).slice(8))}~${Number(d(-21).slice(5,7))}/${Number(d(-21).slice(8))}보다 30ml 많아요`));
+ assert.match(html,/<td>125ml <small>\(2회\)<\/small><\/td><td>15분 <small>\(1회\)<\/small><\/td>/);
+});

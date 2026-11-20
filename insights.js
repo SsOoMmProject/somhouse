@@ -74,6 +74,26 @@ function rebuyCard(){
  return `<section class="card checks-card" aria-label="곧 살 때예요"><h2>🛒 곧 살 때예요</h2><p class="caption">‘✓ 샀어요’를 누른 날짜로 같은 이름의 물건을 보통 며칠마다 샀는지 계산해요. 두 번 이상 산 물건만 보여요.</p>${rows}</section>`;
 }
 
+// ⑥ How much the baby takes per feeding, week by week (the last 4 weeks of 7 days ending today):
+// bottle feedings with ml, and timed breastfeeding minutes.
+function amountTrend(now=new Date()){
+ const today=Somhouse.localDateTime(now).slice(0,10),current=Somhouse.localDateTime(now);
+ return [0,1,2,3].map(w=>{
+  const to=Somhouse.addDays(today,-7*w),from=Somhouse.addDays(to,-6);
+  const feeds=data.records.filter(x=>x.type==='feeding'&&x.date<=current&&x.date.slice(0,10)>=from&&x.date.slice(0,10)<=to);
+  const ml=feeds.map(x=>Somhouse.feedingVolume(x.amount)).filter(v=>v!==null),min=feeds.map(x=>Somhouse.feedingMinutes(x.amount)).filter(v=>v!==null);
+  const avg=list=>list.length?Math.round(list.reduce((a,b)=>a+b,0)/list.length):null;
+  return {from,to,ml:avg(ml),mlCount:ml.length,minutes:avg(min),minuteCount:min.length};
+ }).reverse();
+}
+function amountTrendView(){
+ const weeks=amountTrend();if(!weeks.some(w=>w.mlCount||w.minuteCount))return '';
+ const max=Math.max(1,...weeks.map(w=>w.ml||0)),md=d=>`${Number(d.slice(5,7))}/${Number(d.slice(8))}`;
+ const rows=weeks.map(w=>`<tr><th scope="row">${md(w.from)}~${md(w.to)}</th><td>${w.ml!==null?`${w.ml}ml <small>(${w.mlCount}회)</small>`:'—'}</td><td>${w.minutes!==null?`${w.minutes}분 <small>(${w.minuteCount}회)</small>`:'—'}</td><td aria-hidden="true"><div class="stats-bar"><span style="width:${w.ml?Math.min(100,w.ml/max*100):0}%"></span></div></td></tr>`).join('');
+ const known=weeks.filter(w=>w.ml!==null),change=known.length>=2?known.at(-1).ml-known[0].ml:null;
+ return `<section class="card"><h2>1회 평균 수유량 (주별)</h2><p class="caption">최근 4주를 7일씩 나눠 한 번에 먹은 양의 평균을 보여요. 분유·혼합은 ml가 있는 기록만, 직수는 분으로 기록된 것만 계산해요.${change!==null?` ${known.at(-1)===weeks[3]?'이번 주는':`${md(known.at(-1).from)}~${md(known.at(-1).to)}은`} ${md(known[0].from)}~${md(known[0].to)}보다 ${change>=0?`${change}ml 많아요`:`${-change}ml 적어요`}.`:''}</p><table class="stats-table"><thead><tr><th scope="col">기간</th><th scope="col">분유 1회</th><th scope="col">직수 1회</th><th scope="col">비교</th></tr></thead><tbody>${rows}</tbody></table></section>`;
+}
+
 // Called from the app's click handler; true when the click was ours.
 async function insightsClick(b){
  const d=b.dataset||{};
