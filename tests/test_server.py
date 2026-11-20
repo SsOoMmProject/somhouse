@@ -1360,3 +1360,16 @@ time.sleep(30)
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SleepDiaperSummaryTest(unittest.TestCase):
+    def test_scopes_accepted_and_summarized(self):
+        import ai
+        from datetime import date
+        self.assertEqual(ai.parse_question({"question": "잠", "scope": "sleep"}), ("잠", "sleep"))
+        self.assertEqual(ai.parse_question({"question": "기저귀", "scope": "diaper"}), ("기저귀", "diaper"))
+        items = [{"type": "sleep", "date": "2026-11-20T09:00", "end": "2026-11-20T10:30"},
+                 {"type": "diaper", "date": "2026-11-20T09:00", "category": "대변"}]
+        self.assertEqual(ai.summarize_records("sleep", items, date(2026, 11, 20))["2026-11-20"], {"count": 1, "minutes": 90})
+        self.assertEqual(ai.summarize_records("diaper", items, date(2026, 11, 20))["2026-11-20"], {"count": 1, "pee": 0, "poo": 1})
+        self.assertEqual(len(ai.summarize_records("sleep", items, date(2026, 11, 20))), 7)

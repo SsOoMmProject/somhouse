@@ -64,7 +64,7 @@ function browser({trial=false,origin='http://localhost:8765',hash='',raw=JSON.st
  if(fetcher)context.fetch=fetcher;
  context.window=context;context.addEventListener=(name,fn)=>events.set(name,fn);
  vm.createContext(context);
- for(const path of ['service.js','shared.js','ai-direct.js','app.js'])vm.runInContext(fs.readFileSync(require.resolve('../../'+path),'utf8'),context);
+ for(const path of ['service.js','shared.js','ai-direct.js','ai-help.js','app.js'])vm.runInContext(fs.readFileSync(require.resolve('../../'+path),'utf8'),context);
  return {eval:code=>vm.runInContext(code,context),local,sessionData,calls,alerts,get,server,events,timers,context,
   fail:error=>server.failure=error,blockRead:()=>blockRead=true,blockWrite:()=>blockWrite=true,settle:()=>new Promise(resolve=>setImmediate(resolve)),
   login:async(name='family1',password='password',base='http://127.0.0.1:8787')=>{await vm.runInContext(`shared.login(${JSON.stringify(base)},${JSON.stringify(name)},${JSON.stringify(password)})`,context);vm.runInContext("mode='shared'",context);await vm.runInContext('refreshShared(true)',context);}};

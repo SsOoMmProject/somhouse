@@ -1,7 +1,7 @@
 """Ask one connected AI CLI (Codex, Claude or Antigravity) a single question with limited record summaries."""
 from contextlib import contextmanager
 from collections import defaultdict, deque
-from datetime import timedelta
+from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
@@ -25,13 +25,13 @@ MAX_OUTPUT_BYTES = 256 * 1024
 MAX_ANSWER_LENGTH = 8000
 SANDBOX = Path("/usr/bin/sandbox-exec")
 MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}")
-SCOPES = {"none": None, "feeding": "records", "schedule": "schedule", "shopping": "shopping"}
+SCOPES = {"none": None, "feeding": "records", "sleep": "records", "diaper": "records", "schedule": "schedule", "shopping": "shopping"}
 VOLUME = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*(?:ml|미리|밀리리터)", re.IGNORECASE)
 SYSTEM = (
     "솜하우스의 가족 도우미로 한국어로 간결하게 답하세요. "
     "육아 상식, 제품 고르는 기준 같은 일반 질문은 알고 있는 지식으로 답하세요. "
     "최신 리뷰 순위, 가격, 재고 같은 실시간 정보는 확인할 수 없다고 짧게 밝히고, 알고 있는 범위의 정보와 고르는 기준을 안내하세요. "
-    "가족 기록 질문은 제공된 집계의 날짜, 건수, 수유량만 근거로 삼고 누락된 기록이나 세부 내용을 지어내지 마세요. "
+    "가족 기록 질문은 제공된 집계의 날짜, 건수, 수유량, 수면 시간만 근거로 삼고 누락된 기록이나 세부 내용을 지어내지 마세요. "
     "수유량 합계는 ml가 명시된 기록만 포함합니다. 가족 기록 질문에 필요한 집계가 없으면 이를 알리세요. "
     "기록을 생성하거나 변경했다고 말하지 마세요. 의료 진단이나 처방은 하지 말고 필요하면 소아과 상담을 권하세요."
 )
@@ -117,7 +117,40 @@ def parse_question(body):
     return question.strip(), scope
 
 
+def minute_stamp(value):
+    """Minutes since 1970 for a local "YYYY-MM-DDTHH:MM", or None."""
+    try:
+        return int(datetime.strptime(str(value)[:16], "%Y-%m-%dT%H:%M").timestamp() // 60) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
 def summarize_records(scope, items, today):
+    if scope in ("sleep", "diaper"):
+        keys = [(today - timedelta(days=6 - index)).isoformat() for index in range(7)]
+        if scope == "diaper":
+            days = {key: {"count": 0, "pee": 0, "poo": 0} for key in keys}
+            for item in items:
+                day = days.get(str(item.get("date", ""))[:10]) if item.get("type") == "diaper" else None
+                if day is not None:
+                    day["count"] += 1
+                    day["pee"] += item.get("category") in ("소변", "둘 다")
+                    day["poo"] += item.get("category") in ("대변", "둘 다")
+            return days
+        # Finished sleeps only; one that crosses midnight counts its minutes on each day it touches.
+        days = {key: {"count": 0, "minutes": 0} for key in keys}
+        for item in items:
+            start, end = (minute_stamp(item.get(k)) for k in ("date", "end")) if item.get("type") == "sleep" else (None, None)
+            if start is None or end is None or not 0 < end - start <= 24 * 60:
+                continue
+            if item["date"][:10] in days:
+                days[item["date"][:10]]["count"] += 1
+            for key in keys:
+                day_start = minute_stamp(key + "T00:00")
+                overlap = min(end, day_start + 1440) - max(start, day_start)
+                if overlap > 0:
+                    days[key]["minutes"] += overlap
+        return days
     if scope == "shopping":
         completed = sum(item.get("done") == "yes" for item in items)
         return {"completed": completed, "pending": len(items) - completed}
