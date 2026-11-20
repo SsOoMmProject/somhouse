@@ -84,7 +84,7 @@ function showGoogleStatus(connected){
 }
 function showLogin(text){
  shared.clear();mode='login';sharedReady=false;data=empty();migratedRaw=undefined;
- ai={config:null,checking:false,pending:false,selected:''};aiHelpReset();
+ ai={config:null,checking:false,pending:false,selected:''};aiHelpReset();reportReset();
  $('#ai-form').reset();$('#ai-scope-field').hidden=true;$('#ai-providers').innerHTML='';
  $('#ai-status').textContent='';aiLogView();
  for(const dialog of [$('#dialog'),$('#password-dialog'),$('#family-dialog')])if(dialog.open)dialog.close();
@@ -196,7 +196,7 @@ function googleItem(x){
  return `<div class="item"><strong>${esc(x.title)}</strong> <span class="badge gcal">📆 Google</span><p>${esc(when)}</p>${open}</div>`;
 }
 function sorted(k){return [...data[k]].sort((a,b)=>(b.date||b.id).localeCompare(a.date||a.id))}
-const pageTitles={home:'홈',records:'육아 기록',stats:'통계',schedule:'일정',shopping:'구매 목록',ai:'AI 대화',review:'확인 필요'};
+const pageTitles={home:'홈',records:'육아 기록',stats:'통계',schedule:'일정',shopping:'구매 목록',ai:'AI 대화',review:'확인 필요',report:'소아과용 요약'};
 let reviewKey='',schedulePastOpen=false;
 function reviewItems(){return Array.isArray(shared?.googleStatus?.review_items)?shared.googleStatus.review_items:[];}
 // Inputs that were not saved automatically, or that differ from a web edit. The Google Task or event is never changed here.
@@ -437,7 +437,7 @@ function statsView(){
  const gaps=feeds.slice(1).map((x,i)=>Somhouse.sleepMinutes({date:feeds[i].date,end:x.date})).filter(m=>m!==null&&m<=8*60);
  const count=rows.reduce((s,r)=>s+r.count,0),measured=rows.filter(r=>r.measuredCount&&Number.isFinite(r.volume)),volume=measured.reduce((s,r)=>s+r.volume,0);
  const cards=[['하루 평균 횟수',`${(count/statsDays).toFixed(1)}회`],['하루 평균 용량',measured.length?`${Math.round(volume/statsDays).toLocaleString('ko-KR')}ml`:'—'],['평균 수유 간격',gaps.length?Somhouse.duration(Math.round(gaps.reduce((s,m)=>s+m,0)/gaps.length)):'—'],[`${statsDays}일 합계`,`${count}회${measured.length?` · ${volume.toLocaleString('ko-KR')}ml`:''}`]];
- return `<h1>통계</h1>${aiSummaryCard()}${alarmView()}${patternView()}<h2 class="section-head">수유</h2><div class="quick stats-period" aria-label="조회 기간">${periods}</div><div class="summary-cards stats-cards">${cards.map(([label,value])=>`<div class="summary-card"><p>${label}</p><strong>${esc(value)}</strong></div>`).join('')}</div><p class="caption">평균 간격은 연속된 두 수유 사이가 8시간 이하인 경우만 계산해요.</p><section class="card"><h2>최근 ${statsDays}일</h2><p class="caption">횟수에는 모든 수유를, 용량에는 ml·cc·밀리리터·미리·씨씨 단위가 있는 기록만 집계해요. 직수 시간과 단위 없는 값은 용량에 합산하지 않아요.</p><table class="stats-table"><thead><tr><th scope="col">날짜</th><th scope="col">수유 횟수</th><th scope="col">합계 용량</th><th scope="col">용량 비교</th></tr></thead><tbody>${table}</tbody></table></section>${amountTrendView()}${sleepStatsView(rows.map(r=>r.date))}${diaperStatsView(rows.map(r=>r.date))}`;
+ return `<h1>통계</h1><div class="actions report-link"><button type="button" class="secondary" data-page="report">🩺 소아과용 2주 요약 보기</button></div>${aiSummaryCard()}${alarmView()}${patternView()}<h2 class="section-head">수유</h2><div class="quick stats-period" aria-label="조회 기간">${periods}</div><div class="summary-cards stats-cards">${cards.map(([label,value])=>`<div class="summary-card"><p>${label}</p><strong>${esc(value)}</strong></div>`).join('')}</div><p class="caption">평균 간격은 연속된 두 수유 사이가 8시간 이하인 경우만 계산해요.</p><section class="card"><h2>최근 ${statsDays}일</h2><p class="caption">횟수에는 모든 수유를, 용량에는 ml·cc·밀리리터·미리·씨씨 단위가 있는 기록만 집계해요. 직수 시간과 단위 없는 값은 용량에 합산하지 않아요.</p><table class="stats-table"><thead><tr><th scope="col">날짜</th><th scope="col">수유 횟수</th><th scope="col">합계 용량</th><th scope="col">용량 비교</th></tr></thead><tbody>${table}</tbody></table></section>${amountTrendView()}${sleepStatsView(rows.map(r=>r.date))}${diaperStatsView(rows.map(r=>r.date))}`;
 }
 // Sleep for the chosen period: averages over the days that have sleep records, so a forgotten day does not drag them down.
 function sleepStatsView(dates){
@@ -790,7 +790,7 @@ function render(){
  else{dashboard.hidden=true;if(dashboardHtml){dashboard.innerHTML='';dashboardHtml='';}}
  const past=document.querySelector('details.past');if(past)schedulePastOpen=past.open;
  showGoogleStatus(true);
- $('#content').innerHTML=page==='home'?homeView():page==='stats'?statsView():page==='review'?reviewView():listView(page);
+ $('#content').innerHTML=page==='home'?homeView():page==='stats'?statsView():page==='review'?reviewView():page==='report'?reportView():listView(page);
  connectionView();
  const form=$('#filter-form');if(form){const apply=e=>{e?.preventDefault?.();const next=Object.fromEntries(new FormData(form));if(next.from&&next.to&&next.from>next.to){alert('시작 날짜는 마지막 날짜보다 늦을 수 없어요.');return}filters[page]=next;render()};form.onsubmit=apply;form.onchange=apply;}
 }

@@ -94,10 +94,70 @@ function amountTrendView(){
  return `<section class="card"><h2>1회 평균 수유량 (주별)</h2><p class="caption">최근 4주를 7일씩 나눠 한 번에 먹은 양의 평균을 보여요. 분유·혼합은 ml가 있는 기록만, 직수는 분으로 기록된 것만 계산해요.${change!==null?` ${known.at(-1)===weeks[3]?'이번 주는':`${md(known.at(-1).from)}~${md(known.at(-1).to)}은`} ${md(known[0].from)}~${md(known[0].to)}보다 ${change>=0?`${change}ml 많아요`:`${-change}ml 적어요`}.`:''}</p><table class="stats-table"><thead><tr><th scope="col">기간</th><th scope="col">분유 1회</th><th scope="col">직수 1회</th><th scope="col">비교</th></tr></thead><tbody>${rows}</tbody></table></section>`;
 }
 
+// ⑦ Two weeks for the pediatrician: daily feeding, sleep and diapers, hospital visits and upcoming
+// appointments, on one screen that also prints. Ⓐ/Ⓒ: the AI can write a two-line summary and questions to ask,
+// from the numbers only (hospital notes go only when the family turns that on).
+const REPORT_DAYS=14,report={memos:false,text:'',by:'',at:'',status:'',working:false};
+function reportReset(){Object.assign(report,{memos:false,text:'',by:'',at:'',status:'',working:false});}
+const HOSPITAL_WORDS=/병원|소아과|의원|진료|접종|검진|예방/;
+function reportData(now=new Date()){
+ const current=Somhouse.localDateTime(now),today=current.slice(0,10),from=Somhouse.addDays(today,-(REPORT_DAYS-1));
+ const days=Array.from({length:REPORT_DAYS},(_,i)=>Somhouse.addDays(from,i)).map(day=>{
+  const feeds=data.records.filter(x=>x.type==='feeding'&&x.date.slice(0,10)===day&&x.date<=current);
+  const ml=feeds.map(x=>Somhouse.feedingVolume(x.amount)).filter(v=>v!==null),min=feeds.map(x=>Somhouse.feedingMinutes(x.amount)).filter(v=>v!==null);
+  const sleep=Somhouse.sleepDay(data.records,day,now),diaper=Somhouse.diaperDay(data.records,day,now);
+  return {day,feeds:feeds.length,ml:ml.length?Math.round(ml.reduce((a,b)=>a+b,0)):null,breastMinutes:min.length?Math.round(min.reduce((a,b)=>a+b,0)):null,
+   sleep:sleep.recorded?sleep.total:null,longest:sleep.longest||null,naps:sleep.naps,diapers:diaper.count,pee:diaper.pee,poo:diaper.poo};
+ });
+ const avg=(f,keep=x=>true)=>{const list=days.filter(keep).map(f).filter(v=>v!==null);return list.length?list.reduce((a,b)=>a+b,0)/list.length:null;};
+ const visits=data.records.filter(x=>x.type==='hospital'&&x.date.slice(0,10)>=Somhouse.addDays(today,-60)&&x.date<=current).sort((a,b)=>b.date.localeCompare(a.date));
+ const coming=data.schedule.filter(x=>x.date>=current&&x.date.slice(0,10)<=Somhouse.addDays(today,30)&&HOSPITAL_WORDS.test(`${x.title} ${x.place||''} ${x.memo||''}`)).sort((a,b)=>a.date.localeCompare(b.date));
+ return {from,to:today,days,visits,coming,poo:Somhouse.lastPoo(data.records,now),
+  avg:{feeds:avg(x=>x.feeds,x=>x.feeds||x.sleep!==null||x.diapers),ml:avg(x=>x.ml),sleep:avg(x=>x.sleep),longest:avg(x=>x.longest),diapers:avg(x=>x.diapers,x=>x.diapers),poo:avg(x=>x.poo,x=>x.diapers)}};
+}
+function reportView(){
+ const r=reportData(),md=d=>`${Number(d.slice(5,7))}/${Number(d.slice(8))}`,hm=m=>m===null||m===undefined?'—':Somhouse.duration(Math.round(m)),one=v=>v===null?'—':v.toFixed(1);
+ const kids=children().length?` · ${children().map(esc).join(', ')}`:'';
+ const cards=[['하루 수유',r.avg.feeds===null?'—':`${one(r.avg.feeds)}회`],['하루 분유',r.avg.ml===null?'—':`${Math.round(r.avg.ml)}ml`],['하루 수면',hm(r.avg.sleep)],['평균 가장 긴 잠',hm(r.avg.longest)],['하루 기저귀',r.avg.diapers===null?'—':`${one(r.avg.diapers)}회 · 대변 ${one(r.avg.poo)}회`],['마지막 대변',r.poo?r.poo.date.slice(5).replace('-','/').replace('T',' '):'기록 없음']];
+ const rows=[...r.days].reverse().map(x=>`<tr><th scope="row">${md(x.day)} ${weekdays[new Date(x.day+'T12:00').getDay()]}</th><td>${x.feeds?`${x.feeds}회`:'—'}${x.ml!==null?`<br><small>${x.ml}ml</small>`:''}${x.breastMinutes!==null?`<br><small>직수 ${x.breastMinutes}분</small>`:''}</td><td>${hm(x.sleep)}${x.longest?`<br><small>최장 ${hm(x.longest)}</small>`:''}</td><td>${x.diapers?`${x.diapers}회<br><small>소${x.pee}·대${x.poo}</small>`:'—'}</td></tr>`).join('');
+ const visits=r.visits.length?r.visits.map(x=>`<li>${esc(x.date.slice(5).replace('-','/').replace('T',' '))} · ${esc(x.hospital)} · ${esc(x.reason)}${x.memo?` <span class="caption">${esc(x.memo)}</span>`:''}</li>`).join(''):'<li class="caption">최근 60일 병원 방문 기록이 없어요.</li>';
+ const coming=r.coming.length?r.coming.map(x=>`<li>${esc(x.date.slice(5).replace('-','/').replace('T',' '))} · ${esc(x.title)}${x.place?` · ${esc(x.place)}`:''}</li>`).join(''):'<li class="caption">30일 안에 병원 관련 일정이 없어요.</li>';
+ const picked=aiHelpOption();
+ const ai=picked?`<section class="card ai-help no-print-empty"><h2>✨ 소아과에 물어볼 것 정리</h2><p class="caption">위 숫자를 ${esc(aiName(picked))}에게 보내 두 줄 요약과 물어볼 질문을 받아요. 의료 판단은 하지 않고, 진료 때 참고할 질문만 정리해요.</p><div class="actions no-print"><button type="button" class="${report.memos?'':'secondary '}small" data-report-memos="1">병원 메모 함께 보내기: ${report.memos?'켜짐':'꺼짐'}</button><button type="button" data-report-ai="1"${report.working?' disabled':''}>${report.working?'정리하는 중…':report.text?'다시 정리':'정리하기'}</button></div>${report.status?`<p class="caption" role="status">${esc(report.status)}</p>`:''}${report.text?`<p class="ai-summary-text">${esc(report.text)}</p><p class="caption">${esc(report.by)} · ${esc(report.at.replace('T',' '))} · AI가 쓴 내용이라 틀릴 수 있어요.</p>`:''}</section>`:'';
+ return `<div class="report"><h1>🩺 소아과용 2주 요약</h1><p class="caption">${md(r.from)}~${md(r.to)} (오늘 포함 ${REPORT_DAYS}일)${kids} · 솜하우스 기록으로 만들었어요. 평균은 기록이 있는 날만 계산해요.</p><div class="actions no-print"><button type="button" class="secondary" data-report-print="1">인쇄 · PDF 저장</button><button type="button" class="plain" data-page="stats">← 통계로</button></div><div class="summary-cards stats-cards">${cards.map(([label,value])=>`<div class="summary-card"><p>${label}</p><strong>${esc(value)}</strong></div>`).join('')}</div><section class="card"><h2>날짜별</h2><table class="stats-table report-table"><thead><tr><th scope="col">날짜</th><th scope="col">수유</th><th scope="col">수면</th><th scope="col">기저귀</th></tr></thead><tbody>${rows}</tbody></table></section><section class="card"><h2>병원 방문 (최근 60일)</h2><ul class="report-list">${visits}</ul></section><section class="card"><h2>다가오는 병원 일정 (30일)</h2><ul class="report-list">${coming}</ul></section>${ai}</div>`;
+}
+function reportPrompt(r){
+ const numbers={period:`${r.from}~${r.to}`,daily:r.days.map(x=>({date:x.day,feeds:x.feeds,bottle_ml:x.ml,breast_minutes:x.breastMinutes,sleep_minutes:x.sleep,longest_sleep_minutes:x.longest,diapers:x.diapers,poo:x.poo})),
+  hospital_visits:r.visits.map(x=>report.memos?{date:x.date.slice(0,10),reason:x.reason,memo:x.memo||''}:{date:x.date.slice(0,10)})};
+ return `아래는 아기 기록을 앱이 날짜별로 계산한 숫자예요(null은 그날 기록 없음). 소아과 진료 전에 보호자가 볼 메모를 한국어로 써 주세요.
+첫 부분은 "요약:"으로 시작해 수유·수면·기저귀의 흐름을 두 줄로 쓰고, 다음은 "물어볼 것:"으로 시작해 진료 때 의사에게 물어보면 좋을 질문 3~5개를 목록으로 쓰세요.
+숫자에 없는 내용은 추측하지 말고 진단이나 처방은 하지 마세요. 기록이 빠진 날이 많으면 그렇다고 알려 주세요.
+숫자: ${JSON.stringify(numbers)}`;
+}
+async function reportAI(){
+ const picked=aiHelpOption(),state=ai;
+ if(!picked||report.working)return;
+ const r=reportData();
+ if(!r.days.some(x=>x.feeds||x.sleep!==null||x.diapers)){report.status='정리할 기록이 아직 없어요.';render();return;}
+ report.working=true;report.status=`${aiName(picked)}가 정리하고 있어요…`;render();
+ try{
+  const answer=await aiHelpAsk(picked,reportPrompt(r));
+  if(ai!==state)return;
+  Object.assign(report,{text:answer.trim().slice(0,2000),by:aiName(picked),at:Somhouse.localDateTime(),status:''});
+ }catch(error){
+  if(ai!==state)return;
+  if(error.status===401&&picked.mode!=='key'){showLogin(error.message);return;}
+  report.status=error.message;
+ }finally{if(ai===state){report.working=false;render();}}
+}
+
 // Called from the app's click handler; true when the click was ours.
 async function insightsClick(b){
  const d=b.dataset||{};
  if(d.checkOk){dismissCheck(d.checkOk);render();return true;}
+ if(d.reportMemos){report.memos=!report.memos;render();return true;}
+ if(d.reportAi){await reportAI();return true;}
+ if(d.reportPrint){if(typeof print==='function')print();return true;}
  if(d.rebuy){const x=data.shopping.find(item=>item.id===d.rebuy);if(x&&await changeItem('shopping',{...x,done:'no'}))render();return true;}
  if(d.checkRemove){
   const x=data.records.find(r=>r.id===d.checkRemove);if(!x)return true;

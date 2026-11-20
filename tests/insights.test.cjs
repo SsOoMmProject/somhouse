@@ -112,3 +112,42 @@ test('the per-feeding amount is shown week by week for 4 weeks',async()=>{
  assert.match(html,new RegExp(`이번 주는 ${Number(d(-27).slice(5,7))}/${Number(d(-27).slice(8))}~${Number(d(-21).slice(5,7))}/${Number(d(-21).slice(8))}보다 30ml 많아요`));
  assert.match(html,/<td>125ml <small>\(2회\)<\/small><\/td><td>15분 <small>\(1회\)<\/small><\/td>/);
 });
+
+test('a two-week summary for the pediatrician, with AI questions from the numbers only',async()=>{
+ const f=family();
+ f.b.context.localStorage.setItem('somhouse-ai-keys-v1',JSON.stringify({'http://127.0.0.1:8787|mom':{antigravity:{key:'AIza'+'c'.repeat(35),model:'gemini-3.8-flash',models:['gemini-3.8-flash']}}}));
+ const base=f.b.context.fetch,asked=[];
+ f.b.context.fetch=async(url,options)=>{
+  if(url.includes(':generateContent')){asked.push(JSON.parse(JSON.parse(options.body).contents[0].parts[0].text).question);return {ok:true,status:200,json:async()=>({candidates:[{content:{parts:[{text:'요약: 잘 먹고 있어요.\n물어볼 것:\n- 밤잠이 짧은데 괜찮을까요?'}]}}]})};}
+  if(url.endsWith('/api/ai'))return {ok:true,json:async()=>({enabled:false,homeOnly:true,providers:[{id:'antigravity',name:'Antigravity',company:'Google',enabled:false}]})};
+  return base(url,options);
+ };
+ const y=f.day(-1),soon=f.day(3);
+ await f.load('records',[
+  {id:'a',type:'feeding',date:y+'T08:00',category:'분유',amount:'120ml',memo:'PRIVATE-FEED'},
+  {id:'b',type:'feeding',date:y+'T11:00',category:'모유',amount:'15분',memo:''},
+  {id:'s',type:'sleep',date:y+'T13:00',end:y+'T14:30',category:'낮잠',memo:''},
+  {id:'d',type:'diaper',date:y+'T09:00',category:'둘 다',memo:''},
+  {id:'h',type:'hospital',date:f.day(-10)+'T10:00',hospital:'튼튼소아과',reason:'예방접종',memo:'열 37.8도'}]);
+ await f.load('schedule',[{id:'v',date:soon+'T10:30',title:'소아과 2차 접종',place:'튼튼소아과',who:'아기',memo:''},{id:'m',date:soon+'T12:00',title:'친구 만남',who:'엄마',memo:''}]);
+ let html=await f.open('stats');
+ assert.match(html,/data-page="report">🩺 소아과용 2주 요약 보기/);
+ html=await f.open('report');
+ assert.match(html,/<h1>🩺 소아과용 2주 요약<\/h1>/);
+ assert.match(html,/하루 분유<\/p><strong>120ml<\/strong>/);
+ assert.match(html,new RegExp(`${Number(y.slice(5,7))}/${Number(y.slice(8))} .</th><td>2회<br><small>120ml</small><br><small>직수 15분</small></td><td>1시간 30분<br><small>최장 1시간 30분</small></td><td>1회<br><small>소1·대1</small></td>`));
+ assert.match(html,/튼튼소아과 · 예방접종 <span class="caption">열 37\.8도<\/span>/);
+ assert.match(html,/소아과 2차 접종 · 튼튼소아과/);
+ assert.doesNotMatch(html,/친구 만남/);
+ await f.b.settle();html=f.b.get('#content').innerHTML;
+ assert.match(html,/✨ 소아과에 물어볼 것 정리/);
+ // Without the switch, hospital notes and record memos stay home.
+ await f.click({reportAi:'1'});await f.b.settle();
+ assert.doesNotMatch(asked[0],/PRIVATE|37\.8|예방접종/);
+ assert.match(asked[0],/"bottle_ml":120/);
+ assert.match(f.b.get('#content').innerHTML,/<p class="ai-summary-text">요약: 잘 먹고 있어요\.\n물어볼 것:\n- 밤잠이 짧은데 괜찮을까요\?<\/p>/);
+ await f.click({reportMemos:'1'});
+ await f.click({reportAi:'1'});await f.b.settle();
+ assert.match(asked[1],/"memo":"열 37\.8도"/);
+ assert.doesNotMatch(asked[1],/PRIVATE/);
+});

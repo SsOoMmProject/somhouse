@@ -134,7 +134,7 @@ test('the stats page draws the last 7 days with a sleep across midnight on both 
   {id:'d1',type:'diaper',date:yesterday+'T12:00',category:'소변',memo:''});
  await b.login();b.eval("page='stats';render()");
  const html=b.get('#content').innerHTML;
- assert.match(html,/<h1>통계<\/h1><section class="card pattern"><h2>최근 7일 하루 흐름<\/h2>/);
+ assert.match(html,/<h1>통계<\/h1><div class="actions report-link">.*?<\/div><section class="card pattern"><h2>최근 7일 하루 흐름<\/h2>/);
  const rows=html.split('class="pt-row"');
  assert.match(rows[1],/오늘/);assert.match(rows[1],/class="pt-sleep" style="left:0.00%;width:4.17%" data-action="edit" data-key="records" data-id="night"/);
  assert.match(rows[1],/class="pt-feed" style="left:0.00%" [^>]*data-id="f1"/);
