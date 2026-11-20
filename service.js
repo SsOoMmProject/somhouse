@@ -79,16 +79,62 @@
     const [y, m, d] = key.split('-').map(Number);
     return addDays(key, -new Date(y, m - 1, d).getDay());
   }
-  // Totals of feedings between two dates (inclusive, YYYY-MM-DD). Entries after now are not counted.
+  // Minutes of a finished sleep that fall between two local stamps; null for a sleep without a wake time.
+  function overlapMinutes(x, start, end) {
+    if (sleepMinutes(x) === null) return null;
+    const from = x.date > start ? x.date : start, to = x.end < end ? x.end : end;
+    return to > from ? sleepMinutes({date: from, end: to}) : 0;
+  }
+  // Totals between two dates (inclusive, YYYY-MM-DD). Entries after now are not counted.
+  // A sleep that crosses midnight counts on each day it touches, with only the minutes of that day.
   function rangeSummary(records, from, to, now = new Date()) {
-    const current = localDateTime(now);
-    const entries = records.filter(x => x.type === 'feeding' && x.date <= current && x.date.slice(0, 10) >= from && x.date.slice(0, 10) <= to);
+    const current = localDateTime(now), start = from + 'T00:00', end = addDays(to, 1) + 'T00:00';
+    const inRange = x => x.date <= current && x.date.slice(0, 10) >= from && x.date.slice(0, 10) <= to;
+    const entries = records.filter(x => x.type === 'feeding' && inRange(x));
     const minutes = entries.map(x => feedingMinutes(x.amount)).filter(v => v !== null);
-    const sleeps = records.filter(x => x.type === 'sleep' && x.date <= current && x.date.slice(0, 10) >= from && x.date.slice(0, 10) <= to);
-    const slept = sleeps.map(x => sleepMinutes(x)).filter(v => v !== null);
+    const sleeps = records.filter(x => x.type === 'sleep' && x.date <= current && x.date < end
+      && (sleepMinutes(x) !== null ? x.end > start : x.date >= start));
+    const slept = sleeps.map(x => overlapMinutes(x, start, end)).filter(v => v !== null);
+    const diapers = records.filter(x => x.type === 'diaper' && inRange(x));
     return {from, to, count: entries.length, ...measuredVolume(entries),
             minutes: Number(minutes.reduce((a, b) => a + b, 0).toFixed(1)), timedCount: minutes.length,
-            sleepCount: sleeps.length, sleepMinutes: slept.reduce((a, b) => a + b, 0), sleepTimed: slept.length};
+            sleepCount: sleeps.length, sleepMinutes: slept.reduce((a, b) => a + b, 0), sleepTimed: slept.length,
+            diaperCount: diapers.length, peeCount: diapers.filter(x => x.category !== '대변').length,
+            pooCount: diapers.filter(x => x.category !== '소변').length};
+  }
+  // One day of the 24-hour pattern: sleeps as bars, feedings and diapers as points, in minutes from 00:00.
+  // A sleep that is still open runs until now (at most 16 hours, like the server's open-sleep rule).
+  function daySegments(records, day, now = new Date()) {
+    const current = localDateTime(now), start = day + 'T00:00', end = addDays(day, 1) + 'T00:00';
+    const minute = v => sleepMinutes({date: start, end: v}) ?? 0;
+    const sleeps = [];
+    for (const x of records) {
+      if (x.type !== 'sleep' || !x.date || x.date > current) continue;
+      let until = sleepMinutes(x) !== null ? x.end : null, open = false;
+      if (until === null) {
+        const running = sleepMinutes({date: x.date, end: current});
+        if (running === null || running > 16 * 60) continue;
+        until = current; open = true;
+      }
+      if (x.date >= end || until <= start) continue;
+      sleeps.push({id: x.id, category: x.category, open, from: x.date > start ? minute(x.date) : 0,
+                   to: until < end ? minute(until) : 24 * 60});
+    }
+    const points = type => records.filter(x => x.type === type && x.date >= start && x.date < end && x.date <= current)
+      .map(x => ({id: x.id, at: minute(x.date), category: x.category, amount: x.amount || ''}));
+    return {day, sleeps: sleeps.sort((a, b) => a.from - b.from), feedings: points('feeding'), diapers: points('diaper')};
+  }
+  // When the next feeding is likely: the last feeding plus the average gap of the last 7 days (gaps of 8 hours
+  // or less, at least 3 of them). Null when there is not enough history.
+  function nextFeeding(records, now = new Date()) {
+    const current = localDateTime(now), since = addDays(current.slice(0, 10), -7);
+    const feeds = records.filter(x => x.type === 'feeding' && x.date <= current && x.date.slice(0, 10) >= since)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const gaps = feeds.slice(1).map((x, i) => sleepMinutes({date: feeds[i].date, end: x.date})).filter(m => m !== null && m > 0 && m <= 8 * 60);
+    if (gaps.length < 3) return null;
+    const gap = Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length), last = feeds[feeds.length - 1].date;
+    const [d, t] = last.split('T'), [y, m, dd] = d.split('-').map(Number), [h, mi] = t.split(':').map(Number);
+    return {at: localDateTime(new Date(y, m - 1, dd, h, mi + gap)), gap, after: last};
   }
   function periodSummaries(records, now = new Date()) {
     const today = dayKey(now), yesterday = addDays(today, -1), week = weekStart(today);
@@ -123,7 +169,7 @@
       && (!options.to || (x.date || '').slice(0,10) <= options.to)
       && (!options.status || (x.done === 'yes' ? 'done' : 'pending') === options.status));
   }
-  const api = { localDateTime, summary, dailyFeeding, feedingVolume, feedingMinutes, sleepMinutes, duration, hasFeedingUnit, recentFeedings, rangeSummary, periodSummaries, monthGrid, weekStart, addDays, filter };
+  const api = { localDateTime, summary, dailyFeeding, feedingVolume, feedingMinutes, sleepMinutes, duration, hasFeedingUnit, recentFeedings, rangeSummary, daySegments, nextFeeding, periodSummaries, monthGrid, weekStart, addDays, filter };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Somhouse = api;
 })(typeof window !== 'undefined' ? window : this);

@@ -42,7 +42,8 @@ ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA = Path.home() / "Library/Application Support/Somhouse"
 DEFAULT_RETURN = "https://ssoommproject.github.io/somhouse/"
 KINDS = ("records", "schedule", "shopping")
-STATIC = {"index.html", "app.js", "service.js", "shared.js", "config.js", "style.css"}
+STATIC = {"index.html", "app.js", "service.js", "shared.js", "config.js", "style.css",
+          "manifest.webmanifest", "icon-192.png", "icon-512.png", "about.html", "privacy.html", "terms.html"}
 ITERATIONS = 600_000
 MAX_BODY = 4 * 1024 * 1024
 MIN_PASSWORD_LENGTH = 12
@@ -67,10 +68,12 @@ def validate_item(kind, item):
     required = {"records": ["id", "type", "date"], "schedule": ["id", "date", "title"],
                 "shopping": ["id", "title", "quantity"]}[kind]
     if kind == "records":
-        if item.get("type") not in ("feeding", "hospital", "sleep"):
+        if item.get("type") not in ("feeding", "hospital", "sleep", "diaper"):
             raise Problem(400, "지원하지 않는 기록 종류입니다.")
-        required += {"feeding": ["category", "amount"], "sleep": ["category"],
+        required += {"feeding": ["category", "amount"], "sleep": ["category"], "diaper": ["category"],
                      "hospital": ["hospital", "reason"]}[item["type"]]
+        if item["type"] == "diaper" and item["category"] not in DIAPER_KINDS:
+            raise Problem(400, "기저귀 종류는 소변·대변·둘 다 중에서 골라 주세요.")
         if item["type"] == "sleep" and (item["category"] not in SLEEP_KINDS
                                         or (item.get("end") and item["end"] <= item["date"])):
             raise Problem(400, "수면 종류와 깬 시각을 확인해 주세요.")
@@ -100,6 +103,30 @@ def fingerprint(kind, item):
 
 
 PARENTS = ("가족", "엄마", "아빠")
+DIAPER_KINDS = ("소변", "대변", "둘 다")
+TIMER_SIDES = ("좌", "우")
+MAX_HANDOFF = 200
+
+
+def local_now():
+    """The Mac's local time to the second ("YYYY-MM-DDTHH:MM:SS"); the family's phones share its time zone."""
+    return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def parse_local(value):
+    return time.mktime(time.strptime(value, "%Y-%m-%dT%H:%M:%S"))
+
+
+def timer_feeding(timer, ended):
+    """The direct-breastfeeding record a finished timer leaves: start time, total minutes, minutes per side."""
+    seconds = {side: 0.0 for side in TIMER_SIDES}
+    for segment in timer["segments"]:
+        seconds[segment["side"]] += max(0.0, parse_local(segment.get("end") or ended) - parse_local(segment["start"]))
+    minutes = {side: round(value / 60) for side, value in seconds.items()}
+    total = max(1, round(sum(seconds.values()) / 60))
+    sides = " · ".join(f"{side} {minutes[side]}분" for side in TIMER_SIDES if seconds[side] >= 30)
+    return {"id": "timer-" + secrets.token_hex(12), "type": "feeding", "date": timer["segments"][0]["start"][:16],
+            "category": "모유", "amount": f"{total}분", "memo": ("직수 타이머 · " + sides) if sides else "직수 타이머"}
 
 
 def valid_children(value):
@@ -175,8 +202,17 @@ class Store:
 
     @staticmethod
     def settings(db):
-        row = db.execute("SELECT value FROM family_settings WHERE key='children'").fetchone()
-        return {"children": json.loads(row[0]) if row else []}
+        values = {key: json.loads(value) for key, value in db.execute(
+            "SELECT key,value FROM family_settings WHERE key IN ('children','handoff','timer')")}
+        return {"children": values.get("children", []), "handoff": values.get("handoff"), "timer": values.get("timer")}
+
+    @staticmethod
+    def put_setting(db, key, value):
+        if value is None:
+            db.execute("DELETE FROM family_settings WHERE key=?", (key,))
+        else:
+            db.execute("INSERT INTO family_settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                       (key, encode(value)))
 
     def state(self, db):
         data = {k: [] for k in KINDS}
@@ -714,6 +750,71 @@ class Handler(BaseHTTPRequestHandler):
         # Release the SQLite connection and lock before waiting for Google.
         return ai.answer(username, question, scope, summary)
 
+    @staticmethod
+    def save_item(db, store, google, keep, kind, item):
+        """Store one item (backup first). A feeding also ends the open sleep; both go to Google or Keep."""
+        body = encode(item)
+        store.snapshot(db)
+        db.execute("INSERT INTO items VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body",
+                   (kind, item["id"], body))
+        woke = None
+        if kind == "records":
+            relearn(db, item)
+            woke = end_sleep_on_feeding(db, item)
+        if google is not None:
+            google.queue(db, kind, item["id"], item, "save")
+            if woke:
+                google.queue(db, "records", woke["id"], woke, "save")
+        elif keep is not None:
+            queue_keep(db, keep.email, kind, item["id"], body)
+            if woke:
+                queue_keep(db, keep.email, "records", woke["id"], encode(woke))
+        return woke
+
+    def handoff_request(self, db, store, username):
+        """One line for the next caregiver ("약 먹였어요"); an empty text clears it."""
+        text = self.body(4096).get("text")
+        if not isinstance(text, str) or len(text.strip()) > MAX_HANDOFF:
+            raise Problem(400, f"전달 메모는 {MAX_HANDOFF}자까지 남길 수 있어요.")
+        text = " ".join(text.split())
+        store.put_setting(db, "handoff", {"text": text, "by": username, "at": local_now()[:16]} if text else None)
+        return {"data": store.state(db), "settings": store.settings(db)}
+
+    def timer_request(self, db, store, google, keep, username):
+        """The direct-breastfeeding timer, shared by the family's phones: start, switch sides, finish or cancel.
+
+        Finishing saves a 모유 feeding at the start time with the total minutes and the minutes per side.
+        """
+        body = self.body(4096)
+        action, timer, now = body.get("action"), store.settings(db)["timer"], local_now()
+        saved = None
+        if action == "start":
+            if timer:
+                raise Problem(409, "이미 직수 타이머가 돌고 있어요. 화면을 새로고침해 주세요.")
+            side = body.get("side") if body.get("side") in TIMER_SIDES else TIMER_SIDES[0]
+            timer = {"segments": [{"side": side, "start": now}], "by": username}
+        elif action in ("switch", "finish", "cancel"):
+            if not timer:
+                raise Problem(409, "돌고 있는 직수 타이머가 없어요. 화면을 새로고침해 주세요.")
+            if action == "switch":
+                last = timer["segments"][-1]
+                last["end"] = now
+                timer["segments"].append({"side": TIMER_SIDES[1] if last["side"] == TIMER_SIDES[0] else TIMER_SIDES[0],
+                                          "start": now})
+            elif action == "finish":
+                saved = timer_feeding(timer, now)
+                self.save_item(db, store, google, keep, "records", saved)
+                timer = None
+            else:
+                timer = None
+        else:
+            raise Problem(400, "타이머 동작을 확인해 주세요.")
+        store.put_setting(db, "timer", timer)
+        result = {"data": store.state(db), "aliases": load_aliases(db), "settings": store.settings(db)}
+        if saved:
+            result["saved"] = saved
+        return result
+
     def family_request(self, family, username):
         """Who is in this family: list members, pre-register an address, invite by link, remove or leave."""
         if username == GUEST:
@@ -860,6 +961,10 @@ class Handler(BaseHTTPRequestHandler):
                         if google is not None:
                             google.queue(db, "schedule", item_id, item, "save")
                     result = {"data": store.state(db), "settings": store.settings(db), "moved": len(moved)}
+                elif path == "/api/handoff" and self.command == "POST":
+                    result = self.handoff_request(db, store, username)
+                elif path == "/api/timer" and self.command == "POST":
+                    result = self.timer_request(db, store, google, keep, username)
                 elif path == "/api/merge" and self.command == "POST":
                     # Old device records (before login existed) belong to the original family only.
                     if not family.home:
@@ -933,33 +1038,22 @@ class Handler(BaseHTTPRequestHandler):
                     kind, item_id = parts[3], unquote(parts[4])
                     if not item_id or len(item_id) > 200:
                         raise Problem(400, "기록 ID를 확인해 주세요.")
-                    woke = None
                     if self.command == "PUT":
                         item = validate_item(kind, self.body())
                         if item["id"] != item_id:
                             raise Problem(400, "기록 ID가 일치하지 않습니다.")
-                        body = encode(item)
-                        store.snapshot(db)
-                        db.execute("INSERT INTO items VALUES(?,?,?) ON CONFLICT(kind,id) DO UPDATE SET body=excluded.body", (kind, item_id, body))
-                        if kind == "records":
-                            relearn(db, item)
-                            woke = end_sleep_on_feeding(db, item)
+                        self.save_item(db, store, google, keep, kind, item)
                     else:
-                        body = None
                         item = None
                         if google is not None:
                             row = db.execute("SELECT body FROM items WHERE kind=? AND id=?", (kind, item_id)).fetchone()
                             item = json.loads(row[0]) if row else None
                         store.snapshot(db)
                         db.execute("DELETE FROM items WHERE kind=? AND id=?", (kind, item_id))
-                    if google is not None:
-                        google.queue(db, kind, item_id, item, "save" if body is not None else "delete")
-                        if woke:
-                            google.queue(db, "records", woke["id"], woke, "save")
-                    elif keep is not None:
-                        queue_keep(db, keep.email, kind, item_id, body)
-                        if woke:
-                            queue_keep(db, keep.email, "records", woke["id"], encode(woke))
+                        if google is not None:
+                            google.queue(db, kind, item_id, item, "delete")
+                        elif keep is not None:
+                            queue_keep(db, keep.email, kind, item_id, None)
                     result = {"data": store.state(db), "aliases": load_aliases(db)}
                 else:
                     raise Problem(404, "API를 찾을 수 없습니다.")
@@ -968,7 +1062,7 @@ class Handler(BaseHTTPRequestHandler):
                     and (store.directory / "google-records.json").exists()):
                 result["google_status"] = {"auth_state": "configuration_error", "services": {}, "review": 0, "errors": []}
             sync = google or keep
-            if sync is not None and (path.startswith("/api/items/") or path in ("/api/review", "/api/confirm", "/api/calendar-writeback", "/api/settings")):
+            if sync is not None and (path.startswith("/api/items/") or path in ("/api/review", "/api/confirm", "/api/calendar-writeback", "/api/settings", "/api/timer")):
                 sync.wake.set()
             self.respond(200, result)
         except (Problem, AntigravityError) as error:

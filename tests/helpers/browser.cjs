@@ -42,6 +42,16 @@ function browser({hash='',raw=JSON.stringify(blank()),session=null,local=new Map
    const request=JSON.parse(options.body);(server.settingsCalls||=[]).push(request);server.settings={children:request.children};
    for(const x of server.data.schedule)if(request.rename&&request.rename[x.who])x.who=request.rename[x.who];
    result={data:clone(server.data),settings:clone(server.settings),moved:0};
+  }else if(url.endsWith('/api/handoff')){
+   const text=JSON.parse(options.body).text.trim();server.settings={...(server.settings||{children:[]}),handoff:text?{text,by:'family1',at:'2026-11-20T10:00'}:null};
+   result={data:clone(server.data),settings:clone(server.settings)};
+  }else if(url.endsWith('/api/timer')){
+   const request=JSON.parse(options.body),settings=server.settings||{children:[]},timer=settings.timer;let saved;
+   if(request.action==='start')settings.timer={segments:[{side:request.side||'좌',start:server.clock||'2026-11-20T10:00:00'}],by:'family1'};
+   else if(request.action==='switch'){const last=timer.segments.at(-1);last.end='2026-11-20T10:08:00';timer.segments.push({side:last.side==='좌'?'우':'좌',start:'2026-11-20T10:08:00'});}
+   else if(request.action==='finish'){saved={id:'timer-1',type:'feeding',date:timer.segments[0].start.slice(0,16),category:'모유',amount:'15분',memo:'직수 타이머 · 좌 8분 · 우 7분'};server.data.records.push(saved);settings.timer=null;}
+   else settings.timer=null;
+   server.settings=settings;result={data:clone(server.data),settings:clone(settings),...(saved?{saved:clone(saved)}:{})};
   }else if(options.method==='PUT'){
    const item=JSON.parse(options.body),kind=url.split('/').at(-2);
    server.data[kind]=server.data[kind].filter(x=>x.id!==item.id);server.data[kind].push(clone(item));if(item.type==='feeding'){const open=server.data.records.filter(x=>x.type==='sleep'&&!x.end&&x.date<item.date).sort((a,b)=>b.date.localeCompare(a.date))[0];if(open)open.end=item.date;}if(item.heard&&['분유','모유','혼합'].includes(item.category))(server.aliases||={})[item.heard]=item.category;result={data:clone(server.data),aliases:clone(server.aliases||{})};

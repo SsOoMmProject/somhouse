@@ -1,0 +1,51 @@
+{
+ "name": "솜하우스",
+ "short_name": "솜하우스",
+ "description": "가족이 함께 쓰는 아기 돌봄 기록",
+ "lang": "ko",
+ "start_url": "./",
+ "scope": "./",
+ "display": "standalone",
+ "background_color": "#f8f5ef",
+ "theme_color": "#f8f5ef",
+ "icons": [
+  {
+   "src": "icon-192.png",
+   "sizes": "192x192",
+   "type": "image/png"
+  },
+  {
+   "src": "icon-512.png",
+   "sizes": "512x512",
+   "type": "image/png"
+  },
+  {
+   "src": "icon-512.png",
+   "sizes": "512x512",
+   "type": "image/png",
+   "purpose": "maskable"
+  }
+ ],
+ "shortcuts": [
+  {
+   "name": "기저귀 소변",
+   "short_name": "소변",
+   "url": "./?quick=pee"
+  },
+  {
+   "name": "기저귀 대변",
+   "short_name": "대변",
+   "url": "./?quick=poo"
+  },
+  {
+   "name": "최근 수유 다시 기록",
+   "short_name": "수유 다시",
+   "url": "./?quick=repeat"
+  },
+  {
+   "name": "직수 타이머 시작",
+   "short_name": "직수",
+   "url": "./?quick=timer"
+  }
+ ]
+}

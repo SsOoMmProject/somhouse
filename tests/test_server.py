@@ -264,27 +264,82 @@ class FamilyAPI(unittest.TestCase):
         finally:
             (Path(self.temp.name) / "google-records.json").unlink(missing_ok=True)
 
+    def test_diaper_changes_are_records_with_three_kinds(self):
+        token = self.login()
+        diaper = {"id": "d1", "type": "diaper", "date": "2026-11-20T05:55", "category": "소변", "memo": ""}
+        self.assertEqual(self.request("/api/items/records/d1", "PUT", diaper, token)[0], 200)
+        self.assertEqual(self.request("/api/items/records/d2", "PUT", {**diaper, "id": "d2", "category": "설사"}, token)[0], 400)
+        records = self.request("/api/data", token=token)[1]["data"]["records"]
+        self.assertEqual([(x["type"], x["category"]) for x in records], [("diaper", "소변")])
+        from google_records import task_title
+        self.assertEqual(task_title("records", diaper), "기저귀 · 소변 05:55")
+
+    def test_handoff_note_and_shared_breastfeeding_timer(self):
+        import server as server_module
+        token, other = self.login(1), self.login(2)
+        try:
+            # One line for the next caregiver, shared by every phone; an empty text clears it.
+            self.assertEqual(self.request("/api/handoff", "POST", {"text": "x" * 201}, token)[0], 400)
+            body = self.request("/api/handoff", "POST", {"text": "  약   먹였어요 "}, token)[1]
+            self.assertEqual((body["settings"]["handoff"]["text"], body["settings"]["handoff"]["by"]), ("약 먹였어요", "family1"))
+            self.assertEqual(self.request("/api/data", token=other)[1]["settings"]["handoff"]["text"], "약 먹였어요")
+            self.assertIsNone(self.request("/api/handoff", "POST", {"text": ""}, other)[1]["settings"]["handoff"])
+
+            # A sleep that is still open; the timer's feeding ends it at the feeding's start.
+            self.request("/api/items/records/s1", "PUT", {"id": "s1", "type": "sleep", "date": "2026-11-20T09:00",
+                                                         "end": "", "category": "낮잠"}, token)
+            # Every timer request reads the clock once, refused ones too.
+            clock = iter(["2026-11-20T09:59:00", "2026-11-20T10:00:00", "2026-11-20T10:01:00", "2026-11-20T10:08:10", "2026-11-20T10:15:00"])
+            with patch.object(server_module, "local_now", lambda: next(clock)):
+                self.assertEqual(self.request("/api/timer", "POST", {"action": "switch"}, token)[0], 409)
+                started = self.request("/api/timer", "POST", {"action": "start", "side": "좌"}, token)[1]
+                self.assertEqual(started["settings"]["timer"]["segments"], [{"side": "좌", "start": "2026-11-20T10:00:00"}])
+                # The other phone sees the same timer and can switch sides and finish it.
+                self.assertEqual(self.request("/api/data", token=other)[1]["settings"]["timer"]["by"], "family1")
+                self.assertEqual(self.request("/api/timer", "POST", {"action": "start"}, other)[0], 409)
+                switched = self.request("/api/timer", "POST", {"action": "switch"}, other)[1]
+                self.assertEqual([x["side"] for x in switched["settings"]["timer"]["segments"]], ["좌", "우"])
+                done = self.request("/api/timer", "POST", {"action": "finish"}, other)[1]
+            self.assertIsNone(done["settings"]["timer"])
+            saved = done["saved"]
+            self.assertEqual((saved["category"], saved["amount"], saved["date"], saved["memo"]),
+                             ("모유", "15분", "2026-11-20T10:00", "직수 타이머 · 좌 8분 · 우 7분"))
+            records = {x["id"]: x for x in done["data"]["records"]}
+            self.assertEqual(records["s1"]["end"], "2026-11-20T10:00")
+            # Cancel leaves no record; the guest cannot touch either.
+            self.request("/api/timer", "POST", {"action": "start"}, token)
+            self.assertIsNone(self.request("/api/timer", "POST", {"action": "cancel"}, token)[1]["settings"]["timer"])
+            self.assertEqual(len(self.request("/api/data", token=token)[1]["data"]["records"]), 2)
+            self.store.password("guest", "guest-password-1")
+            guest = self.request("/api/login", "POST", {"username": "guest", "password": "guest-password-1"})[1]["token"]
+            self.assertEqual(self.request("/api/timer", "POST", {"action": "start"}, guest)[0], 403)
+            self.assertEqual(self.request("/api/handoff", "POST", {"text": "a"}, guest)[0], 403)
+        finally:
+            with self.store.connect() as db:
+                db.execute("DELETE FROM family_settings WHERE key IN ('handoff','timer')")
+                db.execute("DELETE FROM users WHERE username='guest'")
+
     def test_children_names_are_shared_and_a_rename_moves_their_schedules(self):
         token = self.login()
         put = lambda body, t=token: self.request("/api/settings", "PUT", body, t)
-        self.assertEqual(self.request("/api/data", token=token)[1]["settings"], {"children": []})
+        self.assertEqual(self.request("/api/data", token=token)[1]["settings"]["children"], [])
         plan = {"id": "s1", "date": "2026-11-20T10:00", "title": "검진", "who": "아기"}
         self.request("/api/items/schedule/s1", "PUT", plan, token)
         for bad in ({"children": ["엄마"]}, {"children": ["솜이", "솜이"]}, {"children": [""]}, {"children": ["a,b"]},
                     {"children": "솜이"}, {"children": ["솜이"], "rename": {"아기": "하늘"}}):
             self.assertEqual(put(bad)[0], 400, bad)
         code, body, _ = put({"children": ["솜이"], "rename": {"아기": "솜이"}})
-        self.assertEqual((code, body["settings"], body["moved"]), (200, {"children": ["솜이"]}, 1))
+        self.assertEqual((code, body["settings"]["children"], body["moved"]), (200, ["솜이"], 1))
         self.assertEqual(body["data"]["schedule"][0]["who"], "솜이")
         code, body, _ = put({"children": ["솜솜이", "하늘"], "rename": {"솜이": "솜솜이"}})
         self.assertEqual((body["data"]["schedule"][0]["who"], body["moved"]), ("솜솜이", 1))
         second = self.login(2)  # the other phone sees the same names
-        self.assertEqual(self.request("/api/data", token=second)[1]["settings"], {"children": ["솜솜이", "하늘"]})
+        self.assertEqual(self.request("/api/data", token=second)[1]["settings"]["children"], ["솜솜이", "하늘"])
         self.store.password("guest", "guest-password-1")
         try:
             guest = self.request("/api/login", "POST", {"username": "guest", "password": "guest-password-1"})[1]["token"]
             self.assertEqual(put({"children": ["x"]}, guest)[0], 403)
-            self.assertEqual(self.request("/api/data", token=guest)[1]["settings"], {"children": ["하늘"]})  # demo name
+            self.assertEqual(self.request("/api/data", token=guest)[1]["settings"]["children"], ["하늘"])  # demo name
         finally:
             with self.store.connect() as db:
                 db.execute("DELETE FROM users WHERE username='guest'")

@@ -36,6 +36,16 @@ def demo_payload(now=None):
                         "end": stamp(wake) if wake <= now else "",
                         "category": "밤잠", "memo": ""})
 
+    # Diaper changes through the day (a few hours apart), so the home tile and the 7-day pattern have dots.
+    for back in range(7):
+        day = today - timedelta(days=back)
+        for index, (hour, minute, category) in enumerate(((2, 40, "소변"), (6, 5, "둘 다"), (9, 50, "소변"),
+                                                          (13, 0, "대변"), (16, 30, "소변"), (20, 15, "소변"))):
+            when = day.replace(hour=hour, minute=minute)
+            if when <= now:
+                records.append({"id": f"demo-diaper-{back}-{index}", "type": "diaper", "date": stamp(when),
+                                "category": category, "memo": ""})
+
     # Inputs from voice or Calendar whose kind is not settled yet, shown in the home confirmation box.
     unsure = now - timedelta(minutes=50)
     records.append({"id": "demo-unsure-feed", "type": "feeding", "date": stamp(unsure), "category": "기타",
@@ -75,6 +85,9 @@ def demo_payload(now=None):
         {"key": "demo:review-1", "source": "Tasks", "title": "솜하우스 수유 분유", "when": stamp(now - timedelta(hours=1)),
          "status": "확인 필요", "suggest": {"category": "분유", "amount": ""}}]}
     return {"data": {"records": records, "schedule": schedule, "shopping": shopping},
-            "aliases": {"부유": "분유"}, "settings": {"children": ["하늘"]}, "calendar_events": calendar_events,
+            "aliases": {"부유": "분유"},
+            "settings": {"children": ["하늘"], "timer": None,
+                         "handoff": {"text": "(예시) 오후에 해열제 한 번 먹였어요. 밤에 열 다시 재 주세요", "by": "엄마",
+                                     "at": stamp(now - timedelta(minutes=40))}}, "calendar_events": calendar_events,
             # No Google links: on a phone they would open whatever Google account that phone is signed in to.
             "google_status": google_status, "read_only": True}
