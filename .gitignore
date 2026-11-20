@@ -13,3 +13,5 @@ client_secret*.json
 shopping-search.json
 .codex-attachments/
 .local-data/
+chatgpt-web-client.json
+chatgpt-host-id

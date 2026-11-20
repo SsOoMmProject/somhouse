@@ -153,3 +153,26 @@ test('Google sign-in and reconnect buttons go to the address the server gives',a
  const start=c.calls.find(x=>x.url.endsWith('/api/google/start'));
  assert.equal(JSON.parse(start.options.body).mode,'connect');assert.equal(start.options.headers.Authorization,'Bearer test-token');
 });
+
+test('personal trial only offers login in the browser that can receive its callback',async()=>{
+ const local=new Map([['somhouse-server-url','https://family.example']]);
+ const session={base:'https://family.example',username:'family1',token:'old-session'};
+ const preview=browser({trial:true,origin:'https://preview.example',local,session,hash:'#ai'});
+ await preview.settle();
+ assert.equal(preview.get('#login-form').hidden,true);
+ assert.equal(preview.get('#google-login-box').hidden,true);
+ assert.match(preview.get('#connection-status').textContent,/Mac의 Safari/);
+ assert.equal(preview.calls.length,0);
+ const origin='http://127.0.0.1:18764';
+ const mac=browser({trial:true,origin,local,session,hash:'#ai'});
+ assert.equal(mac.get('#login-form').hidden,false);
+ assert.equal(mac.get('#password-login').open,true);
+ assert.equal(mac.get('#google-login-box').hidden,true);
+ assert.equal(mac.eval('shared.base'),origin);
+ assert.equal(mac.eval('shared.token'),'');
+ const form=mac.get('#login-form');
+ form.values={username:'family1',password:'test-trial-password'};
+ await form.onsubmit({preventDefault(){},target:form});
+ assert.equal(mac.calls[0].url,origin+'/api/login');
+ assert.equal(mac.eval('sharedReady'),true);
+});
