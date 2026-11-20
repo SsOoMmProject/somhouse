@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f8f5ef"><title>솜하우스</title><link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icon-192.png"><link rel="apple-touch-icon" href="icon-192.png"><link rel="stylesheet" href="style.css?v=onehand-20261120"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f8f5ef"><title>솜하우스</title><link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icon-192.png"><link rel="apple-touch-icon" href="icon-192.png"><link rel="stylesheet" href="style.css?v=multiai-20261120"></head>
 <body>
 <header><div><span class="logo">✿</span> <strong>솜하우스</strong><small>우리 가족의 작은 기록</small></div></header>
 <main>
@@ -22,9 +22,10 @@
 <section id="ai-panel" aria-labelledby="ai-title" hidden>
 <h1 id="ai-title">AI 대화</h1>
 <div class="card">
-<p>질문과 선택한 집계는 Antigravity CLI를 통해 Google로 전송돼요. 질문에 이름이나 건강 정보 같은 개인정보는 입력하지 마세요.</p>
+<p>질문과 선택한 집계는 고른 AI의 회사(Codex는 OpenAI, Claude는 Anthropic, Antigravity는 Google)로 전송돼요. 내 API 키로 연결하면 키는 이 기기에만 저장되고 질문은 이 기기에서 AI 회사로 바로 가요. 질문에 이름이나 건강 정보 같은 개인정보는 입력하지 마세요.</p>
 <p id="ai-status" role="status"></p>
 <form id="ai-form">
+<div id="ai-providers" class="ai-providers" role="radiogroup" aria-label="질문할 AI"></div>
 <fieldset id="ai-fields" disabled>
 <label id="ai-scope-field" class="field" hidden>참고할 가족 기록 집계<select id="ai-scope" name="scope">
 <option value="none">기록 없이 질문만</option>
@@ -38,7 +39,7 @@
 </form>
 </div>
 <article id="ai-result" class="card" aria-live="polite" hidden>
-<h2>AI 답변</h2><p id="ai-asked"></p><p id="ai-answer"></p>
+<h2 id="ai-result-title">AI 답변</h2><p id="ai-asked"></p><p id="ai-answer"></p>
 </article>
 </section>
 </main>
@@ -62,5 +63,5 @@
 <div class="actions"><button type="button" id="close-family" class="secondary">닫기</button></div>
 </dialog>
 <div id="toast" role="status" aria-live="polite" hidden></div>
-<script src="config.js?v=auto-20261102" defer></script><script src="service.js?v=onehand-20261120" defer></script><script src="shared.js?v=onehand-20261120" defer></script><script src="app.js?v=onehand-20261120" defer></script>
+<script src="config.js?v=auto-20261102" defer></script><script src="service.js?v=onehand-20261120" defer></script><script src="shared.js?v=multiai-20261120" defer></script><script src="ai-direct.js?v=multiai-20261120" defer></script><script src="app.js?v=multiai-20261120" defer></script>
 </body></html>

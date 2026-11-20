@@ -116,8 +116,8 @@
       await this.request('/api/password', 'POST', {currentPassword, newPassword});
     }
     async aiStatus() {return this.request('/api/ai');}
-    async askAI(question, scope) {
-      return this.request('/api/ai', 'POST', {question, scope}, this.base, this.token, 50000);
+    async askAI(question, scope, provider) {
+      return this.request('/api/ai', 'POST', {question, scope, provider}, this.base, this.token, 50000);
     }
     async load() {
       const token = this.token, result = await this.request('/api/data');

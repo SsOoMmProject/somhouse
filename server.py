@@ -20,8 +20,8 @@ from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-from antigravity import (CONFIG_NAME, SCOPES, Antigravity, AntigravityError,
-                         executable, parse_question, save_config, summarize_records)
+import ai as assistants
+from ai import AIError, Assistants, parse_question, summarize_records, SCOPES
 from google_records import (GoogleAPI, GoogleError, GoogleRecords, SCHEMA as GOOGLE_SCHEMA, SCOPES as GOOGLE_SCOPES,
                             load_config as load_google_config, read_config as read_google_config)
 from calendar_records import FEEDING_KINDS, SLEEP_KINDS, SCHEMA as CALENDAR_SCHEMA, WritebackRefused, load_aliases, relearn
@@ -42,7 +42,7 @@ ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA = Path.home() / "Library/Application Support/Somhouse"
 DEFAULT_RETURN = "https://ssoommproject.github.io/somhouse/"
 KINDS = ("records", "schedule", "shopping")
-STATIC = {"index.html", "app.js", "service.js", "shared.js", "config.js", "style.css",
+STATIC = {"index.html", "app.js", "ai-direct.js", "service.js", "shared.js", "config.js", "style.css",
           "manifest.webmanifest", "icon-192.png", "icon-512.png", "about.html", "privacy.html", "terms.html"}
 ITERATIONS = 600_000
 MAX_BODY = 4 * 1024 * 1024
@@ -343,7 +343,7 @@ class FamilyServer(ThreadingHTTPServer):
         # Only the real service downloads the public holiday feed; tests and admin commands never do.
         self.holiday_feed = holidays
         self.store = store
-        self.antigravity = Antigravity.load(store.directory)
+        self.ai = Assistants.load(store.directory)
         # Keep valid legacy sessions and discard only sessions that already expired.
         with store.lock, store.connect() as db:
             now = time.time()
@@ -717,16 +717,20 @@ class Handler(BaseHTTPRequestHandler):
             raise Problem(400, "올바른 JSON 요청이 아닙니다.")
 
     def ai_request(self, token):
-        ai = self.server.antigravity
+        ai = self.server.ai
         family = self.server.family_for(token)
         store = family.store
         if self.command == "GET":
             with store.lock, store.connect() as db:
                 guest = store.user(db, token) == GUEST
+            # `enabled` says whether this account can ask; each provider says whether it is connected.
+            status = {"providers": ai.status(), "enabled": bool(ai.connected())}
             if not family.home:
-                # The Mac's AI account answers for the original family only.
-                return {**ai.status(), "enabled": False, "homeOnly": True}
-            return {**ai.status(), "enabled": False, "readOnly": True} if guest else ai.status()
+                # The Mac's AI accounts answer for the original family only; other
+                # families connect their own API keys on their devices instead.
+                providers = [{**provider, "enabled": False} for provider in status["providers"]]
+                return {"providers": providers, "enabled": False, "homeOnly": True}
+            return {**status, "enabled": False, "readOnly": True} if guest else status
 
         # Read the small body before taking the lock, but check the session
         # before validating it so signed-out callers only ever see 401.
@@ -739,16 +743,26 @@ class Handler(BaseHTTPRequestHandler):
             if not family.home:
                 raise Problem(403, "AI 대화는 아직 기본 가족만 쓸 수 있어요.")
             question, scope = parse_question(body)
-            if not ai.binary:
-                raise Problem(503, "관리자가 맥미니에 Antigravity CLI를 설정해야 해요.")
+            name = body.get("provider")
+            if name is None:
+                connected = ai.connected()
+                if not connected:
+                    raise Problem(503, "관리자가 맥미니에 AI CLI를 연결해야 해요.")
+                provider = connected[0]
+            elif not isinstance(name, str) or name not in ai.providers:
+                raise Problem(400, "질문할 AI를 확인해 주세요.")
+            else:
+                provider = ai.providers[name]
+            if not provider.binary:
+                raise Problem(503, f"관리자가 맥미니에 {provider.name} CLI를 연결해야 해요.")
             if scope != "none":
-                if not ai.allow_summaries:
+                if not provider.allow_summaries:
                     raise Problem(403, "관리자가 가족 기록 집계 전송을 활성화해야 해요.")
                 items = [json.loads(row[0]) for row in db.execute(
                     "SELECT body FROM items WHERE kind=?", (SCOPES[scope],))]
                 summary = summarize_records(scope, items, date.today())
-        # Release the SQLite connection and lock before waiting for Google.
-        return ai.answer(username, question, scope, summary)
+        # Release the SQLite connection and lock before waiting for the AI company.
+        return ai.answer(username, provider, question, scope, summary)
 
     @staticmethod
     def save_item(db, store, google, keep, kind, item):
@@ -1087,7 +1101,7 @@ class Handler(BaseHTTPRequestHandler):
             if sync is not None and (path.startswith("/api/items/") or path in ("/api/review", "/api/confirm", "/api/calendar-writeback", "/api/settings", "/api/timer")):
                 sync.wake.set()
             self.respond(200, result)
-        except (Problem, AntigravityError) as error:
+        except (Problem, AIError) as error:
             self.reply_error(error.status, error.message)
         except (OSError, sqlite3.Error):
             self.reply_error(503, "맥미니 저장소에 접근하지 못했습니다. 입력을 유지하고 다시 시도해 주세요.")
@@ -1187,9 +1201,20 @@ def list_families(directory):
     print(f"가족 {len(rows)}개 (새 가족은 최대 {families.MAX_FAMILIES}개)")
 
 
+def ai_status(directory):
+    """Which AI CLIs the AI page offers. Read-only."""
+    for provider in Assistants.load(directory).providers.values():
+        if provider.binary:
+            summaries = "기록 집계 전송 허용" if provider.allow_summaries else "질문만 전송"
+            print(f"{provider.name} ({provider.company}): 연결됨 · {provider.binary} · 모델 {provider.model or 'CLI 기본값'} · {summaries}")
+        else:
+            print(f"{provider.name} ({provider.company}): 연결 안 됨 — python3 server.py ai-config --provider {provider.id}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("init", "serve", "password", "backup", "restore",
+                        "ai-status", "ai-config", "ai-test", "ai-disconnect",
                         "antigravity-config", "antigravity-test", "keep-config", "keep-test", "keep-status",
                         "google-status", "google-retry", "google-backfill", "delete-record", "guest", "google-web-client", "families"),
                         nargs="?", default="serve")
@@ -1197,8 +1222,11 @@ def main():
     parser.add_argument("--item-id", help="delete-record: 삭제할 기록 ID")
     parser.add_argument("username", nargs="?")
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA)
-    parser.add_argument("--allow-record-summaries", action="store_true")
-    parser.add_argument("--agy", type=Path, default=Path.home() / ".local/bin/agy")
+    parser.add_argument("--allow-record-summaries", action="store_true", help="ai-config: 질문에 가족 기록 집계를 함께 보낼 수 있게 함")
+    parser.add_argument("--provider", choices=tuple(assistants.PROVIDERS), help="ai-config/ai-test/ai-disconnect: 연결할 AI")
+    parser.add_argument("--bin", type=Path, help="ai-config/ai-test: AI CLI 실행 파일 경로 (기본: 설치된 위치)")
+    parser.add_argument("--model", help="ai-config/ai-test: 사용할 모델 (기본: CLI 기본값)")
+    parser.add_argument("--agy", type=Path, help="antigravity-config/antigravity-test: Antigravity CLI 경로 (--bin과 같음)")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--origin", action="append", default=[])
     parser.add_argument("--file", type=Path, help="관리자 복원용 JSON 파일 / google-web-client: 웹 OAuth JSON")
@@ -1210,6 +1238,9 @@ def main():
         return
     if args.command == "google-status":
         google_status(args.data_dir)
+        return
+    if args.command == "ai-status":
+        ai_status(args.data_dir)
         return
     if args.command == "google-web-client":
         if not args.file:
@@ -1255,18 +1286,31 @@ def main():
                 print("Google Keep에서 분유 120ml 시험 메모를 다시 읽고 휴지통으로 보냈습니다.")
         except (OSError, RuntimeError, sqlite3.Error, subprocess.SubprocessError):
             parser.exit(1, "Google Keep 연결을 확인하지 못했습니다. 전용 Python 환경과 키체인 항목을 확인해 주세요.\n")
-    elif args.command in ("antigravity-config", "antigravity-test"):
-        binary = executable(str(args.agy.resolve()))
+    elif args.command in ("ai-config", "ai-test", "ai-disconnect", "antigravity-config", "antigravity-test"):
+        name = "antigravity" if args.command.startswith("antigravity-") else args.provider
+        if name is None:
+            parser.error("--provider 로 " + "/".join(assistants.PROVIDERS) + " 중 하나를 지정해 주세요.")
+        kind = assistants.PROVIDERS[name]
+        if args.command == "ai-disconnect":
+            found = assistants.remove_config(store.directory, name)
+            print(f"{kind.name} 연결을 해제했습니다. 솜하우스 서버를 다시 시작해 주세요." if found else f"{kind.name}는 연결되어 있지 않습니다.")
+            return
+        if args.model is not None and not assistants.MODEL_NAME.fullmatch(args.model):
+            parser.error("--model 이름을 확인해 주세요.")
+        path = args.bin or args.agy or kind.default_binary
+        # Keep the link (e.g. ~/.local/bin/codex) so a CLI update that moves the real file keeps working.
+        binary = assistants.executable(str(path.expanduser().absolute()))
         if binary is None:
-            parser.error("--agy로 실행 가능한 Antigravity CLI 경로를 지정해 주세요.")
-        provider = Antigravity(store.directory, binary)
+            parser.error(f"--bin 으로 실행 가능한 {kind.name} CLI 경로를 지정해 주세요. (확인한 위치: {path})")
+        provider = kind(store.directory, binary, model=args.model)
         try:
             result = provider.generate("한국어로 솜하우스 연결 확인이라고 한 줄로 답해 주세요.", "none", None)
-        except AntigravityError as error:
+        except AIError as error:
             parser.exit(1, f"{error.message}\n")
-        if args.command == "antigravity-config":
-            save_config(store.directory, binary, args.allow_record_summaries)
-            print(f"{CONFIG_NAME}에 저장했습니다. 솜하우스 서버를 다시 시작해 주세요.")
+        if args.command.endswith("-config"):
+            assistants.save_config(store.directory, name, binary, args.allow_record_summaries, args.model)
+            print(f"{kind.name} 응답 확인: {result['answer']}")
+            print(f"{assistants.CONFIG_NAME}에 저장했습니다. 솜하우스 서버를 다시 시작해 주세요.")
         else:
             print(result["answer"])
     elif args.command == "init":

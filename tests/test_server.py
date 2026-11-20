@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from server import FamilyServer, Store
-from antigravity import CONFIG_NAME, MODEL, Antigravity, save_config
+from ai import CONFIG_NAME, LEGACY_CONFIG_NAME, AIError, Antigravity, Claude, Codex, remove_config, save_config
 from google_records import GoogleAPI, GoogleError, GoogleRecords, TAB
 from keep_sync import KeepSync
 
@@ -962,7 +962,7 @@ class FamilyAPI(unittest.TestCase):
         self.assertEqual(headers["Access-Control-Allow-Origin"], origin)
         self.assertIn("Authorization", headers["Access-Control-Allow-Headers"])
         self.assertEqual(self.request("/api/data", token=token, origin="https://untrusted.example")[0], 403)
-        for path in ("/server.py", "/antigravity.py", "/antigravity-config.json", "/.git/config", "/somhouse.sqlite3", "/initial-accounts.txt", "/../server.py"):
+        for path in ("/server.py", "/ai.py", "/ai-config.json", "/antigravity-config.json", "/.git/config", "/somhouse.sqlite3", "/initial-accounts.txt", "/../server.py"):
             self.assertEqual(self.request(path)[0], 404)
         self.assertEqual(self.request("/")[0], 200)
         self.assertEqual(self.request("/api/items/shopping/a", "PUT", self.item("mismatch"), token)[0], 400)
@@ -974,27 +974,219 @@ class FamilyAPI(unittest.TestCase):
         self.assertEqual(code, 429)
         self.assertEqual(headers["Retry-After"], "60")
 
-    def antigravity(self, allow_summaries=False):
-        provider = Antigravity(self.store.directory, Path(sys.executable), allow_summaries)
-        original = self.server.antigravity
-        self.addCleanup(setattr, self.server, "antigravity", original)
-        self.server.antigravity = provider
+    def connect_ai(self, kind, allow_summaries=False):
+        provider = kind(self.store.directory, Path(sys.executable), allow_summaries)
+        providers = self.server.ai.providers
+        self.addCleanup(providers.__setitem__, kind.id, providers[kind.id])
+        providers[kind.id] = provider
         return provider
 
-    def test_antigravity_configuration_requires_a_private_file_and_login(self):
+    def antigravity(self, allow_summaries=False):
+        return self.connect_ai(Antigravity, allow_summaries)
+
+    def test_ai_configuration_requires_a_private_file_and_login(self):
+        from ai import Assistants
         self.assertEqual(self.request("/api/ai")[0], 401)
         token = self.login()
-        self.assertFalse(self.request("/api/ai", token=token)[1]["enabled"])
+        code, status, _ = self.request("/api/ai", token=token)
+        self.assertEqual(code, 200)
+        self.assertFalse(status["enabled"])
+        self.assertEqual([(p["id"], p["enabled"]) for p in status["providers"]],
+                         [("codex", False), ("claude", False), ("antigravity", False)])
         self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 503)
+        self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕", "provider": "claude"}, token)[0], 503)
         path = self.store.directory / CONFIG_NAME
-        self.addCleanup(path.unlink)
-        save_config(self.store.directory, Path(sys.executable), False)
+        self.addCleanup(path.unlink, missing_ok=True)
+        save_config(self.store.directory, "claude", Path(sys.executable), False, "haiku")
+        save_config(self.store.directory, "codex", Path(sys.executable), True)
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-        with patch("antigravity.SANDBOX", Path(sys.executable)):
-            self.assertEqual(Antigravity.load(self.store.directory).status(),
-                             {"enabled": True, "model": MODEL, "recordSummaries": False})
+        with patch("ai.SANDBOX", Path(sys.executable)):
+            status = {p["id"]: p for p in Assistants.load(self.store.directory).status()}
+            self.assertEqual(status["claude"], {"id": "claude", "name": "Claude", "company": "Anthropic",
+                                                "enabled": True, "model": "haiku", "recordSummaries": False})
+            self.assertEqual((status["codex"]["enabled"], status["codex"]["recordSummaries"], status["codex"]["model"]),
+                             (True, True, None))
+            self.assertFalse(status["antigravity"]["enabled"])
+            # Connecting one AI keeps the others; disconnecting removes only that one.
+            self.assertTrue(remove_config(self.store.directory, "codex"))
+            self.assertFalse(remove_config(self.store.directory, "codex"))
+            status = {p["id"]: p["enabled"] for p in Assistants.load(self.store.directory).status()}
+            self.assertEqual(status, {"codex": False, "claude": True, "antigravity": False})
             path.chmod(0o644)
-            self.assertFalse(Antigravity.load(self.store.directory).status()["enabled"])
+            self.assertFalse(any(p["enabled"] for p in Assistants.load(self.store.directory).status()))
+        # Without the macOS sandbox no CLI is offered.
+        path.chmod(0o600)
+        with patch("ai.SANDBOX", self.store.directory / "missing"):
+            self.assertFalse(any(p["enabled"] for p in Assistants.load(self.store.directory).status()))
+
+    def test_ai_keeps_an_antigravity_setup_saved_by_the_previous_version(self):
+        from ai import Assistants
+        legacy = self.store.directory / LEGACY_CONFIG_NAME
+        legacy.write_text(json.dumps({"binary": sys.executable, "allowRecordSummaries": True}), encoding="utf-8")
+        legacy.chmod(0o600)
+        self.addCleanup(legacy.unlink, missing_ok=True)
+        self.addCleanup((self.store.directory / CONFIG_NAME).unlink, missing_ok=True)
+        with patch("ai.SANDBOX", Path(sys.executable)):
+            provider = Assistants.load(self.store.directory).providers["antigravity"]
+            self.assertEqual((provider.binary, provider.allow_summaries), (Path(sys.executable), True))
+            save_config(self.store.directory, "claude", Path(sys.executable), False)
+            self.assertFalse(legacy.exists())
+            status = {p["id"]: p["enabled"] for p in Assistants.load(self.store.directory).status()}
+            self.assertEqual(status, {"codex": False, "claude": True, "antigravity": True})
+
+    def test_ai_asks_the_chosen_provider_and_rejects_unconnected_ones(self):
+        token = self.login()
+        codex, claude = self.connect_ai(Codex), self.connect_ai(Claude)
+        codex_fixture = """
+import json, sys
+assert sys.argv == ["-c"]
+prompt = sys.stdin.read()
+question = json.loads(prompt.splitlines()[-1])["question"]
+print(json.dumps({"type": "thread.started"}))
+print(json.dumps({"type": "item.completed", "item": {"type": "reasoning", "text": "thinking"}}))
+print(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "codex: " + question}}))
+print(json.dumps({"type": "turn.completed"}))
+"""
+        claude_fixture = """
+import json, sys
+question = json.loads(sys.stdin.read())["question"]
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "claude: " + question}))
+"""
+        with patch.object(codex, "command", return_value=[sys.executable, "-c", codex_fixture]), \
+                patch.object(claude, "command", return_value=[sys.executable, "-c", claude_fixture]):
+            code, status, _ = self.request("/api/ai", token=token)
+            self.assertTrue(status["enabled"])
+            self.assertEqual({p["id"]: p["enabled"] for p in status["providers"]},
+                             {"codex": True, "claude": True, "antigravity": False})
+            for name in ("codex", "claude"):
+                code, result, _ = self.request("/api/ai", "POST", {"question": "안녕", "provider": name}, token)
+                self.assertEqual((code, result["answer"], result["provider"]), (200, f"{name}: 안녕", name))
+            # Without a choice the first connected AI answers.
+            self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[1]["provider"], "codex")
+            code, result, _ = self.request("/api/ai", "POST", {"question": "안녕", "provider": "antigravity"}, token)
+            self.assertEqual(code, 503)
+            self.assertIn("Antigravity", result["error"])
+            for name in ("gpt", 3, ["codex"]):
+                self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕", "provider": name}, token)[0], 400)
+            # Record summaries are allowed per AI.
+            self.assertEqual(self.request("/api/ai", "POST", {"question": "요약", "scope": "feeding", "provider": "claude"}, token)[0], 403)
+        self.server.ai.attempts.clear()
+
+    def test_codex_and_claude_errors_are_explained_without_the_question(self):
+        token = self.login()
+        codex, claude = self.connect_ai(Codex), self.connect_ai(Claude)
+        codex_fixture = """
+import json, sys
+question = json.loads(sys.stdin.read().splitlines()[-1])["question"]
+messages = {"로그인": "401 Unauthorized: PRIVATE-PROVIDER-ERROR", "한도": "You've hit your usage limit.",
+            "모델": "The 'm' model is not supported when using Codex with a ChatGPT account."}
+print(json.dumps({"type": "error", "message": "Reconnecting... 1/5 " + question}))
+print(json.dumps({"type": "turn.failed", "error": {"message": messages.get(question, "unknown")}}))
+sys.exit(1)
+"""
+        claude_fixture = """
+import json, sys
+question = json.loads(sys.stdin.read())["question"]
+messages = {"로그인": "Not logged in · Please run /login", "한도": "Claude AI usage limit reached",
+            "모델": "There's an issue with the selected model (m)."}
+print(json.dumps({"type": "result", "subtype": "success", "is_error": True, "result": messages.get(question, "unknown")}))
+sys.exit(1)
+"""
+        log = io.StringIO()
+        with patch.object(codex, "command", return_value=[sys.executable, "-c", codex_fixture]), \
+                patch.object(claude, "command", return_value=[sys.executable, "-c", claude_fixture]), \
+                patch("ai.sys.stderr", log):
+            for name in ("codex", "claude"):
+                for question, status, text in (("한도", 429, "한도"), ("오류", 502, "답변을 받지 못했어요"),
+                                               ("로그인", 503, "로그인"), ("모델", 503, "모델을 사용할 수 없어요")):
+                    code, result, _ = self.request("/api/ai", "POST", {"question": question, "provider": name}, token)
+                    self.assertEqual(code, status, (name, question, result))
+                    self.assertIn(text, result["error"])
+                    self.assertNotIn("PRIVATE-PROVIDER-ERROR", json.dumps(result))
+                    self.server.ai.attempts.clear()
+        lines = log.getvalue().splitlines()
+        self.assertEqual(len(lines), 8)
+        self.assertTrue(lines[0].startswith("codex: status=429 exit=1"))
+        self.assertTrue(lines[4].startswith("claude: status=429 exit=1"))
+        self.assertIn("PRIVATE-PROVIDER-ERROR", lines[2])
+        for line in lines:
+            for question in ("한도", "오류", "로그인", "모델"):
+                self.assertNotIn(question, line)
+
+    def test_codex_and_claude_commands_turn_off_tools_and_keep_the_question_out_of_arguments(self):
+        workspace = Path("/tmp/somhouse-workspace")
+        codex = Codex(self.store.directory, Path("/usr/bin/true")).command(workspace)
+        self.assertEqual(codex[:2], ["/usr/bin/sandbox-exec", "-p"])
+        for flag in ("--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--json"):
+            self.assertIn(flag, codex)
+        self.assertEqual(codex[codex.index("--sandbox") + 1], "read-only")
+        disabled = {codex[index + 1] for index, value in enumerate(codex) if value == "--disable"}
+        self.assertLessEqual({"shell_tool", "unified_exec", "plugins", "apps", "browser_use", "computer_use", "multi_agent"}, disabled)
+        self.assertIn('web_search="disabled"', codex)
+        self.assertNotIn("--model", codex)
+        self.assertEqual(codex[-1], "-")
+        self.assertIn("--model", Codex(self.store.directory, Path("/usr/bin/true"), model="gpt-x").command(workspace))
+        claude = Claude(self.store.directory, Path("/usr/bin/true")).command(workspace)
+        self.assertEqual(claude[claude.index("--tools") + 1], "")
+        self.assertEqual(claude[claude.index("--setting-sources") + 1], "")
+        self.assertEqual(claude[claude.index("--model") + 1], "sonnet")
+        for flag in ("--print", "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"):
+            self.assertIn(flag, claude)
+        for kind, profile, names in ((Codex, ".codex", ("AGENTS.md", "config.toml", "skills", "memories")),
+                                     (Claude, ".claude", ("CLAUDE.md", "settings.json", "skills", "projects"))):
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("CODEX_HOME", None)
+                os.environ.pop("CLAUDE_CONFIG_DIR", None)
+                policy = kind(self.store.directory, Path("/usr/bin/true")).policy()
+            for name in names:
+                self.assertIn(json.dumps(str((Path.home() / profile).resolve() / name)), policy)
+            self.assertIn(json.dumps(str(self.store.directory.resolve())), policy)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires the macOS sandbox")
+    def test_codex_and_claude_processes_cannot_access_family_files_or_their_customizations(self):
+        secret = self.store.directory / "ai-test-private.txt"
+        secret.write_text("private", encoding="utf-8")
+        self.addCleanup(secret.unlink)
+        for kind, profile, custom_name, output in (
+                (Codex, ".codex", "AGENTS.md",
+                 '{"type": "item.completed", "item": {"type": "agent_message", "text": "blocked"}}\n{"type": "turn.completed"}'),
+                (Claude, ".claude", "CLAUDE.md",
+                 '{"type": "result", "subtype": "success", "is_error": false, "result": "blocked"}')):
+            with tempfile.TemporaryDirectory() as directory:
+                home = Path(directory).resolve()
+                (home / profile).mkdir()
+                custom = home / profile / custom_name
+                custom.write_text("private customization", encoding="utf-8")
+                login = home / profile / "auth.json"
+                login.write_text("login", encoding="utf-8")
+                binary = home / "cli-fixture"
+                binary.write_text(f"""#!{sys.executable}
+import os, pathlib, sys
+assert "OPENAI_API_KEY" not in os.environ and "ANTHROPIC_API_KEY" not in os.environ
+private = pathlib.Path({str(secret)!r})
+custom = pathlib.Path({str(custom)!r})
+login = pathlib.Path({str(login)!r})
+assert login.read_text() == "login"
+login.write_text("refreshed")
+for action in (private.read_text, lambda: private.write_text("changed"), custom.read_text):
+    try:
+        action()
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("a blocked path was accessible")
+sys.stdin.read()
+print({output!r})
+""", encoding="utf-8")
+                binary.chmod(0o700)
+                provider = kind(self.store.directory, binary)
+                environment = {"OPENAI_API_KEY": "test-secret", "ANTHROPIC_API_KEY": "test-secret"}
+                with patch("ai.Path.home", return_value=home), patch.dict(os.environ, environment):
+                    os.environ.pop("CODEX_HOME", None)
+                    os.environ.pop("CLAUDE_CONFIG_DIR", None)
+                    self.assertEqual(provider.generate("권한 확인", "none", None)["answer"], "blocked")
+                self.assertEqual(login.read_text(encoding="utf-8"), "refreshed")
+            self.assertEqual(secret.read_text(encoding="utf-8"), "private")
 
     def test_antigravity_sends_only_the_selected_record_summary_to_stdin(self):
         from datetime import date
@@ -1057,12 +1249,12 @@ sys.exit(1)
 """
         log = io.StringIO()
         with patch.object(provider, "command", return_value=[sys.executable, "-c", fixture]), \
-                patch("antigravity.sys.stderr", log):
+                patch("ai.sys.stderr", log):
             for question, status in (("한도", 429), ("오류", 502), ("로그인", 503), ("모델", 503)):
                 code, result, _ = self.request("/api/ai", "POST", {"question": question}, token)
                 self.assertEqual(code, status)
                 self.assertNotIn("PRIVATE-PROVIDER-ERROR", json.dumps(result))
-                provider.attempts.clear()
+                self.server.ai.attempts.clear()
         self.assertIn("모델을 사용할 수 없어요", result["error"])
         # The service log explains each failure without repeating the question.
         lines = log.getvalue().splitlines()
@@ -1071,7 +1263,8 @@ sys.exit(1)
         self.assertIn("PRIVATE-PROVIDER-ERROR", lines[2])
         self.assertIn("not recognized as a known model", lines[3])
         self.assertNotIn("모델", lines[3].split("model=", 1)[1].split(" ", 1)[1])
-        provider.active.add("family1")
+        self.server.ai.active.add("family1")
+        self.addCleanup(self.server.ai.active.discard, "family1")
         self.assertEqual(self.request("/api/ai", "POST", {"question": "안녕"}, token)[0], 429)
 
     def test_antigravity_wait_releases_the_record_database_lock(self):
@@ -1124,13 +1317,13 @@ print(json.dumps({{"event": "result", "result": {{"status": "SUCCESS", "response
 """, encoding="utf-8")
             binary.chmod(0o700)
             provider = Antigravity(self.store.directory, binary)
-            with patch("antigravity.Path.home", return_value=home):
+            with patch("ai.Path.home", return_value=home):
                 self.assertEqual(provider.generate("권한 확인", "none", None)["answer"], "blocked")
             self.assertEqual(secret.read_text(encoding="utf-8"), "private")
             self.assertEqual(project.read_text(encoding="utf-8"), "test-project")
 
     def test_antigravity_sandbox_blocks_the_global_cli_settings(self):
-        policy = Antigravity(self.store.directory, Path(sys.executable)).command(Path("agy.log"))[2]
+        policy = Antigravity(self.store.directory, Path(sys.executable)).command(Path("/tmp/w"))[2]
         blocked = policy.split("(deny file-read* file-write* ", 1)[1].split("))", 1)[0]
         for name in ("settings.json", "antigravity-cli/settings.json", "antigravity-cli/mcp_config.json"):
             self.assertIn(json.dumps(str((Path.home() / ".gemini").resolve() / name)), blocked)
@@ -1139,14 +1332,14 @@ print(json.dumps({{"event": "result", "result": {{"status": "SUCCESS", "response
         token = self.login()
         provider = self.antigravity()
         log = io.StringIO()
-        with patch("antigravity.DEADLINE_SECONDS", 0.2), patch("antigravity.EXIT_GRACE_SECONDS", 0.2), \
-                patch("antigravity.sys.stderr", log), \
+        with patch("ai.DEADLINE_SECONDS", 0.2), patch("ai.EXIT_GRACE_SECONDS", 0.2), \
+                patch("ai.sys.stderr", log), \
                 patch.object(provider, "command", return_value=[sys.executable, "-c", "import time; time.sleep(30)"]):
             started = time.monotonic()
             code, _, _ = self.request("/api/ai", "POST", {"question": "안녕"}, token)
             self.assertEqual(code, 504)
             self.assertLess(time.monotonic() - started, 2)
-        self.assertNotIn("family1", provider.active)
+        self.assertNotIn("family1", self.server.ai.active)
         self.assertIn("status=504", log.getvalue())
         self.assertIn("timed_out=True", log.getvalue())
 
@@ -1159,7 +1352,7 @@ sys.stdin.read()
 print(json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": "늦은 종료"}}), flush=True)
 time.sleep(30)
 """
-        with patch("antigravity.DEADLINE_SECONDS", 0.5), patch("antigravity.EXIT_GRACE_SECONDS", 0.5), \
+        with patch("ai.DEADLINE_SECONDS", 0.5), patch("ai.EXIT_GRACE_SECONDS", 0.5), \
                 patch.object(provider, "command", return_value=[sys.executable, "-c", fixture]):
             code, result, _ = self.request("/api/ai", "POST", {"question": "안녕"}, token)
         self.assertEqual((code, result.get("answer")), (200, "늦은 종료"))

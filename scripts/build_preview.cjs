@@ -18,7 +18,7 @@ const fetcher = async url => {
   await b.login('guest');
   const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const nav = index.match(/<nav[^>]*>[\s\S]*?<\/nav>/)[0].replace(' hidden', '');
-  const ai = index.match(/<section id="ai-panel"[\s\S]*?<\/section>/)[0].replace(' hidden', '').replace('<p id="ai-status" role="status"></p>', '<p id="ai-status" role="status">관리자가 맥미니에 Antigravity CLI를 연결하면 질문할 수 있어요. (연결 전에는 입력칸이 비활성)</p>');
+  const ai = index.match(/<section id="ai-panel"[\s\S]*?<\/section>/)[0].replace(' hidden', '').replace('<p id="ai-status" role="status"></p>', '<p id="ai-status" role="status">Codex·Claude·Antigravity 카드는 접혀 있고 연결한 AI만 펼쳐져요. 내 API 키로 연결하거나 관리자가 맥미니에 연결하면 질문할 수 있어요. (연결 전에는 입력칸이 비활성)</p>');
   const today = b.eval('Somhouse.localDateTime()');
   const screen = (title, note, page, extra = '') => {
     b.eval(`page=${JSON.stringify(page)};render()`);
