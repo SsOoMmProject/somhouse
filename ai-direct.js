@@ -3,10 +3,12 @@
 (function (root) {
   'use strict';
   // Keep in sync with SYSTEM in ai.py.
-  const SYSTEM = '솜하우스의 가족 기록 도우미로 한국어로 간결하게 답하세요. '
-    + '제공된 집계의 날짜, 건수, 수유량만 근거로 삼고 누락된 기록이나 세부 내용을 지어내지 마세요. '
+  const SYSTEM = '솜하우스의 가족 도우미로 한국어로 간결하게 답하세요. '
+    + '육아 상식, 제품 고르는 기준 같은 일반 질문은 알고 있는 지식으로 답하세요. '
+    + '최신 리뷰 순위, 가격, 재고 같은 실시간 정보는 확인할 수 없다고 짧게 밝히고, 알고 있는 범위의 정보와 고르는 기준을 안내하세요. '
+    + '가족 기록 질문은 제공된 집계의 날짜, 건수, 수유량만 근거로 삼고 누락된 기록이나 세부 내용을 지어내지 마세요. '
     + '수유량 합계는 ml가 명시된 기록만 포함합니다. 가족 기록 질문에 필요한 집계가 없으면 이를 알리세요. '
-    + '기록을 생성하거나 변경했다고 말하지 마세요. 의료 진단이나 처방을 제공하지 마세요.';
+    + '기록을 생성하거나 변경했다고 말하지 마세요. 의료 진단이나 처방은 하지 말고 필요하면 소아과 상담을 권하세요.';
   const MAX_ANSWER_LENGTH = 8000, TIMEOUT_MS = 60000;
   const PROVIDERS = {
     codex: {keyName: 'OpenAI API 키', keyPage: 'https://platform.openai.com/api-keys'},
@@ -14,6 +16,19 @@
     antigravity: {keyName: 'Gemini API 키', keyPage: 'https://aistudio.google.com/apikey'},
   };
   const CLAUDE_MODEL = 'claude-opus-5-5';
+  // Gemini models with a free tier (Google AI Studio pricing page, checked 2026-11-21), best first.
+  // Google's model list does not say which are free, so this is kept by hand. Top 2, middle 2, bottom 1.
+  const GEMINI_FREE = [
+    ['gemini-3.8-flash', '상위'], ['gemini-4-hydrogen', '상위'],
+    ['gemini-3.6-flash', '중위'], ['gemini-3.5-flash-lite', '중위'],
+    ['gemini-3.1-flash-lite', '하위'],
+  ];
+  const GEMINI_TIER = Object.fromEntries(GEMINI_FREE);
+  // The free models this key can use; if Google renamed them all, the account's own list.
+  function geminiShortlist(list) {
+    const free = GEMINI_FREE.map(x => x[0]).filter(id => (list || []).includes(id));
+    return free.length ? free : list || [];
+  }
   const ANTHROPIC = {'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true'};
 
   function failure(message, status) {const error = Error(message); error.status = status; return error;}
@@ -46,9 +61,12 @@
     if (status === 429 || detail.includes('quota') || detail.includes('resource_exhausted'))
       throw failure('AI 사용 한도에 도달했어요. 잠시 후 다시 시도해 주세요.', 429);
     if (status === 403) throw failure('이 API 키로는 사용할 수 없는 기능이에요. 키 권한을 확인해 주세요.', 403);
-    if (status === 404 || detail.includes('model')) throw failure('고른 모델을 쓸 수 없어요. 다른 모델을 골라 주세요.', status);
-    if (status >= 500) throw failure('AI 회사 서버가 잠시 응답하지 않아요. 잠시 후 다시 시도해 주세요.', status);
-    throw failure('AI 답변을 받지 못했어요. 다시 시도해 주세요.', status);
+    // Before the model check: "The model is overloaded" (503) is a busy server, not a missing model.
+    if (status >= 500) throw failure(detail.includes('overloaded') || status === 503 || status === 529
+      ? `지금 이 모델에 요청이 몰려 있어요. 잠시 후 다시 시도하거나 다른 모델을 골라 주세요. (오류 ${status})`
+      : `AI 회사 서버가 잠시 응답하지 않아요. 잠시 후 다시 시도해 주세요. (오류 ${status})`, status);
+    if (status === 404 || detail.includes('model')) throw failure(`고른 모델을 쓸 수 없어요. 다른 모델을 골라 주세요. (오류 ${status})`, status);
+    throw failure(`AI 답변을 받지 못했어요. 다시 시도해 주세요. (오류 ${status})`, status);
   }
 
   // Connecting only lists the models: it checks the key without spending tokens.
@@ -73,7 +91,7 @@
         && !/(image|tts|live|audio|embedding|robotics|computer|exp)/.test(x.name)).map(x => x.name.slice(7));
       // Fast, stable Flash models first; newest version first within each group.
       const rank = id => (id.includes('flash') ? 0 : 2) + (id.includes('preview') ? 1 : 0);
-      return list.sort((a, b) => rank(a) - rank(b) || newer(a, b));
+      return geminiShortlist(list.sort((a, b) => rank(a) - rank(b) || newer(a, b)));
     }
     throw failure('지원하지 않는 AI예요.');
   }
@@ -150,7 +168,7 @@
     return days;
   }
 
-  const api = {SYSTEM, PROVIDERS, CLAUDE_MODEL, models, connect, ask, summarize};
+  const api = {SYSTEM, PROVIDERS, CLAUDE_MODEL, GEMINI_TIER, geminiShortlist, models, connect, ask, summarize};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.SomhouseAI = api;
 })(typeof window !== 'undefined' ? window : this);

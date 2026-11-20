@@ -481,9 +481,15 @@ function aiOptions(){
  for(const p of config.providers){
   if(p.enabled&&config.enabled)list.push({value:'mac:'+p.id,mode:'mac',p,summaries:p.recordSummaries===true});
   const key=keys[p.id];
-  if(key?.key&&key.model&&!config.readOnly&&aiDirect?.PROVIDERS[p.id])list.push({value:'key:'+p.id,mode:'key',p,key,summaries:true});
+  if(key?.key&&key.model&&!config.readOnly&&aiDirect?.PROVIDERS[p.id])list.push({value:'key:'+p.id,mode:'key',p,key:aiShortlist(p.id,key),summaries:true});
  }
  return list;
+}
+// Keys saved before the free shortlist keep working: show only the shortlist and fall back to its first model.
+function aiShortlist(id,key){
+ if(id!=='antigravity'||!aiDirect?.geminiShortlist)return key;
+ const models=aiDirect.geminiShortlist(Array.isArray(key.models)&&key.models.length?key.models:[key.model]);
+ return {...key,models,model:models.includes(key.model)?key.model:models[0]||key.model};
 }
 function aiOption(value){return value?aiOptions().find(x=>x.value===value)||null:null;}
 // A key for Google's card is a Gemini API key, so it answers as Gemini; the Mac runs the Antigravity CLI.
@@ -518,7 +524,7 @@ function aiProvidersView(){
   if(own){
    const models=Array.isArray(own.key.models)&&own.key.models.length?own.key.models:[own.key.model];
    body+=radio(own,`내 ${esc(info.keyName)}로 질문하기`,gemini?'이 기기에서 바로 Google로 보내요. 무료 한도를 넘으면 결제를 연결한 키 주인에게 요금이 청구돼요.':'이 기기에서 바로 AI 회사로 보내요. 사용한 만큼 키 주인에게 요금이 청구돼요.')
-    +`<label class="field ai-model">모델<select data-ai-model="${id}">${models.map(m=>`<option value="${esc(m)}"${m===own.key.model?' selected':''}>${esc(m)}</option>`).join('')}</select></label>`
+    +`<label class="field ai-model">모델<select data-ai-model="${id}">${models.map(m=>`<option value="${esc(m)}"${m===own.key.model?' selected':''}>${gemini&&aiDirect.GEMINI_TIER?.[m]?esc(aiDirect.GEMINI_TIER[m])+' · ':''}${esc(m)}</option>`).join('')}</select></label>`
     +`<div class="actions"><button type="button" class="secondary" data-ai-disconnect="${id}">키 연결 해제</button></div>`;
   }else if(info&&!config.readOnly){
    const form=`<label class="field">${esc(info.keyName)}로 연결<input type="password" id="ai-key-${id}" autocomplete="off" spellcheck="false" placeholder="키를 붙여 넣어 주세요"></label>`
