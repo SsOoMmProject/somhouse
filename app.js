@@ -492,7 +492,11 @@ function aiProvidersView(){
  const radio=(o,text,caption)=>`<label class="ai-pick"><input type="radio" name="provider" value="${esc(o.value)}"${ai.selected===o.value?' checked':''}> ${text}</label><p class="caption">${caption}</p>`;
  const plan=config.chatgptPlan,personal=options.find(o=>o.mode==='plan');
  let planCard='';
- if(plan&&!config.readOnly){
+ if(!config.readOnly&&!plan){
+  planCard='<details class="ai-provider" data-provider="chatgpt" open><summary><strong>내 ChatGPT 구독</strong><span class="badge off">서버 설정 필요</span></summary>'
+   +'<div class="body"><p>솜하우스에서 구독으로 질문하려면 관리자가 OpenAI 웹 앱 연결을 설정해야 해요.</p>'
+   +'<a href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer">ChatGPT 웹에서 직접 질문하기 ↗</a></div></details>';
+ }else if(plan&&!config.readOnly){
   const models=plan.models||(plan.model?[{slug:plan.model,name:plan.model}]:[]);
   const controls=plan.connected
    ?(personal?radio(personal,'내 ChatGPT 구독으로 질문하기',esc(plan.email||'')):'')
@@ -531,8 +535,8 @@ function aiStatusText(){
  if(config.readOnly)return '게스트 보기에서는 질문할 수 없어요. 가족 계정으로 로그인하면 질문을 보낼 수 있어요.';
  if(picked?.mode==='plan')return '내 ChatGPT 플랜을 사용해요. 입력한 질문만 보내요.';
  if(picked)return `${picked.mode==='mac'?'맥미니 ':'내 키로 '}${picked.p.name}에게 질문해요. 질문마다 새로 답해요.`;
- if(!aiOptions().length&&config.chatgptPlan)return '내 ChatGPT 구독을 연결하면 여기에서 질문할 수 있어요.';
- if(!aiOptions().length)return config.homeOnly?'아래에서 AI를 골라 내 API 키를 연결하면 질문할 수 있어요.':'아직 연결된 AI가 없어요. 아래에서 AI를 골라 내 API 키를 연결하거나, 관리자가 맥미니에 연결하면 질문할 수 있어요.';
+ if(!aiOptions().length&&config.chatgptPlan&&!config.chatgptPlan.connected)return '내 ChatGPT 구독을 연결하면 여기에서 질문할 수 있어요.';
+ if(!aiOptions().length)return '아직 연결된 AI가 없어요. 아래에서 연결 방법을 확인해 주세요.';
  return '질문할 AI를 골라 주세요.';
 }
 function pickAI(value){

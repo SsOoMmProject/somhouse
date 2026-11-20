@@ -91,7 +91,7 @@ test('AI cards stay folded unless connected, and the picked AI answers the quest
  b.context.location.hash='#ai';b.events.get('hashchange')();await b.settle();
  const html=b.get('#ai-providers').innerHTML;
  // Connected ones come first and open; the rest are folded with how to connect them.
- assert.deepEqual(cards(html),[['codex',true],['claude',true],['antigravity',false]]);
+ assert.deepEqual(cards(html),[['chatgpt',true],['codex',true],['claude',true],['antigravity',false]]);
  assert.match(html,/python3 server\.py ai-config --provider antigravity/);
  assert.match(html,/id="ai-key-antigravity"/);
  assert.doesNotMatch(html,/value="mac:antigravity"/);
@@ -131,7 +131,7 @@ test('another family connects its own Claude key on this device and asks without
  records[0].date=b.eval('Somhouse.localDateTime()');
  await b.settle();
  b.context.location.hash='#ai';b.events.get('hashchange')();await b.settle();
- assert.deepEqual(cards(b.get('#ai-providers').innerHTML),[['codex',false],['claude',false],['antigravity',false]]);
+ assert.deepEqual(cards(b.get('#ai-providers').innerHTML),[['chatgpt',true],['codex',false],['claude',false],['antigravity',false]]);
  // Other families are never told to set up the Mac.
  assert.doesNotMatch(b.get('#ai-providers').innerHTML,/server\.py/);
  assert.equal(b.get('#ai-fields').disabled,true);
@@ -140,7 +140,7 @@ test('another family connects its own Claude key on this device and asks without
  await b.settle();
  assert.match(b.get('#ai-status').textContent,/연결했어요. 모델: claude-opus-5-5/);
  const html=b.get('#ai-providers').innerHTML;
- assert.deepEqual(cards(html),[['claude',true],['codex',false],['antigravity',false]]);
+ assert.deepEqual(cards(html),[['chatgpt',true],['claude',true],['codex',false],['antigravity',false]]);
  assert.match(html,/value="key:claude" checked/);
  assert.match(html,/<option value="claude-opus-5-5" selected>/);
  // The key is kept per account in this browser.
@@ -195,15 +195,20 @@ test('a wrong key is reported and not saved',async()=>{
  assert.equal(b.context.localStorage.getItem('somhouse-ai-keys-v1'),null);
 });
 
-test('with no AI connected every card is folded and the form stays locked',async()=>{
+test('unconfigured hosted plan explains setup before API key options and does not offer sign-in',async()=>{
  const b=browser({
   session:{base:'http://127.0.0.1:8787',token:'existing',username:'family1'},
   fetcher:async(url,options)=>({ok:true,json:async()=>url.endsWith('/api/ai')?{enabled:false,providers:providers([])}:{data:blank()}}),
  });
  await b.settle();
  b.context.location.hash='#ai';b.events.get('hashchange')();await b.settle();
- assert.deepEqual(cards(b.get('#ai-providers').innerHTML),[['codex',false],['claude',false],['antigravity',false]]);
+ assert.deepEqual(cards(b.get('#ai-providers').innerHTML),[['chatgpt',true],['codex',false],['claude',false],['antigravity',false]]);
  assert.equal(b.get('#ai-fields').disabled,true);
+ const html=b.get('#ai-providers').innerHTML;
+ assert.match(html,/내 ChatGPT 구독<\/strong><span class="badge off">서버 설정 필요/);
+ assert.match(html,/href="https:\/\/chatgpt\.com\/"/);
+ assert.doesNotMatch(html,/data-plan="start"|value="plan:chatgpt"/);
+ assert.doesNotMatch(b.get('#ai-status').textContent,/API 키/);
  assert.match(b.get('#ai-status').textContent,/아직 연결된 AI가 없어요/);
 });
 
