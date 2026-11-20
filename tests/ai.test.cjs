@@ -90,8 +90,9 @@ test('AI cards stay folded unless connected, and the picked AI answers the quest
  await b.settle();
  b.context.location.hash='#ai';b.events.get('hashchange')();await b.settle();
  const html=b.get('#ai-providers').innerHTML;
- // Connected ones come first and open; the rest are folded with how to connect them.
- assert.deepEqual(cards(html),[['chatgpt',true],['codex',true],['claude',true],['antigravity',false]]);
+ // Gemini is always first and open; connected ones follow, open.
+ assert.deepEqual(cards(html),[['antigravity',true],['codex',true],['claude',true]]);
+ assert.doesNotMatch(html,/앱에서 질문하기/);
  assert.match(html,/python3 server\.py ai-config --provider antigravity/);
  assert.match(html,/id="ai-key-antigravity"/);
  assert.doesNotMatch(html,/value="mac:antigravity"/);
@@ -131,7 +132,7 @@ test('another family connects its own Claude key on this device and asks without
  records[0].date=b.eval('Somhouse.localDateTime()');
  await b.settle();
  b.context.location.hash='#ai';b.events.get('hashchange')();await b.settle();
- assert.deepEqual(cards(b.get('#ai-providers').innerHTML),[['chatgpt',true],['codex',false],['claude',false],['antigravity',false]]);
+ assert.deepEqual(cards(b.get('#ai-providers').innerHTML),[['antigravity',true],['codex',false],['claude',false]]);
  // Other families are never told to set up the Mac.
  assert.doesNotMatch(b.get('#ai-providers').innerHTML,/server\.py/);
  assert.equal(b.get('#ai-fields').disabled,true);
@@ -140,7 +141,8 @@ test('another family connects its own Claude key on this device and asks without
  await b.settle();
  assert.match(b.get('#ai-status').textContent,/연결했어요. 모델: claude-opus-5-5/);
  const html=b.get('#ai-providers').innerHTML;
- assert.deepEqual(cards(html),[['chatgpt',true],['claude',true],['codex',false],['antigravity',false]]);
+ assert.deepEqual(cards(html),[['antigravity',true],['claude',true],['codex',false]]);
+ assert.doesNotMatch(html,/Claude 앱에서 질문하기/);
  assert.match(html,/value="key:claude" checked/);
  assert.match(html,/<option value="claude-opus-5-5" selected>/);
  // The key is kept per account in this browser.
@@ -195,21 +197,31 @@ test('a wrong key is reported and not saved',async()=>{
  assert.equal(b.context.localStorage.getItem('somhouse-ai-keys-v1'),null);
 });
 
-test('unconfigured hosted plan explains setup before API key options and does not offer sign-in',async()=>{
+test('without ChatGPT sign-in on the server, Gemini comes first and the others link to their apps',async()=>{
  const b=browser({
   session:{base:'http://127.0.0.1:8787',token:'existing',username:'family1'},
   fetcher:async(url,options)=>({ok:true,json:async()=>url.endsWith('/api/ai')?{enabled:false,providers:providers([])}:{data:blank()}}),
  });
  await b.settle();
  b.context.location.hash='#ai';b.events.get('hashchange')();await b.settle();
- assert.deepEqual(cards(b.get('#ai-providers').innerHTML),[['chatgpt',true],['codex',false],['claude',false],['antigravity',false]]);
+ assert.deepEqual(cards(b.get('#ai-providers').innerHTML),[['antigravity',true],['codex',false],['claude',false]]);
  assert.equal(b.get('#ai-fields').disabled,true);
  const html=b.get('#ai-providers').innerHTML;
- assert.match(html,/내 ChatGPT 구독<\/strong><span class="badge off">서버 설정 필요/);
- assert.match(html,/href="https:\/\/chatgpt\.com\/"/);
- assert.doesNotMatch(html,/data-plan="start"|value="plan:chatgpt"/);
- assert.doesNotMatch(b.get('#ai-status').textContent,/API 키/);
- assert.match(b.get('#ai-status').textContent,/아직 연결된 AI가 없어요/);
+ assert.match(html,/<strong>Gemini<\/strong><span class="caption">Google<\/span><span class="badge off">무료로 시작/);
+ assert.match(html,/무료로 키를 받아 시작할 수 있어요/);
+ // Gemini's key form is open; paid keys stay folded behind each app's link.
+ const gemini=html.match(/data-provider="antigravity"[\s\S]*?<\/details>/)[0];
+ assert.match(gemini,/id="ai-key-antigravity"/);
+ assert.match(gemini,/<div class="body"><label class="field">Gemini API 키로 연결/);
+ assert.match(html,/href="https:\/\/chatgpt\.com\/"[^>]*>ChatGPT 앱에서 질문하기/);
+ assert.match(html,/OpenAI 승인 후 열려요/);
+ assert.match(html,/href="https:\/\/claude\.ai\/"[^>]*>Claude 앱에서 질문하기/);
+ assert.match(html,/<summary>OpenAI API 키로 연결하기 \(유료\)<\/summary><label class="field">OpenAI API 키로 연결<input type="password" id="ai-key-codex"/);
+ assert.match(html,/<summary>Anthropic API 키로 연결하기 \(유료\)<\/summary>/);
+ assert.doesNotMatch(html,/서버 설정 필요|data-plan="start"|value="plan:chatgpt"|data-provider="chatgpt"/);
+ assert.match(b.get('#ai-status').textContent,/Gemini API 키를 연결하면/);
+ assert.equal(b.eval("aiName({mode:'key',p:{id:'antigravity',name:'Antigravity'}})"),'Gemini');
+ assert.equal(b.eval("aiName({mode:'mac',p:{id:'antigravity',name:'Antigravity'}})"),'Antigravity');
 });
 
 test('personal plan stays inside the app and never falls back to another billing path',async()=>{

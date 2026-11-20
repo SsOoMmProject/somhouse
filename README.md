@@ -223,7 +223,7 @@ launchctl kickstart -k "gui/$(id -u)/com.ssoomm.somhouse"
 
 ### AI 연결 (Codex · Claude · Antigravity)
 
-AI 대화 탭은 세 AI를 접힌 카드로 보여 주고, 연결한 AI만 펼쳐서 고를 수 있게 합니다. 연결 방법은 두 가지입니다. 마지막으로 고른 AI는 기기에 기억됩니다.
+AI 대화 탭은 **Gemini 카드를 맨 위에 펼쳐** 보여 줍니다. Gemini API 키는 Google AI Studio에서 무료로 받아 시작할 수 있어서, 맥이나 PC가 없는 가족도 휴대폰만으로 바로 질문할 수 있습니다. Codex(ChatGPT)·Claude 카드는 연결하기 전까지 접혀 있고, 펼치면 **ChatGPT 앱에서 질문하기**·**Claude 앱에서 질문하기** 버튼이 먼저 보입니다. 휴대폰에 앱이 있으면 앱이, 없으면 웹이 열립니다. 유료인 OpenAI·Anthropic API 키 입력란은 그 아래 **… API 키로 연결하기 (유료)**에 접혀 있습니다. 이미 연결한 AI는 펼친 상태로 고를 수 있습니다. 마지막으로 고른 AI는 기기에 기억됩니다. 연결 방법은 두 가지입니다.
 
 - **맥미니 CLI (처음 만든 가족만):** 관리자가 맥미니에 한 번 연결하면 가족은 키 없이 씁니다. 답변은 관리자의 구독 계정으로 나갑니다. 아래 절차를 따릅니다.
 - **내 API 키 (모든 가족):** 카드를 펼쳐 OpenAI·Anthropic·Gemini API 키를 붙여 넣고 **연결**을 누릅니다. 키는 그 기기의 브라우저에 로그인한 계정별로 저장되고, 솜하우스 서버로는 보내지 않습니다. 질문은 기기에서 AI 회사로 바로 가고(`ai-direct.js`), 요금은 키 주인에게 청구됩니다. 연결할 때는 모델 목록만 불러와 키를 확인하므로 토큰을 쓰지 않습니다. 모델은 카드에서 바꿀 수 있습니다(기본: Claude `claude-opus-5-5`, OpenAI·Gemini는 계정에서 쓸 수 있는 최신 모델). 가족 기록 집계는 기기에서 맥미니와 같은 방식(날짜와 숫자만)으로 계산해 보냅니다. 키를 지우려면 카드의 **키 연결 해제**를 누르고, 키 자체는 AI 회사 사이트에서 삭제합니다. 공용 기기에서는 연결하지 마세요.
@@ -271,7 +271,7 @@ python3 -m venv /tmp/somhouse-chatgpt-venv
 /tmp/somhouse-chatgpt-venv/bin/python server.py serve --chatgpt-local --port 18764 --data-dir /tmp/somhouse-chatgpt-local
 ```
 
-**휴대폰에서 접속하는 운영 웹**에는 OpenAI가 호스팅 앱의 **ChatGPT plan usage**를 승인하고 발급한 클라이언트 ID가 필요합니다. 신청할 콜백은 서버 공개 HTTPS 주소 뒤에 `/auth/openai/callback`을 붙인 값입니다. 승인 안내의 사용 권한·토큰 인증 방식·추론 계약을 확인한 후, 서비스를 실행하는 Python에 위 의존성을 설치하고 운영 데이터 폴더의 `chatgpt-web-client.json`에 아래 값을 저장합니다(소유자만 읽기·쓰기, 0600). `none` 인증이면 비밀값을 생략하고, `client_secret_basic`이면 `client_secret`에 발급받은 값을 추가합니다. 서비스 재시작 후 테스트 계정 하나에서 동의, 질문, 연결 해제를 검증합니다. 설정 파일이 없으면 AI 탭의 **내 ChatGPT 구독**에 **서버 설정 필요**가 표시됩니다. 이때 **ChatGPT 웹에서 직접 질문하기**를 누르면 ChatGPT가 새 탭에서 열립니다.
+**휴대폰에서 접속하는 운영 웹**에는 OpenAI가 호스팅 앱의 **ChatGPT plan usage**를 승인하고 발급한 클라이언트 ID가 필요합니다. 신청할 콜백은 서버 공개 HTTPS 주소 뒤에 `/auth/openai/callback`을 붙인 값입니다. 승인 안내의 사용 권한·토큰 인증 방식·추론 계약을 확인한 후, 서비스를 실행하는 Python에 위 의존성을 설치하고 운영 데이터 폴더의 `chatgpt-web-client.json`에 아래 값을 저장합니다(소유자만 읽기·쓰기, 0600). `none` 인증이면 비밀값을 생략하고, `client_secret_basic`이면 `client_secret`에 발급받은 값을 추가합니다. 서비스 재시작 후 테스트 계정 하나에서 동의, 질문, 연결 해제를 검증합니다. 설정 파일이 없으면 **내 ChatGPT 구독** 카드는 보이지 않고, Codex 카드에 **ChatGPT 앱에서 질문하기** 버튼과 "OpenAI 승인 후 열려요" 안내가 표시됩니다.
 
 ```json
 {

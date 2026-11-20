@@ -18,7 +18,7 @@ const fetcher = async url => {
   await b.login('guest');
   const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
   const nav = index.match(/<nav[^>]*>[\s\S]*?<\/nav>/)[0].replace(' hidden', '');
-  const ai = index.match(/<section id="ai-panel"[\s\S]*?<\/section>/)[0].replace(' hidden', '').replace('<p id="ai-status" role="status"></p>', '<p id="ai-status" role="status">가족 계정으로 로그인하면 내 ChatGPT 구독의 연결 상태를 확인할 수 있어요.</p>');
+  const ai = index.match(/<section id="ai-panel"[\s\S]*?<\/section>/)[0].replace(' hidden', '').replace('<p id="ai-status" role="status"></p>', '<p id="ai-status" role="status">가족 계정으로 로그인하면 Gemini API 키를 연결해 바로 질문할 수 있어요.</p>');
   const today = b.eval('Somhouse.localDateTime()');
   const screen = (title, note, page, extra = '') => {
     b.eval(`page=${JSON.stringify(page)};render()`);
@@ -42,7 +42,7 @@ const fetcher = async url => {
     screen('4. 일정', '월간 가족 달력(수유·일정·수면·구매·Google 캘린더, 공휴일 빨간 글씨)은 이 화면에만 있습니다. 오늘 날짜를 누른 상태. 아래 목록은 ‘다가오는 N · 지난 M’, 가까운 순, D-day 배지(오늘·내일·D-n), 지난 일정은 접힘. 입력 항목: 날짜와 시간·누구 일정·일정 이름·장소·메모.', 'schedule'),
     screen('5. 구매 목록', '‘살 것 N · 산 것 M’. 예정일이 가까운 순, 날짜 없는 항목은 그 아래. ‘✓ 샀어요’ 한 번으로 완료, 산 것은 접혀 있고 ‘다시 사기’로 되돌림. 수량 기본값 1.', 'shopping'),
     screen('6. (메뉴 없음) 확인 필요 전체 보기', '메뉴 탭이 아닙니다. 홈 ‘확인할 것’에 3건 넘게 쌓였을 때 ‘나머지 보기’로 들어오는 화면입니다. 음성(Nest → Google Tasks)이나 Google 캘린더로 들어왔지만 자동 저장하지 못한 입력을 정정합니다.', 'review'),
-    `<article class="preview-screen" id="screen-ai"><h2 class="preview-title">7. AI 대화</h2><p class="preview-note">내 ChatGPT 구독, 개인 API 키 또는 관리자가 연결한 AI로 질문하는 화면입니다.</p><div class="phone"><main>${nav.replace('data-page="ai">', 'data-page="ai" class="active">')}${ai}</main></div></article>`,
+    `<article class="preview-screen" id="screen-ai"><h2 class="preview-title">7. AI 대화</h2><p class="preview-note">Gemini API 키(무료로 시작)나 관리자가 연결한 AI로 질문하는 화면입니다. ChatGPT·Claude는 각 앱으로 이동합니다.</p><div class="phone"><main>${nav.replace('data-page="ai">', 'data-page="ai" class="active">')}${ai}</main></div></article>`,
     form('feeding', '8. 입력창 · 수유 기록', '날짜와 시간은 지금으로 채워짐. 분유·혼합은 ml, 모유는 분 단위가 고정되고 숫자만 입력하거나 ±10ml/±5분 버튼으로 조절. 기본값은 같은 종류의 직전 양. 기타만 자유 입력.'),
     form('sleep', '9. 입력창 · 수면 기록', '수기 입력용. 보통은 홈의 수면 시작/종료 버튼을 쓰며, 수면 중 수유를 기록하면 수면이 자동으로 끝납니다.'),
     form('hospital', '10. 입력창 · 병원 방문', ''),
