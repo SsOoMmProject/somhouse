@@ -157,6 +157,18 @@
       if (token === this.token) this.settings = result.settings;
       return result;
     }
+    // One line for the next caregiver; an empty text clears it.
+    async handoff(text) {
+      const token = this.token, result = await this.request('/api/handoff', 'POST', {text});
+      if (token === this.token) this.settings = result.settings;
+      return result;
+    }
+    // The shared direct-breastfeeding timer: start (with a side), switch, finish or cancel.
+    async timer(action, side) {
+      const token = this.token, result = await this.request('/api/timer', 'POST', side ? {action, side} : {action});
+      if (token === this.token) {this.settings = result.settings; if (result.aliases) this.aliases = result.aliases;}
+      return result;
+    }
     // Family management: who is in this family, pre-registered addresses and the invite link.
     async familyView() {return this.request('/api/family');}
     async familyChange(body) {return this.request('/api/family', 'POST', body);}

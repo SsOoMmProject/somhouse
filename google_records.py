@@ -352,6 +352,8 @@ def task_title(kind, item):
             return f"수유 · {item['category']} {item['amount']}"
         if item.get("type") == "sleep":
             return f"수면 · {item['category']} {item['date'][11:16]}" + (f"~{item['end'][11:16]}" if item.get("end") else "")
+        if item.get("type") == "diaper":
+            return f"기저귀 · {item['category']} {item['date'][11:16]}"
         return f"병원 · {item['hospital']}"
     return ("일정 · " if kind == "schedule" else "구매 · ") + item["title"]
 

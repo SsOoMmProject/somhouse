@@ -6,7 +6,7 @@ function valid(d){
   const object=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
   const fields=(x,required)=>object(x)&&Object.values(x).every(v=>typeof v==='string')&&required.every(k=>typeof x[k]==='string'&&x[k].length>0);
   if(!object(d)||!['records','schedule','shopping'].every(k=>Array.isArray(d[k])))return false;
-  const need={feeding:['category','amount'],sleep:['category'],hospital:['hospital','reason']};
+  const need={feeding:['category','amount'],sleep:['category'],diaper:['category'],hospital:['hospital','reason']};
   return d.records.every(x=>Object.hasOwn(need,x?.type)&&fields(x,['id','type','date',...need[x.type]]))
     &&d.schedule.every(x=>fields(x,['id','date','title']))
     &&d.shopping.every(x=>fields(x,['id','title','quantity'])&&(x.done===undefined||['yes','no'].includes(x.done)));
@@ -122,9 +122,10 @@ function refreshShared(force=false){
    if(shared.token!==token)return;
    if(!valid(next))throw Error('기록을 확인하지 못했어요. 다시 연결하고 있습니다.');
    const changed=JSON.stringify(next)!==JSON.stringify(data)||(['review','home'].includes(page)&&JSON.stringify(shared.googleStatus)!==statusBefore)||(page==='review'&&JSON.stringify(reviewItems())!==reviewBefore),wasReady=sharedReady;
-   data=next;sharedReady=true;missedPolls=0;if(changed)needsRender=true;
+   data=next;sharedReady=true;missedPolls=0;lastSync=Date.now();if(changed)needsRender=true;
    message(shared.readOnly?'게스트 보기예요. 실제 가족 기록이 아닌 예시 기록이에요. 입력창은 열어 볼 수 있지만 저장·수정·삭제는 되지 않아요.':'기록은 자동으로 저장되고 가족과 함께 업데이트돼요.'+legacyWarning);
    if((needsRender||!wasReady)&&(!editingScreen()||!wasReady))render();else connectionView();
+   if(quickPending)setTimeout(runQuick,0);
   }catch(error){
    if(shared.token!==token)return;
    // A slow relay often recovers by the next poll: keep the screen and only warn after repeated misses.
@@ -157,8 +158,9 @@ async function sharedChange(operation){
  }finally{busy=false;connectionView();}
 }
 async function changeItem(k,x,remove=false){return sharedChange(()=>remove?shared.remove(k,x.id):shared.put(k,x));}
-const schemas={sleep:[['date','잠든 시각','datetime-local',1],['end','깬 시각 (선택)','datetime-local',0],['category','종류','select',1],['memo','메모','textarea',0]],feeding:[['date','날짜와 시간','datetime-local',1],['category','수유 종류','select',1],['amount','양','text',1],['memo','메모','textarea',0]],hospital:[['date','날짜와 시간','datetime-local',1],['hospital','병원','text',1],['reason','방문 이유','text',1],['memo','메모','textarea',0]],schedule:[['date','날짜와 시간','datetime-local',1],['who','누구 일정','select',0],['title','일정 이름','text',1],['place','장소 (선택)','text',0],['memo','메모','textarea',0]],shopping:[['title','품목','text',1],['quantity','수량','text',1],['date','구매 예정일 (선택)','date',0],['memo','메모','textarea',0],['url','상품 링크 (선택)','url',0]]};
-const choices={category:['모유','분유','혼합','기타'],'sleep.category':['낮잠','밤잠']};
+const schemas={diaper:[['date','시각','datetime-local',1],['category','종류','select',1],['memo','메모','textarea',0]],sleep:[['date','잠든 시각','datetime-local',1],['end','깬 시각 (선택)','datetime-local',0],['category','종류','select',1],['memo','메모','textarea',0]],feeding:[['date','날짜와 시간','datetime-local',1],['category','수유 종류','select',1],['amount','양','text',1],['memo','메모','textarea',0]],hospital:[['date','날짜와 시간','datetime-local',1],['hospital','병원','text',1],['reason','방문 이유','text',1],['memo','메모','textarea',0]],schedule:[['date','날짜와 시간','datetime-local',1],['who','누구 일정','select',0],['title','일정 이름','text',1],['place','장소 (선택)','text',0],['memo','메모','textarea',0]],shopping:[['title','품목','text',1],['quantity','수량','text',1],['date','구매 예정일 (선택)','date',0],['memo','메모','textarea',0],['url','상품 링크 (선택)','url',0]]};
+const choices={category:['모유','분유','혼합','기타'],'sleep.category':['낮잠','밤잠'],'diaper.category':['소변','대변','둘 다']};
+const diaperIcons={소변:'💧',대변:'💩','둘 다':'💧💩'};
 // '누구 일정': family, parents and each registered child; '아기' only until a name is registered (or on old items).
 function children(){return Array.isArray(shared?.settings?.children)?shared.settings.children:[];}
 function whoChoices(current){const list=['가족','엄마','아빠',...children()];if(!children().length)list.push('아기');if(current&&!list.includes(current))list.push(current);return list;}
@@ -167,7 +169,7 @@ const ADD_CHILD='__add_child__';
 function link(url){try{let u=new URL(url);return ['http:','https:'].includes(u.protocol)?`<a href="${esc(u.href)}" target="_blank" rel="noopener noreferrer">상품 링크 ↗</a>`:''}catch{return ''}}
 function sleepText(x){const m=Somhouse.sleepMinutes(x);return `${x.date.slice(11)}${x.end?`~${x.end.slice(x.end.slice(0,10)===x.date.slice(0,10)?11:5).replace('T',' ')}`:''}${m!==null?` (${Somhouse.duration(m)})`:' · 깬 시각 미입력'}`;}
 const icons={분유:'🍼',혼합:'🍼',모유:'🤱',기타:'🍼'};
-function desc(x,k){if(k==='records'&&x.type==='sleep')return `😴 수면 · ${esc(x.category)} · ${esc(sleepText(x))}`;if(k==='records')return x.type==='feeding'?`${icons[x.category]||'🍼'} ${esc(x.category)} · ${esc(x.amount)}`:`🏥 ${esc(x.hospital)} · ${esc(x.reason)}`;return (k==='schedule'&&x.who?`<span class="who who-${whoClass(x.who)}">${esc(x.who)}</span> `:'')+esc(x.title)+(k==='shopping'?` · ${esc(x.quantity)}`:'')}
+function desc(x,k){if(k==='records'&&x.type==='diaper')return `${diaperIcons[x.category]||'🧷'} 기저귀 · ${esc(x.category)}`;if(k==='records'&&x.type==='sleep')return `😴 수면 · ${esc(x.category)} · ${esc(sleepText(x))}`;if(k==='records')return x.type==='feeding'?`${icons[x.category]||'🍼'} ${esc(x.category)} · ${esc(x.amount)}`:`🏥 ${esc(x.hospital)} · ${esc(x.reason)}`;return (k==='schedule'&&x.who?`<span class="who who-${whoClass(x.who)}">${esc(x.who)}</span> `:'')+esc(x.title)+(k==='shopping'?` · ${esc(x.quantity)}`:'')}
 // The whole card opens the edit form (delete is inside it); only shopping keeps a one-tap done button.
 function dday(date){
  const today=Somhouse.localDateTime().slice(0,10),n=Math.round((new Date(date.slice(0,10)+'T12:00')-new Date(today+'T12:00'))/86400000);
@@ -190,7 +192,7 @@ function googleItem(x){
  return `<div class="item"><strong>${esc(x.title)}</strong> <span class="badge gcal">📆 Google</span><p>${esc(when)}</p>${open}</div>`;
 }
 function sorted(k){return [...data[k]].sort((a,b)=>(b.date||b.id).localeCompare(a.date||a.id))}
-const pageTitles={home:'홈',records:'육아 기록',stats:'수유 통계',schedule:'일정',shopping:'구매 목록',ai:'AI 대화',review:'확인 필요'};
+const pageTitles={home:'홈',records:'육아 기록',stats:'통계',schedule:'일정',shopping:'구매 목록',ai:'AI 대화',review:'확인 필요'};
 let reviewKey='',schedulePastOpen=false;
 function reviewItems(){return Array.isArray(shared?.googleStatus?.review_items)?shared.googleStatus.review_items:[];}
 // Inputs that were not saved automatically, or that differ from a web edit. The Google Task or event is never changed here.
@@ -208,7 +210,6 @@ function reviewView(){
 const filters={records:{},schedule:{},shopping:{}};
 function route(){const name=location.hash.slice(1);page=Object.hasOwn(pageTitles,name)?name:'home';render()}
 function quickButtons(){return '<div class="quick"><button class="secondary" data-add="feeding">수유 기록</button><button class="secondary" data-add="sleep">수면</button><button class="secondary" data-add="hospital">병원 방문</button><button class="secondary" data-add="schedule">일정</button><button class="secondary" data-add="shopping">구매 물품</button></div>'}
-// Opens a prefilled form only; nothing is saved until the family member taps 저장하기.
 const feedingKinds=['분유','모유','혼합','기타'],sleepKinds=['낮잠','밤잠'];
 function unconfirmed(){return data.records.filter(x=>['feeding','sleep'].includes(x.type)&&x.confirm==='category').sort((a,b)=>b.date.localeCompare(a.date));}
 // Feedings saved from an unclear voice or Calendar input: one tap settles the kind.
@@ -238,7 +239,7 @@ function voiceHelp(){
 function repeatButtons(){
  const recent=Somhouse.recentFeedings(data.records);
  if(!recent.length)return '';
- return `<section class="repeat" aria-labelledby="repeat-title"><h2 id="repeat-title">최근 수유 다시 기록</h2><div class="quick">${recent.map(x=>`<button class="secondary" data-repeat-category="${esc(x.category)}" data-repeat-amount="${esc(x.amount)}">${esc(x.category)} ${esc(x.amount)}</button>`).join('')}</div></section>`;
+ return `<section class="repeat" aria-labelledby="repeat-title"><h2 id="repeat-title">최근 수유 다시 기록 <span class="caption">누르면 지금 시각으로 바로 저장돼요</span></h2><div class="quick">${recent.map(x=>`<button class="secondary" data-repeat-category="${esc(x.category)}" data-repeat-amount="${esc(x.amount)}">${esc(x.category)} ${esc(x.amount)}</button>`).join('')}</div></section>`;
 }
 // "3시간 5분 전" from two local "YYYY-MM-DDTHH:MM" stamps.
 function ago(from,now){
@@ -252,12 +253,42 @@ function openSleep(at=Somhouse.localDateTime(),inclusive=true){
   .sort((a,b)=>b.date.localeCompare(a.date))[0]||null;
 }
 function newId(){return typeof crypto!=='undefined'&&crypto.randomUUID?crypto.randomUUID():Date.now().toString()+'-'+Math.random().toString(36).slice(2);}
+// The shared direct-breastfeeding timer: seconds per side, the running segment counted up to now.
+function timerState(){
+ const t=shared?.settings?.timer;if(!t||!Array.isArray(t.segments)||!t.segments.length)return null;
+ const at=v=>{const [d,c]=v.split('T'),[y,m,dd]=d.split('-').map(Number),[h,mi,se]=c.split(':').map(Number);return new Date(y,m-1,dd,h,mi,se||0).getTime();};
+ const sides={좌:0,우:0},nowMs=Date.now();
+ for(const x of t.segments)sides[x.side]=(sides[x.side]||0)+Math.max(0,((x.end?at(x.end):nowMs)-at(x.start))/1000);
+ return {side:t.segments[t.segments.length-1].side,sides,total:sides.좌+sides.우,by:t.by};
+}
+function clock(seconds){const s=Math.floor(seconds),m=Math.floor(s/60);return `${m}:${String(s%60).padStart(2,'0')}`;}
+function timerHtml(){
+ const t=timerState();
+ if(!t)return '<div class="tile-actions"><button class="secondary small" data-timer="start" data-side="좌">🤱 왼쪽부터</button><button class="secondary small" data-timer="start" data-side="우">오른쪽부터</button></div>';
+ const other=t.side==='좌'?'우':'좌';
+ return `<div class="timer-box"><p class="timer-head">🤱 직수 중 · <b>${esc(t.side)}</b> <b data-timer-clock="total">${clock(t.total)}</b></p><p class="caption" data-timer-clock="sides">좌 ${clock(t.sides.좌)} · 우 ${clock(t.sides.우)}</p><div class="tile-actions"><button class="secondary small" data-timer="switch">⇄ ${other==='좌'?'왼쪽':'오른쪽'}으로</button><button class="small" data-timer="finish">끝내기</button><button class="plain small" data-timer="cancel">취소</button></div></div>`;
+}
+function shortName(name){return !name?'':name==='family'?'가족':name.includes('@')?name.split('@')[0]:name;}
+let lastSync=0;
+// For the next caregiver: the nearest plan within a day, the family's one-line note and how fresh the screen is.
+function handoffStrip(){
+ const now=Somhouse.localDateTime(),soon=Somhouse.addDays(now.slice(0,10),1)+now.slice(10);
+ const next=[...data.schedule.filter(x=>x.date>=now&&x.date<=soon).map(x=>({date:x.date,title:x.title})),...googleEvents().filter(x=>!x.allDay&&x.date>=now&&x.date<=soon).map(x=>({date:x.date,title:x.title}))].sort((a,b)=>a.date.localeCompare(b.date))[0];
+ const note=shared?.settings?.handoff,ro=shared?.readOnly;
+ const age=lastSync?Math.floor((Date.now()-lastSync)/60000):0;
+ const plan=next?`<p>📅 다음 일정 <b>${esc(next.date.slice(0,10)===now.slice(0,10)?next.date.slice(11):'내일 '+next.date.slice(11))}</b> ${esc(next.title)}</p>`:'';
+ const memo=note?.text?`<p class="memo">📝 ${esc(note.text)} <span class="caption">— ${esc(shortName(note.by))} ${esc(note.at.slice(11))}</span>${ro?'':' <button class="plain small" data-handoff="edit">수정</button><button class="plain small" data-handoff="clear">지우기</button>'}</p>`:ro?'':'<p><button class="plain small" data-handoff="edit">＋ 다음 사람에게 전달 메모</button></p>';
+ return `<section class="handoff" aria-label="교대 메모">${plan}${memo}<p class="caption">🔄 ${age<1?'방금':age+'분 전'} 업데이트</p></section>`;
+}
 function nowCard(){
  const now=Somhouse.localDateTime(),past=x=>x.date<=now;
  const feed=data.records.filter(x=>x.type==='feeding'&&past(x)).sort((a,b)=>b.date.localeCompare(a.date))[0];
  const sleep=data.records.filter(x=>x.type==='sleep'&&past(x)).sort((a,b)=>b.date.localeCompare(a.date))[0];
  const day=v=>v.slice(0,10)===now.slice(0,10)?v.slice(11):v.slice(5).replace('-','/').replace('T',' ');
- const feedHtml=feed?`<strong>${esc(ago(feed.date,now))}</strong><span>${esc(day(feed.date))} · ${esc(feed.category)} ${esc(feed.amount)}</span>`:'<strong>기록 없음</strong><span>수유를 기록해 보세요</span>';
+ const guess=Somhouse.nextFeeding(data.records),diaper=data.records.filter(x=>x.type==='diaper'&&past(x)).sort((a,b)=>b.date.localeCompare(a.date))[0];
+ const feedHtml=(feed?`<strong>${esc(ago(feed.date,now))}</strong><span>${esc(day(feed.date))} · ${esc(feed.category)} ${esc(feed.amount)}</span>`:'<strong>기록 없음</strong><span>수유를 기록해 보세요</span>')
+  +(guess?`<span class="guess">다음 예상 ${esc(day(guess.at))} 무렵 · 평균 ${esc(Somhouse.duration(guess.gap))} 간격</span>`:'');
+ const diaperHtml=diaper?`<strong>${esc(ago(diaper.date,now))}</strong><span>${esc(day(diaper.date))} · ${esc(diaperIcons[diaper.category]||'')} ${esc(diaper.category)}</span>`:'<strong>기록 없음</strong><span>갈 때 바로 눌러 주세요</span>';
  let sleepHtml='<strong>기록 없음</strong><span>수면을 기록해 보세요</span>';
  const open=openSleep(now);
  if(open)sleepHtml=`<strong>자는 중 · ${esc(ago(open.date,now).replace(' 전','째'))}</strong><span>${esc(day(open.date))}부터 · ${esc(open.category)}</span>`;
@@ -266,7 +297,7 @@ function nowCard(){
   const head=awake?(awake==='방금'?'방금 깸':`깬 지 ${awake.replace(' 전','')}`):'깬 시각 미입력';
   sleepHtml=`<strong>${esc(head)}</strong><span>${esc(sleep.category)}${m!==null?` ${esc(Somhouse.duration(m))}`:''} · ${esc(day(sleep.date))}${sleep.end?`~${esc(day(sleep.end))}`:''}</span>`;
  }
- return `<section class="now-card" aria-label="지금 아기 상태"><div><p>🍼 마지막 수유</p>${feedHtml}</div><div><p>😴 마지막 수면</p>${sleepHtml}${open?`<button class="sleep-toggle wake" data-sleep-end="${esc(open.id)}">☀️ 수면 종료</button>`:'<button class="sleep-toggle" data-sleep-start="1">😴 수면 시작</button>'}</div></section>`;
+ return `<section class="now-card" aria-label="지금 아기 상태"><div><p>🍼 마지막 수유</p>${feedHtml}${timerHtml()}</div><div><p>😴 마지막 수면</p>${sleepHtml}${open?`<button class="sleep-toggle wake" data-sleep-end="${esc(open.id)}">☀️ 수면 종료</button>`:'<button class="sleep-toggle" data-sleep-start="1">😴 수면 시작</button>'}</div><div class="diaper-tile"><p>🧷 마지막 기저귀</p>${diaperHtml}<div class="tile-actions">${['소변','대변','둘 다'].map(c=>`<button class="secondary small" data-diaper="${c}">${diaperIcons[c]} ${c}</button>`).join('')}</div></div></section>${handoffStrip()}`;
 }
 function homeView(){
   const now=Somhouse.localDateTime();
@@ -285,10 +316,13 @@ function totals(x){
 function sleepTotals(x){
  return x.sleepCount?`😴 ${x.sleepCount}회${x.sleepTimed?` · ${Somhouse.duration(x.sleepMinutes)}`:''}`:'';
 }
+function diaperTotals(x){
+ return x.diaperCount?`🧷 기저귀 ${x.diaperCount}회 (소변 ${x.peeCount} · 대변 ${x.pooCount})`:'';
+}
 function summaryCards(){
  const days=x=>Math.round((new Date(x.to+'T12:00')-new Date(x.from+'T12:00'))/86400000)+1;
  const average=x=>{const n=days(x);if(n<2||!x.count)return '';const parts=[`${(x.count/n).toFixed(1)}회`];if(x.measuredCount)parts.push(`${Math.round(x.volume/n).toLocaleString('ko-KR')}ml`);return `<span class="average">하루 평균 ${parts.join(' · ')} (${n}일)</span>`;};
- return `<div class="summary-cards">${Somhouse.periodSummaries(data.records).map(x=>`<div class="summary-card"><p>${x.label}<span class="caption"> ${esc(x.from.slice(5).replace('-','/'))}${x.from!==x.to?`~${esc(x.to.slice(5).replace('-','/'))}`:''}</span></p><strong>${x.count?esc(totals(x)):x.sleepCount?'':'기록 없음'}</strong>${average(x)}${x.sleepCount?`<span class="sleep-line">${esc(sleepTotals(x))}</span>`:''}</div>`).join('')}</div>`;
+ return `<div class="summary-cards">${Somhouse.periodSummaries(data.records).map(x=>`<div class="summary-card"><p>${x.label}<span class="caption"> ${esc(x.from.slice(5).replace('-','/'))}${x.from!==x.to?`~${esc(x.to.slice(5).replace('-','/'))}`:''}</span></p><strong>${x.count?esc(totals(x)):x.sleepCount||x.diaperCount?'':'기록 없음'}</strong>${average(x)}${x.sleepCount?`<span class="sleep-line">${esc(sleepTotals(x))}</span>`:''}${x.diaperCount?`<span class="sleep-line">${esc(diaperTotals(x))}</span>`:''}</div>`).join('')}</div>`;
 }
 function holidayOn(day){return (Array.isArray(shared?.holidays)?shared.holidays:[]).find(x=>x.date===day);}
 function holidayName(h){return h.substitute?`대체공휴일(${h.name})`:h.name;}
@@ -327,6 +361,21 @@ function calendarView(){
  }
  return `<section class="card dashboard-calendar" aria-label="가족 달력"><div class="cal-nav"><button class="plain" data-cal-month="${shift(-1)}" aria-label="이전 달">‹</button><h2>${year}년 ${mon}월</h2><button class="plain" data-cal-month="${shift(1)}" aria-label="다음 달">›</button></div><p class="caption legend">🍼 수유 횟수·ml · 📅 솜하우스 일정 · 📆 Google 캘린더 · 🛒 구매 예정 — 날짜를 누르면 자세히 보여요.</p><div class="cal-grid">${head}${cells}</div>${month!==today.slice(0,7)?`<button class="plain" data-cal-month="${today.slice(0,7)}">이번 달로</button>`:''}${detail}</section>`;
 }
+// The last 7 days on a 0-24h line: sleep as bars (a sleep across midnight on both days), feedings and diapers as dots.
+function patternView(){
+ const now=new Date(),today=Somhouse.localDateTime(now).slice(0,10),pct=m=>(m/1440*100).toFixed(2);
+ const label=day=>day===today?'오늘':day===Somhouse.addDays(today,-1)?'어제':`${Number(day.slice(5,7))}/${Number(day.slice(8))} ${weekdays[new Date(day+'T12:00').getDay()]}`;
+ const hm=m=>`${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
+ const rows=Array.from({length:7},(_,i)=>Somhouse.addDays(today,-i)).map(day=>{
+  const s=Somhouse.daySegments(data.records,day,now);
+  const mark=(cls,style,x,text)=>`<button class="${cls}" style="${style}" data-action="edit" data-key="records" data-id="${esc(x.id)}" title="${esc(text)}" aria-label="${esc(text)}"></button>`;
+  const bars=s.sleeps.map(x=>mark('pt-sleep'+(x.open?' open':''),`left:${pct(x.from)}%;width:${Math.max(0.8,(x.to-x.from)/14.4).toFixed(2)}%`,x,`${x.category} ${hm(x.from)}~${x.open?'자는 중':hm(Math.min(x.to,1439))}`)).join('');
+  const dots=[...s.feedings.map(x=>mark('pt-feed',`left:${pct(x.at)}%`,x,`수유 ${hm(x.at)} ${x.category} ${x.amount}`)),...s.diapers.map(x=>mark('pt-diaper',`left:${pct(x.at)}%`,x,`기저귀 ${hm(x.at)} ${x.category}`))].join('');
+  return `<div class="pt-row"><span class="pt-day">${esc(label(day))}</span><div class="pt-track">${bars||dots?bars+dots:'<span class="pt-empty">기록 없음</span>'}</div></div>`;
+ }).join('');
+ const axis=[0,6,12,18,24].map(h=>`<span style="left:${(h/24*100).toFixed(2)}%">${h}</span>`).join('');
+ return `<section class="card pattern"><h2>최근 7일 하루 흐름</h2><p class="caption"><span class="lg sleep"></span>수면 <span class="lg feed"></span>수유 <span class="lg diaper"></span>기저귀 · 표시를 누르면 그 기록을 열어요. 자정을 넘긴 수면은 두 날에 나눠 그려요.</p><div class="pt-rows">${rows}</div><div class="pt-axis">${axis}</div></section>`;
+}
 function statsView(){
  const rows=Somhouse.dailyFeeding(data.records,statsDays);
  const max=Math.max(1,...rows.map(row=>row.volume).filter(Number.isFinite));
@@ -341,9 +390,9 @@ function statsView(){
  const gaps=feeds.slice(1).map((x,i)=>Somhouse.sleepMinutes({date:feeds[i].date,end:x.date})).filter(m=>m!==null&&m<=8*60);
  const count=rows.reduce((s,r)=>s+r.count,0),measured=rows.filter(r=>r.measuredCount&&Number.isFinite(r.volume)),volume=measured.reduce((s,r)=>s+r.volume,0);
  const cards=[['하루 평균 횟수',`${(count/statsDays).toFixed(1)}회`],['하루 평균 용량',measured.length?`${Math.round(volume/statsDays).toLocaleString('ko-KR')}ml`:'—'],['평균 수유 간격',gaps.length?Somhouse.duration(Math.round(gaps.reduce((s,m)=>s+m,0)/gaps.length)):'—'],[`${statsDays}일 합계`,`${count}회${measured.length?` · ${volume.toLocaleString('ko-KR')}ml`:''}`]];
- return `<h1>수유 통계</h1><div class="quick stats-period" aria-label="조회 기간">${periods}</div><div class="summary-cards stats-cards">${cards.map(([label,value])=>`<div class="summary-card"><p>${label}</p><strong>${esc(value)}</strong></div>`).join('')}</div><p class="caption">평균 간격은 연속된 두 수유 사이가 8시간 이하인 경우만 계산해요.</p><section class="card"><h2>최근 ${statsDays}일</h2><p class="caption">횟수에는 모든 수유를, 용량에는 ml·cc·밀리리터·미리·씨씨 단위가 있는 기록만 집계해요. 직수 시간과 단위 없는 값은 용량에 합산하지 않아요.</p><table class="stats-table"><thead><tr><th scope="col">날짜</th><th scope="col">수유 횟수</th><th scope="col">합계 용량</th><th scope="col">용량 비교</th></tr></thead><tbody>${table}</tbody></table></section>`;
+ return `<h1>통계</h1>${patternView()}<h2 class="section-head">수유</h2><div class="quick stats-period" aria-label="조회 기간">${periods}</div><div class="summary-cards stats-cards">${cards.map(([label,value])=>`<div class="summary-card"><p>${label}</p><strong>${esc(value)}</strong></div>`).join('')}</div><p class="caption">평균 간격은 연속된 두 수유 사이가 8시간 이하인 경우만 계산해요.</p><section class="card"><h2>최근 ${statsDays}일</h2><p class="caption">횟수에는 모든 수유를, 용량에는 ml·cc·밀리리터·미리·씨씨 단위가 있는 기록만 집계해요. 직수 시간과 단위 없는 값은 용량에 합산하지 않아요.</p><table class="stats-table"><thead><tr><th scope="col">날짜</th><th scope="col">수유 횟수</th><th scope="col">합계 용량</th><th scope="col">용량 비교</th></tr></thead><tbody>${table}</tbody></table></section>`;
 }
-function filterView(k){const f=filters[k];return `<form id="filter-form" class="filters" aria-label="목록 검색"><label>검색<input name="query" type="search" placeholder="메모, 병원, 품목 검색" value="${esc(f.query||'')}"></label>${k==='records'?`<label>기록 종류<select name="type"><option value="">전체</option><option value="feeding" ${f.type==='feeding'?'selected':''}>수유</option><option value="sleep" ${f.type==='sleep'?'selected':''}>수면</option><option value="hospital" ${f.type==='hospital'?'selected':''}>병원</option></select></label>`:''}${k==='shopping'?`<label>구매 상태<select name="status"><option value="">전체</option><option value="pending" ${f.status==='pending'?'selected':''}>구매 예정</option><option value="done" ${f.status==='done'?'selected':''}>구매 완료</option></select></label>`:`<label>시작 날짜<input name="from" type="date" value="${esc(f.from||'')}"></label><label>마지막 날짜<input name="to" type="date" value="${esc(f.to||'')}"></label>`}<button type="submit" class="secondary">검색</button><button type="button" class="plain" data-reset="${k}">초기화</button></form>`}
+function filterView(k){const f=filters[k];return `<form id="filter-form" class="filters" aria-label="목록 검색"><label>검색<input name="query" type="search" placeholder="메모, 병원, 품목 검색" value="${esc(f.query||'')}"></label>${k==='records'?`<label>기록 종류<select name="type"><option value="">전체</option><option value="feeding" ${f.type==='feeding'?'selected':''}>수유</option><option value="sleep" ${f.type==='sleep'?'selected':''}>수면</option><option value="diaper" ${f.type==='diaper'?'selected':''}>기저귀</option><option value="hospital" ${f.type==='hospital'?'selected':''}>병원</option></select></label>`:''}${k==='shopping'?`<label>구매 상태<select name="status"><option value="">전체</option><option value="pending" ${f.status==='pending'?'selected':''}>구매 예정</option><option value="done" ${f.status==='done'?'selected':''}>구매 완료</option></select></label>`:`<label>시작 날짜<input name="from" type="date" value="${esc(f.from||'')}"></label><label>마지막 날짜<input name="to" type="date" value="${esc(f.to||'')}"></label>`}<button type="submit" class="secondary">검색</button><button type="button" class="plain" data-reset="${k}">초기화</button></form>`}
 function shoppingOrder(items){
  // Soonest planned date first, undated after them; the newest first within each group.
  return [...items].sort((a,b)=>(a.date?0:1)-(b.date?0:1)||(a.date&&b.date?a.date.localeCompare(b.date):0)||b.id.localeCompare(a.id));
@@ -358,7 +407,7 @@ function recordGroups(items){
  const shown=filtered?days:days.filter(day=>day>Somhouse.addDays(today,-recordDays));
  const groups=shown.map(day=>{
   const list=items.filter(x=>(x.date||'').slice(0,10)===day),sum=Somhouse.rangeSummary(list,day,day);
-  const parts=[sum.count?`🍼 ${totals(sum)}`:'',sum.sleepCount?sleepTotals(sum):'',list.some(x=>x.type==='hospital')?`🏥 ${list.filter(x=>x.type==='hospital').length}건`:''].filter(Boolean).join(' · ');
+  const parts=[sum.count?`🍼 ${totals(sum)}`:'',sum.sleepCount?sleepTotals(sum):'',sum.diaperCount?diaperTotals(sum):'',list.some(x=>x.type==='hospital')?`🏥 ${list.filter(x=>x.type==='hospital').length}건`:''].filter(Boolean).join(' · ');
   return `<section class="day-group"><h3 class="day-head">${esc(dayLabel(day))}${parts?`<span>${esc(parts)}</span>`:''}</h3>${list.map(x=>item(x,'records',false,true)).join('')}</section>`;
  }).join('');
  const hidden=days.length-shown.length;
@@ -369,7 +418,7 @@ function listView(k){
  const items=Somhouse.filter(sorted(k),filters[k]),now=Somhouse.localDateTime();
  const head=k==='schedule'?`다가오는 ${items.filter(x=>x.date>=now).length} · 지난 ${items.filter(x=>x.date<now).length}`:k==='shopping'?`살 것 ${items.filter(x=>x.done!=='yes').length} · 산 것 ${items.filter(x=>x.done==='yes').length}`:`기록 ${items.length}개`;
   const kids=k==='schedule'?`<p class="caption kids">👶 아기: ${children().map(esc).join(', ')||'아직 등록하지 않았어요'} <button class="plain small" data-manage-children="1">${children().length?'아기 이름 관리':'＋ 아기 등록'}</button></p>`:'';
- const add=k==='records'?'<button data-add="feeding">수유 추가</button><button class="secondary" data-add="sleep">수면 추가</button><button class="secondary" data-add="hospital">병원 추가</button>':`<button data-add="${k}">추가하기</button>`;
+ const add=k==='records'?'<button data-add="feeding">수유 추가</button><button class="secondary" data-add="sleep">수면 추가</button><button class="secondary" data-add="diaper">기저귀 추가</button><button class="secondary" data-add="hospital">병원 추가</button>':`<button data-add="${k}">추가하기</button>`;
  const body=k==='schedule'?scheduleItems(items):k==='shopping'?shoppingItems(items):items.length?recordGroups(items):'';
  return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p>${kids}<div class="heading"><h2>${head}</h2><div class="quick">${add}</div></div>${filterView(k)}${body||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}${k==='records'?voiceHelp():''}`;
 }
@@ -484,7 +533,7 @@ function amountField(category,amount){
  const unit=units[category];
  return `<div class="amount-row"><button type="button" class="secondary step" data-step="-1" aria-label="줄이기"${unit?'':' hidden'}>−${unit?unit[1]:''}</button><input name="amount" type="text" inputmode="${unit?'decimal':'text'}" value="${esc(amountParts(category,amount))}" required placeholder="${unit?'':'예: 120ml 또는 15분'}"><span class="unit">${unit?unit[0]:''}</span><button type="button" class="secondary step" data-step="1" aria-label="늘리기"${unit?'':' hidden'}>+${unit?unit[1]:''}</button></div>`;
 }
-function openForm(type,x,preset={},review=''){reviewKey=review;kind=type;editing=x||null;draftId=x?.id||newId();const values=x||{...preset,date:preset.date||(type==='shopping'?'':Somhouse.localDateTime()),...(type==='shopping'&&!preset.quantity?{quantity:'1'}:{}),...(type==='feeding'?{category:preset.category||'분유',amount:preset.amount||(review?'':lastAmount(preset.category||'분유'))}:{})};$('#delete-item').hidden=!x||Boolean(review);$('#formtitle').textContent=(review?'확인 필요 정정 · ':x?'수정 · ':'추가 · ')+({feeding:'수유 기록',sleep:'수면 기록',hospital:'병원 방문',schedule:'일정',shopping:'구매 목록'}[type]);$('#fields').innerHTML=schemas[type].map(([name,label,t,required])=>`<label class="field">${label}${required?' *':''}${t==='select'?`<select name="${name}" required>${(name==='who'?whoChoices(values.who):choices[type+'.'+name]||choices[name]).map(v=>`<option ${values[name]===v?'selected':''}>${esc(v)}</option>`).join('')}${name==='who'?`<option value="${ADD_CHILD}">＋ 아기 추가…</option>`:''}</select>`:t==='textarea'?`<textarea name="${name}">${esc(values[name]||'')}</textarea>`:type==='feeding'&&name==='amount'?amountField(values.category,values.amount):`<input name="${name}" type="${t}" value="${esc(values[name]||'')}" ${required?'required':''}${name==='amount'?' placeholder="예: 120ml 또는 15분"':''}>`}</label>`).join('');
+function openForm(type,x,preset={},review=''){reviewKey=review;kind=type;editing=x||null;draftId=x?.id||newId();const values=x||{...preset,date:preset.date||(type==='shopping'?'':Somhouse.localDateTime()),...(type==='shopping'&&!preset.quantity?{quantity:'1'}:{}),...(type==='feeding'?{category:preset.category||'분유',amount:preset.amount||(review?'':lastAmount(preset.category||'분유'))}:{})};$('#delete-item').hidden=!x||Boolean(review);$('#formtitle').textContent=(review?'확인 필요 정정 · ':x?'수정 · ':'추가 · ')+({feeding:'수유 기록',sleep:'수면 기록',diaper:'기저귀',hospital:'병원 방문',schedule:'일정',shopping:'구매 목록'}[type]);$('#fields').innerHTML=schemas[type].map(([name,label,t,required])=>`<label class="field">${label}${required?' *':''}${t==='select'?`<select name="${name}" required>${(name==='who'?whoChoices(values.who):choices[type+'.'+name]||choices[name]).map(v=>`<option ${values[name]===v?'selected':''}>${esc(v)}</option>`).join('')}${name==='who'?`<option value="${ADD_CHILD}">＋ 아기 추가…</option>`:''}</select>`:t==='textarea'?`<textarea name="${name}">${esc(values[name]||'')}</textarea>`:type==='feeding'&&name==='amount'?amountField(values.category,values.amount):`<input name="${name}" type="${t}" value="${esc(values[name]||'')}" ${required?'required':''}${name==='amount'?' placeholder="예: 120ml 또는 15분"':''}>`}</label>`).join('');
  if(type==='schedule'){
   const select=document.querySelector('#fields select[name="who"]');
   if(select){let last=select.value;select.onchange=async()=>{
@@ -509,6 +558,7 @@ function openForm(type,x,preset={},review=''){reviewKey=review;kind=type;editing
 document.addEventListener('click',async e=>{
  if(e.target.closest?.('a')?.tagName==='A')return; // a link inside a card opens the link, not the edit form
  const b=e.target.closest('button,[data-action]');if(!b)return;
+ if(b.dataset.toast!==undefined){const action=toastActions[Number(b.dataset.toast)];hideToast();if(action)await action.run();return;}
  if(b.dataset.page){location.hash=b.dataset.page;if(page===b.dataset.page)render();}
  if(b.dataset.reset){filters[b.dataset.reset]={};render();}
  if(busy||mode!=='shared'||!sharedReady)return;
@@ -540,7 +590,10 @@ document.addEventListener('click',async e=>{
   return;
  }
  if(b.dataset.add){if(mode==='shared'&&!sharedReady)return;openForm(b.dataset.add);}
- if(b.dataset.repeatCategory&&b.dataset.repeatAmount){openForm('feeding',null,{category:b.dataset.repeatCategory,amount:b.dataset.repeatAmount});return;}
+ if(b.dataset.repeatCategory&&b.dataset.repeatAmount){await quickSave({id:newId(),type:'feeding',date:Somhouse.localDateTime(),category:b.dataset.repeatCategory,amount:b.dataset.repeatAmount,memo:''},`🍼 ${b.dataset.repeatCategory} ${b.dataset.repeatAmount}`);return;}
+ if(b.dataset.diaper&&choices['diaper.category'].includes(b.dataset.diaper)){await quickSave({id:newId(),type:'diaper',date:Somhouse.localDateTime(),category:b.dataset.diaper,memo:''},`${diaperIcons[b.dataset.diaper]} 기저귀 ${b.dataset.diaper}`);return;}
+ if(b.dataset.timer){await timerAction(b.dataset.timer,b.dataset.side);return;}
+ if(b.dataset.handoff){await handoffAction(b.dataset.handoff);return;}
  if(b.dataset.confirmId&&[...feedingKinds,...sleepKinds].includes(b.dataset.confirmCategory)){
   const entry=data.records.find(x=>x.id===b.dataset.confirmId),kind=b.dataset.confirmCategory;if(!entry)return;
   if(await sharedChange(()=>shared.confirm({id:entry.id,category:kind}))){
@@ -578,13 +631,13 @@ document.addEventListener('click',async e=>{
 $('#close').onclick=$('#cancel').onclick=()=>{if(!busy)$('#dialog').close();};
 $('#delete-item').onclick=async()=>{
  if(busy||!editing)return;
- const k=['feeding','hospital','sleep'].includes(kind)?'records':kind;
+ const k=['feeding','hospital','sleep','diaper'].includes(kind)?'records':kind;
  if(confirm('이 항목을 삭제할까요?')&&await changeItem(k,editing,true)){$('#dialog').close();render();}
 };
 $('#dialog').addEventListener('cancel',e=>{if(busy)e.preventDefault();});
 $('#form').onsubmit=async e=>{
  e.preventDefault();if(busy)return;
- const k=['feeding','hospital','sleep'].includes(kind)?'records':kind;
+ const k=['feeding','hospital','sleep','diaper'].includes(kind)?'records':kind;
  const x={...(editing||{}),...Object.fromEntries(new FormData(e.target)),id:editing?.id||draftId};
  if(k==='records'){x.type=kind;delete x.confirm;}if(k==='shopping'&&!x.done)x.done='no';
  for(const field of schemas[kind])x[field[0]]=String(x[field[0]]||'').trim();
@@ -596,6 +649,57 @@ $('#form').onsubmit=async e=>{
  const review=reviewKey,remembered=JSON.stringify(shared.aliases||{}),asleep=kind==='feeding'?openSleep(x.date,false):null;
  try{if(await (review?sharedChange(()=>shared.resolveReview(review,'save',k,x)):changeItem(k,x))){$('#dialog').close();const word=Object.keys(shared.aliases||{}).find(w=>shared.aliases[w]===x.category&&JSON.parse(remembered)[w]!==x.category);if(word)message(`저장했어요. 앞으로 ‘${word}’는 ${x.category}로 기억할게요.`);const woke=asleep&&data.records.find(r=>r.id===asleep.id&&r.end);if(woke)message(`수유를 기록해서 ${woke.category}을 ${woke.end.slice(11)}에 끝냈어요 (${Somhouse.duration(Somhouse.sleepMinutes(woke))}).`);render();}}finally{submit.disabled=false;}
 };
+// One tap saves at once; a toast offers undo (which also reopens a sleep the feeding ended) and edit.
+let toastTimer=null,toastActions=[];
+function showToast(text,actions=[]){
+ const el=$('#toast');if(!el)return;
+ toastActions=actions;clearTimeout(toastTimer);
+ el.innerHTML=`<span>${esc(text)}</span>${actions.map((a,i)=>`<button type="button" class="plain small" data-toast="${i}">${esc(a.label)}</button>`).join('')}`;
+ el.hidden=false;toastTimer=setTimeout(()=>{el.hidden=true;toastActions=[];},8000);
+}
+function hideToast(){const el=$('#toast');if(el)el.hidden=true;toastActions=[];clearTimeout(toastTimer);}
+function undoActions(record,woke){
+ return [{label:'되돌리기',run:async()=>{
+   if(!await changeItem('records',record,true))return;
+   if(woke){const back=data.records.find(r=>r.id===woke.id);if(back)await changeItem('records',{...back,end:''});}
+   message('되돌렸어요.');render();
+  }},{label:'수정',run:()=>{const x=data.records.find(r=>r.id===record.id);if(x)openForm(x.type,x);}}];
+}
+async function quickSave(record,label){
+ const asleep=record.type==='feeding'?openSleep(record.date,false):null;
+ if(!await changeItem('records',record))return;
+ const woke=asleep&&data.records.find(r=>r.id===asleep.id&&r.end);
+ render();
+ showToast(`${record.date.slice(11)} ${label} 저장했어요${woke?` · ${woke.category} 끝냄`:''}`,undoActions(record,woke));
+}
+async function timerAction(action,side){
+ if(action==='cancel'&&!confirm('직수 타이머를 기록 없이 취소할까요?'))return;
+ const asleep=action==='finish'?openSleep(Somhouse.localDateTime(),false):null;
+ let saved=null;
+ if(!await sharedChange(async()=>{const r=await shared.timer(action,side);saved=r.saved||null;return r.data;}))return;
+ render();
+ if(saved){
+  const woke=asleep&&data.records.find(r=>r.id===asleep.id&&r.end);
+  showToast(`🤱 직수 ${saved.amount} 저장했어요${saved.memo.includes('·')?` (${saved.memo.split('· ').slice(1).join('· ')})`:''}`,undoActions(saved,woke));
+ }else if(action==='start')message(`${side==='우'?'오른쪽':'왼쪽'}부터 직수 타이머를 시작했어요. 다른 휴대폰에서도 보이고 이어서 끝낼 수 있어요.`);
+}
+async function handoffAction(action){
+ const current=shared?.settings?.handoff?.text||'';
+ const text=action==='clear'?'':prompt('다음 보호자에게 남길 한 줄 (200자까지)',current);
+ if(text===null||(action==='clear'&&!confirm('전달 메모를 지울까요?')))return;
+ if(await sharedChange(async()=>(await shared.handoff(text)).data)){message(text.trim()?'전달 메모를 남겼어요.':'전달 메모를 지웠어요.');render();}
+}
+// Home-screen shortcuts (manifest.webmanifest) open ./?quick=…: a diaper, the latest feeding again, or the timer.
+let quickPending=new URLSearchParams(location.search).get('quick')||'';
+async function runQuick(){
+ if(!quickPending||!sharedReady||busy||shared?.readOnly)return;
+ const q=quickPending;quickPending='';
+ try{history.replaceState(null,'',location.pathname+location.hash);}catch{}
+ const diaper={pee:'소변',poo:'대변',both:'둘 다'}[q];
+ if(diaper)return quickSave({id:newId(),type:'diaper',date:Somhouse.localDateTime(),category:diaper,memo:''},`${diaperIcons[diaper]} 기저귀 ${diaper}`);
+ if(q==='repeat'){const r=Somhouse.recentFeedings(data.records,1)[0];if(r)return quickSave({id:newId(),type:'feeding',date:Somhouse.localDateTime(),category:r.category,amount:r.amount,memo:''},`🍼 ${r.category} ${r.amount}`);return openForm('feeding');}
+ if(q==='timer'&&!timerState())return timerAction('start','좌');
+}
 // Family management: members, addresses registered in advance, and a 7-day invite link.
 const INVITE='somhouse-invite';
 let familyInfo=null, familyLink='';
@@ -712,6 +816,8 @@ if(shared){
  $('#dialog').addEventListener('close',()=>{reviewKey='';refreshShared();});
  setInterval(()=>{if(!document.hidden)refreshShared();},2000);
  setInterval(()=>{if(!document.hidden&&page==='home'&&mode==='shared'&&sharedReady&&!editingScreen())render();},60000);
+ // The running timer ticks every second without re-rendering the page.
+ setInterval(()=>{const t=page==='home'&&timerState();if(!t)return;const total=document.querySelector('[data-timer-clock="total"]'),sides=document.querySelector('[data-timer-clock="sides"]');if(total)total.textContent=clock(t.total);if(sides)sides.textContent=`좌 ${clock(t.sides.좌)} · 우 ${clock(t.sides.우)}`;},1000);
  $('#manage-family').onclick=async()=>{
   if(busy||!shared.token)return;
   familyInfo=null;familyLink='';$('#family-status').textContent='';familyView();$('#family-dialog').showModal();

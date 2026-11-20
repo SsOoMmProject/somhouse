@@ -60,21 +60,86 @@ test('feeding statistics render both periods without a manual sync action',async
  assert.doesNotMatch(b.get('#content').innerHTML,/시트 동기화/);
 });
 
-test('recent feeding button only prefills the form and never saves by itself',async()=>{
+test('recent feeding button saves at once, and the toast undoes or edits it',async()=>{
  const server=family();
- server.data.records.push({id:'old',type:'feeding',date:'2026-01-01T09:00',category:'분유',amount:'120ml',memo:''});
- const b=browser({server});await b.login();
+ const b=browser({server});
+ server.data.records.push({id:'old',type:'feeding',date:'2026-01-01T09:00',category:'분유',amount:'120ml',memo:''},
+  {id:'nap',type:'sleep',date:b.eval('Somhouse.localDateTime(new Date(Date.now()-3600000))'),end:'',category:'낮잠',memo:''});
+ await b.login();
  b.eval("page='home';render()");
  assert.match(b.get('#content').innerHTML,/data-repeat-category="분유" data-repeat-amount="120ml"/);
- const writes=()=>b.calls.filter(x=>['PUT','DELETE'].includes(x.options?.method)).length;
- const before=writes();
- await b.events.get('click')({target:{closest:()=>({dataset:{repeatCategory:'분유',repeatAmount:'120ml'}})}});
+ const click=dataset=>b.events.get('click')({target:{closest:()=>({dataset})}});
+ await click({repeatCategory:'분유',repeatAmount:'120ml'});
+ assert.equal(b.get('#dialog').open,false);
+ const saved=server.data.records.find(x=>x.type==='feeding'&&x.id!=='old');
+ assert.equal(saved.amount,'120ml');assert.notEqual(saved.date,'2026-01-01T09:00');
+ assert.equal(server.data.records.find(x=>x.id==='nap').end,saved.date);  // the feeding ended the open nap
+ assert.match(b.get('#toast').innerHTML,/🍼 분유 120ml 저장했어요 · 낮잠 끝냄<\/span><button type="button" class="plain small" data-toast="0">되돌리기/);
+ await click({toast:'0'});
+ assert.equal(server.data.records.some(x=>x.id===saved.id),false);
+ assert.equal(server.data.records.find(x=>x.id==='nap').end,'');  // undo reopens the nap
+ await click({repeatCategory:'분유',repeatAmount:'120ml'});
+ await click({toast:'1'});
  assert.equal(b.get('#dialog').open,true);
- assert.equal(b.eval('editing'),null);
- assert.match(b.get('#fields').innerHTML,/<option selected>분유<\/option>/);
- assert.match(b.get('#fields').innerHTML,/name="amount" type="text" inputmode="decimal" value="120"[^>]*><span class="unit">ml<\/span>/);
- assert.doesNotMatch(b.get('#fields').innerHTML,/value="2026-01-01T09:00"/);
- assert.equal(writes(),before);
+ assert.match(b.get('#formtitle').textContent,/수정/);
+});
+
+test('diaper changes take one tap and show on home, records and day totals',async()=>{
+ const server=family(),b=browser({server});await b.login();b.eval("page='home';render()");
+ const click=dataset=>b.events.get('click')({target:{closest:()=>({dataset})}});
+ assert.match(b.get('#content').innerHTML,/🧷 마지막 기저귀<\/p><strong>기록 없음/);
+ await click({diaper:'둘 다'});
+ const diaper=server.data.records.find(x=>x.type==='diaper');
+ assert.equal(diaper.category,'둘 다');
+ const html=b.get('#content').innerHTML;
+ assert.match(html,/🧷 마지막 기저귀<\/p><strong>방금<\/strong><span>[0-9:]+ · 💧💩 둘 다/);
+ assert.match(html,/🧷 기저귀 1회 \(소변 1 · 대변 1\)/);
+ assert.match(b.get('#toast').innerHTML,/💧💩 기저귀 둘 다 저장했어요/);
+ await click({diaper:'설사'});  // not a kind: nothing happens
+ assert.equal(server.data.records.filter(x=>x.type==='diaper').length,1);
+ b.eval("page='records';render()");
+ assert.match(b.get('#content').innerHTML,/💧💩 기저귀 · 둘 다/);
+ assert.match(b.get('#content').innerHTML,/data-add="diaper">기저귀 추가/);
+});
+
+test('breastfeeding timer runs on home, and the handoff note is one line for the next caregiver',async()=>{
+ const server=family(),b=browser({server});await b.login();b.eval("page='home';render()");
+ const click=dataset=>b.events.get('click')({target:{closest:()=>({dataset})}});
+ assert.match(b.get('#content').innerHTML,/data-timer="start" data-side="좌">🤱 왼쪽부터/);
+ await click({timer:'start',side:'우'});
+ let html=b.get('#content').innerHTML;
+ assert.match(html,/🤱 직수 중 · <b>우<\/b>/);
+ assert.match(html,/data-timer="switch">⇄ 왼쪽으로/);
+ await click({timer:'switch'});
+ assert.match(b.get('#content').innerHTML,/직수 중 · <b>좌<\/b>/);
+ await click({timer:'finish'});
+ assert.match(b.get('#content').innerHTML,/🤱 왼쪽부터/);
+ assert.match(b.get('#toast').innerHTML,/🤱 직수 15분 저장했어요 \(좌 8분 · 우 7분\)/);
+ assert.ok(server.data.records.some(x=>x.id==='timer-1'));
+ // Handoff note: written with a prompt, shown with who and when, cleared after a confirm.
+ assert.match(b.get('#content').innerHTML,/data-handoff="edit">＋ 다음 사람에게 전달 메모/);
+ b.context.prompt=()=>'10시에 해열제 먹였어요';
+ await click({handoff:'edit'});
+ assert.match(b.get('#content').innerHTML,/📝 10시에 해열제 먹였어요 <span class="caption">— family1 10:00/);
+ await click({handoff:'clear'});
+ assert.equal(server.settings.handoff,null);
+});
+
+test('the stats page draws the last 7 days with a sleep across midnight on both days',async()=>{
+ const server=family(),b=browser({server});
+ const today=b.eval('Somhouse.localDateTime().slice(0,10)'),yesterday=b.eval(`Somhouse.addDays('${today}',-1)`);
+ server.data.records.push({id:'night',type:'sleep',date:yesterday+'T23:30',end:today+'T01:00',category:'밤잠',memo:''},
+  {id:'f1',type:'feeding',date:today+'T00:00',category:'분유',amount:'90ml',memo:''},
+  {id:'d1',type:'diaper',date:yesterday+'T12:00',category:'소변',memo:''});
+ await b.login();b.eval("page='stats';render()");
+ const html=b.get('#content').innerHTML;
+ assert.match(html,/<h1>통계<\/h1><section class="card pattern"><h2>최근 7일 하루 흐름<\/h2>/);
+ const rows=html.split('class="pt-row"');
+ assert.match(rows[1],/오늘/);assert.match(rows[1],/class="pt-sleep" style="left:0.00%;width:4.17%" data-action="edit" data-key="records" data-id="night"/);
+ assert.match(rows[1],/class="pt-feed" style="left:0.00%" [^>]*data-id="f1"/);
+ assert.match(rows[2],/어제/);assert.match(rows[2],/class="pt-sleep" style="left:97.92%;width:2.08%" [^>]*data-id="night"/);
+ assert.match(rows[2],/class="pt-diaper" style="left:50.00%" [^>]*data-id="d1"/);
+ assert.match(rows[3],/기록 없음/);
 });
 
 test('healthy Google status is one folded line at the bottom of home, problems go to the top',async()=>{
@@ -291,11 +356,13 @@ test('the family calendar lives on the schedule page and shows feedings, schedul
 });
 
 test('calendar writeback button appears only when the server says the title would change, and asks first',async()=>{
- const server=family();
- server.data.records.push({id:'cal-1',type:'feeding',date:'2026-11-17T14:00',category:'분유',amount:'10ml',memo:''},
-                          {id:'web-1',type:'feeding',date:'2026-11-17T15:00',category:'분유',amount:'20ml',memo:''});
+ const server=family(),b=browser({server});
+ // Today, so the records page (recent days only) always shows them.
+ const day=b.eval('Somhouse.localDateTime().slice(0,10)');
+ server.data.records.push({id:'cal-1',type:'feeding',date:day+'T00:01',category:'분유',amount:'10ml',memo:''},
+                          {id:'web-1',type:'feeding',date:day+'T00:02',category:'분유',amount:'20ml',memo:''});
  server.googleStatus={auth_state:'ready',review:0,errors:[],services:{},calendar_write:false};
- const b=browser({server});await b.login();b.eval("page='records';render()");
+ await b.login();b.eval("page='records';render()");
  assert.doesNotMatch(b.get('#content').innerHTML,/data-writeback/);
  server.googleStatus={...server.googleStatus,calendar_write:true,writeback_ready:[],writeback_pending:[]};
  await b.eval('refreshShared(true)');b.eval("page='records';render()");
@@ -339,7 +406,7 @@ test('home puts recent feedings under their own heading and the voice help after
  server.data.records.push({id:'a',type:'feeding',date:'2026-01-01T09:00',category:'분유',amount:'100ml',memo:''});
  const b=browser({server});await b.login();b.eval("page='home';render()");
  const html=b.get('#content').innerHTML;
- assert.match(html,/<section class="repeat" aria-labelledby="repeat-title"><h2 id="repeat-title">최근 수유 다시 기록<\/h2><div class="quick"><button class="secondary" data-repeat-category="분유"/);
+ assert.match(html,/<section class="repeat" aria-labelledby="repeat-title"><h2 id="repeat-title">최근 수유 다시 기록 <span class="caption">누르면 지금 시각으로 바로 저장돼요<\/span><\/h2><div class="quick"><button class="secondary" data-repeat-category="분유"/);
  assert.doesNotMatch(html,/voice-help/);
  assert.ok(html.indexOf('now-card')<html.indexOf('repeat-title'));
  assert.ok(html.indexOf('repeat-title')<html.indexOf('다가오는 일정'));
