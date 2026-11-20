@@ -16,10 +16,13 @@
       try {this.base = serverURL(root.SOMHOUSE_API_URL);} catch {}
       if (['localhost', '127.0.0.1'].includes(location.hostname)) this.base = 'http://127.0.0.1:8787';
       try { this.base = serverURL(localStorage.getItem(SERVER)); } catch {}
+      const trial = root.SOMHOUSE_LOCAL_TRIAL === true && location.hostname === '127.0.0.1';
+      if (trial) this.base = location.origin;
       for (const name of ['localStorage', 'sessionStorage']) {
         try {
           const saved = JSON.parse(root[name].getItem(SESSION));
           if (!saved || typeof saved.token !== 'string' || !saved.token || typeof saved.username !== 'string') continue;
+          if (trial && saved.base !== location.origin) continue;
           this.base = serverURL(saved.base); this.token = saved.token; this.username = saved.username; this.readOnly = saved.readOnly === true;
           // Sessions saved before families existed all belong to the original (home) family.
           if (saved.family && typeof saved.family.home === 'boolean') this.family = {home: saved.family.home, name: String(saved.family.name || '')};
@@ -108,9 +111,11 @@
       } catch {return false;}
     }
     async logout() {
-      try {await this.request('/api/logout', 'POST', {});}
+      let result;
+      try {result=await this.request('/api/logout', 'POST', {});}
       catch (error) {if (error.status !== 401) throw error;}
       this.clear();
+      return result;
     }
     async changePassword(currentPassword, newPassword) {
       await this.request('/api/password', 'POST', {currentPassword, newPassword});

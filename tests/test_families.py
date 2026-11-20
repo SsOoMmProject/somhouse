@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import google_web
+import chatgpt_plan
 from google_records import save_config
 from server import FamilyServer, Store
 
@@ -79,6 +80,36 @@ class Families(unittest.TestCase):
     def records(self, token):
         code, body = self.request("/api/data", token=token)
         return [x["id"] for x in body["data"]["records"]] if code == 200 else code
+
+    def test_chatgpt_only_serves_the_personal_session_in_each_family(self):
+        home = self.google("HOME", "home@example.com")["token"]
+        other = self.google("OTHER", "other@example.com")["token"]
+        second_device = self.google("OTHER", "other@example.com")["token"]
+        other_store = self.server.family_for(other).store
+        self.assertNotIn("chatgptPlan", self.request("/api/ai", token=home)[1])
+        self.assertEqual(self.request("/api/chatgpt/start", "POST", {}, home)[0], 503)
+        with patch.object(self.server, "chatgpt") as service:
+            service.redirect = "https://somhouse.example/auth/openai/callback"
+            service.ask.return_value = {"answer": "시험 답변"}
+            chatgpt_plan.save(other_store, other, {"email": "mine@example.com", "model": "my-model", "refresh": "SECRET"})
+            status = self.request("/api/ai", token=other)[1]["chatgptPlan"]
+            self.assertEqual(status, {"connected": True, "email": "mine@example.com", "model": "my-model"})
+            for token in (home, second_device):
+                self.assertFalse(self.request("/api/ai", token=token)[1]["chatgptPlan"]["connected"])
+            self.assertEqual(self.request("/api/chatgpt/ask", "POST", {"question": "hi", "scope": "feeding"}, other)[0], 400)
+            self.assertEqual(self.request("/api/chatgpt/ask", "POST", {"question": "hi", "scope": "none"}, other),
+                             (200, {"answer": "시험 답변"}))
+            service.ask.assert_called_once_with(other_store, other, "hi")
+            with self.store.connect() as db:
+                guest = self.store.new_session(db, "guest")
+            self.assertNotIn("chatgptPlan", self.request("/api/ai", token=guest)[1])
+            self.assertEqual(self.request("/api/chatgpt/start", "POST", {}, guest)[0], 403)
+            self.assertEqual(self.request("/api/chatgpt/start", "POST", {})[0], 401)
+            service.revoke.return_value = True
+            self.assertEqual(self.request("/api/logout", "POST", {}, other)[0], 200)
+            service.revoke.assert_called_once()
+            with other_store.connect() as db:
+                self.assertFalse(chatgpt_plan.profile(db, chatgpt_plan.session_key(other)))
 
     def test_each_family_sees_only_its_own_records(self):
         home = self.google("HOME", "somsom@gmail.com")

@@ -1,4 +1,5 @@
 """Ask one connected AI CLI (Codex, Claude or Antigravity) a single question with limited record summaries."""
+from contextlib import contextmanager
 from collections import defaultdict, deque
 from datetime import timedelta
 import json
@@ -468,7 +469,8 @@ class Assistants:
     def connected(self):
         return [provider for provider in self.providers.values() if provider.binary]
 
-    def answer(self, username, provider, question, scope, summary):
+    @contextmanager
+    def slot(self, username):
         with self.lock:
             now = time.monotonic()
             attempts = self.attempts[username]
@@ -479,7 +481,11 @@ class Assistants:
             self.active.add(username)
             attempts.append(now)
         try:
-            return {**provider.generate(question, scope, summary), "provider": provider.id}
+            yield
         finally:
             with self.lock:
                 self.active.remove(username)
+
+    def answer(self, username, provider, question, scope, summary):
+        with self.slot(username):
+            return {**provider.generate(question, scope, summary), "provider": provider.id}

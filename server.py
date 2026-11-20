@@ -31,6 +31,7 @@ from holidays import HolidayFeed, SCHEMA as HOLIDAY_SCHEMA, listing as holiday_l
 from demo import GUEST, READ_ONLY_MESSAGE, demo_payload
 from sleep_wake import end_open_sleep, end_sleep_on_feeding
 import google_web
+import chatgpt_plan
 from google_setup import provision
 import families
 from families import HOME, Refused, Registry, family_of_token, session_prefix
@@ -172,7 +173,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS items(kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id));
                 CREATE TABLE IF NOT EXISTS imports(kind TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(kind,fingerprint));
                 CREATE TABLE IF NOT EXISTS family_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            """ + KEEP_SCHEMA + GOOGLE_SCHEMA + CALENDAR_SCHEMA + SHOPPING_SCHEMA + DELIVERY_SCHEMA + HOLIDAY_SCHEMA)
+            """ + chatgpt_plan.SCHEMA + KEEP_SCHEMA + GOOGLE_SCHEMA + CALENDAR_SCHEMA + SHOPPING_SCHEMA + DELIVERY_SCHEMA + HOLIDAY_SCHEMA)
             for table, column, definition in (
                 ("google_voice_receipts", "captured", "TEXT"),
                 ("google_calendar_inputs", "review", "INTEGER NOT NULL DEFAULT 0"),
@@ -338,12 +339,14 @@ class Family:
 class FamilyServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, store, origins=(), *, holidays=False):
+    def __init__(self, address, store, origins=(), *, holidays=False, local_chatgpt=False):
         super().__init__(address, Handler)
         # Only the real service downloads the public holiday feed; tests and admin commands never do.
         self.holiday_feed = holidays
         self.store = store
         self.ai = Assistants.load(store.directory)
+        self.local_chatgpt = local_chatgpt
+        self.chatgpt = chatgpt_plan.ChatGPTPlan.load(store.directory, self.server_port if local_chatgpt else None)
         # Keep valid legacy sessions and discard only sessions that already expired.
         with store.lock, store.connect() as db:
             now = time.time()
@@ -723,14 +726,18 @@ class Handler(BaseHTTPRequestHandler):
         if self.command == "GET":
             with store.lock, store.connect() as db:
                 guest = store.user(db, token) == GUEST
+                personal = {}
+                if self.server.chatgpt and not guest:
+                    grant = chatgpt_plan.profile(db, chatgpt_plan.session_key(token))
+                    personal["chatgptPlan"] = {"connected": bool(grant), "email": grant.get("email"), "model": grant.get("model")}
             # `enabled` says whether this account can ask; each provider says whether it is connected.
             status = {"providers": ai.status(), "enabled": bool(ai.connected())}
             if not family.home:
                 # The Mac's AI accounts answer for the original family only; other
                 # families connect their own API keys on their devices instead.
                 providers = [{**provider, "enabled": False} for provider in status["providers"]]
-                return {"providers": providers, "enabled": False, "homeOnly": True}
-            return {**status, "enabled": False, "readOnly": True} if guest else status
+                return {**personal, "providers": providers, "enabled": False, "homeOnly": True}
+            return {**status, "enabled": False, "readOnly": True} if guest else {**status, **personal}
 
         # Read the small body before taking the lock, but check the session
         # before validating it so signed-out callers only ever see 401.
@@ -763,6 +770,31 @@ class Handler(BaseHTTPRequestHandler):
                 summary = summarize_records(scope, items, date.today())
         # Release the SQLite connection and lock before waiting for the AI company.
         return ai.answer(username, provider, question, scope, summary)
+
+    def chatgpt_request(self, token, action):
+        family = self.server.family_for(token)
+        store = family.store
+        plan = self.server.chatgpt
+        with store.connect() as db:
+            username = store.user(db, token)
+            if username == GUEST:
+                raise Problem(403, READ_ONLY_MESSAGE)
+            if plan is None:
+                raise Problem(503, "아직 이 서버에서 ChatGPT 구독 연결을 사용할 수 없어요.")
+            if action == "start":
+                return plan.start(token, chatgpt_plan.profile(db, chatgpt_plan.session_key(token)))
+        body = self.body(16 * 1024)
+        if action == "finish":
+            return plan.finish(store, token, body.get("receipt"))
+        if action == "disconnect":
+            return plan.disconnect(store, token)
+        if action == "ask":
+            question, scope = parse_question(body)
+            if scope != "none":
+                raise Problem(400, "ChatGPT 구독에는 입력한 질문만 보낼 수 있어요.")
+            with self.server.ai.slot(username if family.home else (family.id, username)):
+                return plan.ask(store, token, question)
+        raise Problem(404, "API를 찾을 수 없습니다.")
 
     @staticmethod
     def save_item(db, store, google, keep, kind, item):
@@ -886,12 +918,24 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.connection.settimeout(20)
             origin = self.headers.get("Origin")
+            if self.server.local_chatgpt:
+                host = f"127.0.0.1:{self.server.server_port}"
+                if (self.headers.get("Host") != host or origin not in (None, "http://" + host)
+                        or any(h.lower().startswith(("forwarded", "x-forwarded-", "tailscale-")) for h in self.headers)):
+                    raise Problem(403, "개인 시험 서버는 같은 컴퓨터에서만 사용할 수 있어요.")
             if origin is not None and origin not in self.server.origins:
                 raise Problem(403, "허용되지 않은 사이트의 요청입니다.")
             if self.command == "OPTIONS":
                 self.respond(204, b"", "text/plain")
                 return
             path = urlsplit(self.path).path
+            plan = self.server.chatgpt
+            if plan and path == urlsplit(plan.redirect).path and self.command == "GET":
+                self.redirect(plan.callback(urlsplit(self.path).query))
+                return
+            if path == "/config.js" and self.server.local_chatgpt and self.command == "GET":
+                self.respond(200, b"window.SOMHOUSE_LOCAL_TRIAL = true;", "application/javascript")
+                return
             if not path.startswith("/api/"):
                 name = "index.html" if path == "/" else path.removeprefix("/")
                 if self.command != "GET" or name not in STATIC:
@@ -927,6 +971,9 @@ class Handler(BaseHTTPRequestHandler):
             if not auth.startswith("Bearer ") or len(auth) > 200:
                 raise Problem(401, "로그인이 필요합니다.")
             token = auth[7:]
+            if path.startswith("/api/chatgpt/") and self.command == "POST":
+                self.respond(200, self.chatgpt_request(token, path.removeprefix("/api/chatgpt/")))
+                return
             if path == "/api/ai" and self.command in ("GET", "POST"):
                 self.respond(200, self.ai_request(token))
                 return
@@ -954,6 +1001,7 @@ class Handler(BaseHTTPRequestHandler):
                     username = store.user(db, token)
                 self.respond(200, self.family_request(family, username))
                 return
+            logout_grant = {}
             with store.lock, store.connect() as db:
                 username = store.user(db, token)
                 if path == "/api/me" and self.command == "GET":
@@ -962,6 +1010,8 @@ class Handler(BaseHTTPRequestHandler):
                     result = {"username": username, "read_only": username == GUEST,
                               "family": {"home": family.home, "name": name}}
                 elif path == "/api/logout" and self.command == "POST":
+                    if plan:
+                        logout_grant = chatgpt_plan.profile(db, chatgpt_plan.session_key(token))
                     db.execute("DELETE FROM sessions WHERE token=?", (hashlib.sha256(token.encode()).hexdigest(),))
                     result = {"ok": True}
                 elif username == GUEST:
@@ -1093,6 +1143,8 @@ class Handler(BaseHTTPRequestHandler):
                     result = {"data": store.state(db), "aliases": load_aliases(db)}
                 else:
                     raise Problem(404, "API를 찾을 수 없습니다.")
+            if logout_grant:
+                result["chatgptRevoked"] = plan.revoke(logout_grant)
             # Only acknowledge a change after the SQLite context has committed it.
             if (path in ("/api/data", "/api/merge") and google is None and family.home
                     and (store.directory / "google-records.json").exists()):
@@ -1227,11 +1279,14 @@ def main():
     parser.add_argument("--bin", type=Path, help="ai-config/ai-test: AI CLI 실행 파일 경로 (기본: 설치된 위치)")
     parser.add_argument("--model", help="ai-config/ai-test: 사용할 모델 (기본: CLI 기본값)")
     parser.add_argument("--agy", type=Path, help="antigravity-config/antigravity-test: Antigravity CLI 경로 (--bin과 같음)")
+    parser.add_argument("--chatgpt-local", action="store_true", help="이 컴퓨터 전용 ChatGPT 구독 시험")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--origin", action="append", default=[])
     parser.add_argument("--file", type=Path, help="관리자 복원용 JSON 파일 / google-web-client: 웹 OAuth JSON")
     parser.add_argument("--public-url", default="https://ssoomm-main.tail31d445.ts.net", help="google-web-client: 서버 공개 HTTPS 주소")
     args = parser.parse_args()
+    if args.chatgpt_local and (args.command != "serve" or args.data_dir.resolve() == DEFAULT_DATA.resolve() or args.port == 8787):
+        parser.error("--chatgpt-local은 별도 --data-dir와 --port를 지정한 serve 명령에서 사용하세요.")
     os.umask(0o077)
     if args.command == "keep-status":
         keep_status(args.data_dir)
@@ -1357,7 +1412,7 @@ def main():
         with store.connect() as db:
             if db.execute("SELECT COUNT(*) FROM users WHERE username<>?", (GUEST,)).fetchone()[0] != 2:
                 parser.error("먼저 python3 server.py init 명령으로 두 계정을 생성해 주세요.")
-        server = FamilyServer(("127.0.0.1", args.port), store, args.origin, holidays=True)
+        server = FamilyServer(("127.0.0.1", args.port), store, args.origin, holidays=not args.chatgpt_local, local_chatgpt=args.chatgpt_local)
         print(f"솜하우스: http://127.0.0.1:{server.server_port}/", flush=True)
         try:
             server.serve_forever()

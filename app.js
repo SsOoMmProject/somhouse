@@ -475,6 +475,7 @@ function saveAIKey(id,value){
 function aiOptions(){
  const config=ai.config,keys=aiKeys(),list=[];
  if(!config)return list;
+ if(config.chatgptPlan?.connected&&!config.readOnly)list.push({value:'plan:chatgpt',mode:'plan',p:{id:'chatgpt',name:'ChatGPT'},summaries:false});
  for(const p of config.providers){
   if(p.enabled&&config.enabled)list.push({value:'mac:'+p.id,mode:'mac',p,summaries:p.recordSummaries===true});
   const key=keys[p.id];
@@ -487,7 +488,17 @@ function aiOption(value){return value?aiOptions().find(x=>x.value===value)||null
 function aiProvidersView(){
  const config=ai.config,options=aiOptions(),usable=p=>options.some(o=>o.p.id===p.id);
  const radio=(o,text,caption)=>`<label class="ai-pick"><input type="radio" name="provider" value="${esc(o.value)}"${ai.selected===o.value?' checked':''}> ${text}</label><p class="caption">${caption}</p>`;
- return [...config.providers].sort((a,b)=>Number(usable(b))-Number(usable(a))).map(p=>{
+ const plan=config.chatgptPlan,personal=options.find(o=>o.mode==='plan');
+ let planCard='';
+ if(plan&&!config.readOnly){
+  const controls=personal
+   ?radio(personal,'내 ChatGPT 구독으로 질문하기',esc([plan.email,plan.model].filter(Boolean).join(' · ')))
+     +'<p><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">사용량 관리</a></p>'
+     +'<button type="button" class="secondary" data-plan="start" data-oai-siwc-button>다시 연결</button> <button type="button" class="plain" data-plan="disconnect">구독 연결 해제</button>'
+   :'<p>본인의 ChatGPT 플랜 사용을 허용하면 구독 한도에서 답해요. 입력한 질문만 OpenAI로 보내요.</p><button type="button" data-plan="start" data-oai-siwc-button>ChatGPT로 계속하기</button>';
+  planCard=`<details class="ai-provider" data-provider="chatgpt" open><summary><strong>내 ChatGPT 구독</strong><span class="badge${personal?'':' off'}">${personal?'연결됨':'연결하기'}</span></summary><div class="body">${controls}</div></details>`;
+ }
+ return planCard+[...config.providers].sort((a,b)=>Number(usable(b))-Number(usable(a))).map(p=>{
   const id=esc(p.id),name=esc(p.name),info=aiDirect?.PROVIDERS[p.id];
   const mac=options.find(o=>o.value==='mac:'+p.id),own=options.find(o=>o.value==='key:'+p.id);
   let body='';
@@ -513,7 +524,9 @@ function aiProvidersView(){
 function aiStatusText(){
  const config=ai.config,picked=aiOption(ai.selected);
  if(config.readOnly)return '게스트 보기에서는 질문할 수 없어요. 가족 계정으로 로그인하면 질문을 보낼 수 있어요.';
+ if(picked?.mode==='plan')return '내 ChatGPT 플랜을 사용해요. 입력한 질문만 보내요.';
  if(picked)return `${picked.mode==='mac'?'맥미니 ':'내 키로 '}${picked.p.name}에게 질문해요. 질문마다 새로 답해요.`;
+ if(!aiOptions().length&&config.chatgptPlan)return '내 ChatGPT 구독을 연결하면 여기에서 질문할 수 있어요.';
  if(!aiOptions().length)return config.homeOnly?'아래에서 AI를 골라 내 API 키를 연결하면 질문할 수 있어요.':'아직 연결된 AI가 없어요. 아래에서 AI를 골라 내 API 키를 연결하거나, 관리자가 맥미니에 연결하면 질문할 수 있어요.';
  return '질문할 AI를 골라 주세요.';
 }
@@ -542,7 +555,9 @@ async function checkAI(){
   const config=await shared.aiStatus();
   if(ai!==state)return;
   state.config={...config,providers:Array.isArray(config.providers)?config.providers:[]};
-  chooseAI();
+  chooseAI(state.planConnected?'plan:chatgpt':null);
+  if(state.planNotice){$('#ai-status').textContent=state.planNotice;state.planNotice='';}
+  state.planConnected=false;
  }catch(error){
   if(ai!==state)return;
   state.config=null;
@@ -575,6 +590,25 @@ function chooseAIModel(id,model){
  const key=aiKeys()[id];
  if(key?.models?.includes(model)&&saveAIKey(id,{...key,model}))$('#ai-status').textContent=`모델을 ${model}(으)로 바꿨어요.`;
 }
+async function planAction(action){
+ const state=ai;
+ if(!state.config?.chatgptPlan||state.config.readOnly||busy||state.checking||state.pending)return;
+ if(action==='disconnect'&&!confirm('이 기기의 ChatGPT 구독 연결을 해제할까요?'))return;
+ state.pending=true;connectionView();
+ try{
+  const result=await shared.request('/api/chatgpt/'+action,'POST',{});
+  if(ai!==state)return;
+  if(action==='start'){
+   const url=new URL(result.url);
+   if(url.origin!=='https://auth.openai.com')throw Error('OpenAI 로그인 주소를 확인하지 못했어요.');
+   location.assign(url.href);
+  }else{
+   state.config.chatgptPlan={connected:false};chooseAI();
+   $('#ai-status').textContent=result.revoked?'ChatGPT 구독 연결을 해제했어요.':'이 기기의 연결을 해제했어요. ChatGPT 설정에서 앱 권한 해제도 확인해 주세요.';
+  }
+ }catch(error){if(ai===state)$('#ai-status').textContent=error.message;}
+ finally{if(ai===state){state.pending=false;connectionView();}}
+}
 async function askAI(e){
  e.preventDefault();
  const state=ai,picked=aiOption(state.selected);
@@ -585,7 +619,8 @@ async function askAI(e){
  state.pending=true;connectionView();
  $('#ai-status').textContent=`${picked.p.name} 답변을 기다리고 있어요…`;
  try{
-  const result=picked.mode==='mac'?await shared.askAI(question,scope,picked.p.id)
+  const result=picked.mode==='plan'?await shared.request('/api/chatgpt/ask','POST',{question,scope:'none'},shared.base,shared.token,55000)
+   :picked.mode==='mac'?await shared.askAI(question,scope,picked.p.id)
    :await aiDirect.ask(picked.p.id,picked.key,question,scope==='none'?null:{scope,summary:aiDirect.summarize(scope,data,Somhouse.localDateTime().slice(0,10))});
   if(ai!==state)return;
   if(typeof result.answer!=='string'||!result.answer.trim())throw Error('답변을 확인하지 못했어요. 다시 시도해 주세요.');
@@ -597,7 +632,7 @@ async function askAI(e){
   $('#ai-status').textContent=result.truncated?'답변이 길어 일부만 표시했어요.':`${picked.p.name} 답변을 받았어요.`;
  }catch(error){
   if(ai!==state)return;
-  if(error.status===401&&picked.mode==='mac')showLogin(error.message);else $('#ai-status').textContent=error.message;
+  if(error.status===401&&picked.mode!=='key')showLogin(error.message);else $('#ai-status').textContent=error.message;
  }finally{state.pending=false;connectionView();}
 }
 function render(){
@@ -857,7 +892,7 @@ if(shared){
  $('#ai-form').onsubmit=askAI;
  const aiBox=$('#ai-providers');
  aiBox.onchange=e=>{const t=e.target;if(t?.name==='provider')pickAI(t.value);else if(t?.dataset?.aiModel)chooseAIModel(t.dataset.aiModel,t.value);};
- aiBox.onclick=e=>{const b=e.target?.closest?.('button');if(b?.dataset.aiConnect)connectAIKey(b.dataset.aiConnect);else if(b?.dataset.aiDisconnect)disconnectAIKey(b.dataset.aiDisconnect);};
+ aiBox.onclick=e=>{const b=e.target?.closest?.('button');if(b?.dataset.plan)return planAction(b.dataset.plan);if(b?.dataset.aiConnect)connectAIKey(b.dataset.aiConnect);else if(b?.dataset.aiDisconnect)disconnectAIKey(b.dataset.aiDisconnect);};
  // Enter in a key field connects that key instead of sending the question form.
  aiBox.onkeydown=e=>{if(e.key==='Enter'&&e.target?.id?.startsWith('ai-key-')){e.preventDefault();connectAIKey(e.target.id.slice(7));}};
  $('#login-form').onsubmit=async e=>{
@@ -875,8 +910,8 @@ if(shared){
   try{
    if(refreshTask)await refreshTask;
    if(!shared.token)return;
-   await shared.logout();
-   showLogin('로그아웃했어요. 가족 계정으로 다시 로그인할 수 있어요.');
+   const result=await shared.logout();
+   showLogin(result?.chatgptRevoked===false?'로그아웃했어요. ChatGPT 설정에서 앱 권한 해제도 확인해 주세요.':'로그아웃했어요. 가족 계정으로 다시 로그인할 수 있어요.');
   }catch{
    if(shared.token)accountMessage('로그아웃하지 못했어요. 연결을 확인한 뒤 다시 시도해 주세요.');
   }finally{busy=false;connectionView();}
@@ -972,7 +1007,23 @@ if(shared){
  // Coming back from Google: #google=<one-time code>, #google-error=<message> or #google-connected=1.
  const returned=new URLSearchParams(location.hash.slice(1));
  const clearHash=()=>{try{history.replaceState(null,'',location.pathname+location.search);}catch{}};
- if(returned.has('google')){
+ if(returned.has('chatgpt')||returned.has('chatgpt-error')){
+  const state=ai;
+  try{history.replaceState(null,'',location.pathname+location.search+'#ai');}catch{}
+  page='ai';
+  if(mode==='shared'){
+   busy=true;connectionView();
+   (async()=>{
+    try{
+     if(returned.has('chatgpt-error'))throw Error(returned.get('chatgpt-error')==='cancelled'?'ChatGPT 연결을 취소했어요.':'ChatGPT 연결을 다시 시작해 주세요.');
+     await shared.request('/api/chatgpt/finish','POST',{receipt:returned.get('chatgpt')});
+     state.planConnected=true;state.planNotice='내 ChatGPT 구독을 연결했어요. 질문을 입력해 주세요.';
+    }catch(error){state.planNotice=error.message;}
+    finally{busy=false;connectionView();}
+    if(ai===state)await refreshShared(true);
+   })();
+  }else message('ChatGPT 연결을 시작한 솜하우스 계정으로 다시 로그인해 주세요.');
+ }else if(returned.has('google')){
   clearHash();forgetInvite();busy=true;connectionView();message('Google 계정으로 로그인하고 있어요…');
   (async()=>{
    try{
