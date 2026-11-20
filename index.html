@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ko">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f8f5ef"><title>솜하우스</title><link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icon-192.png"><link rel="apple-touch-icon" href="icon-192.png"><link rel="stylesheet" href="style.css?v=ai-chat-1"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f8f5ef"><title>솜하우스</title><link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icon-192.png"><link rel="apple-touch-icon" href="icon-192.png"><link rel="stylesheet" href="style.css?v=ai-follow-1"></head>
 <body>
 <header><div><span class="logo">✿</span> <strong>솜하우스</strong><small>우리 가족의 작은 기록</small></div></header>
 <main>
@@ -33,6 +33,7 @@
 <option value="schedule">오늘부터 7일간 일정 건수</option>
 <option value="shopping">구매 예정·완료 건수</option>
 </select></label>
+<label id="ai-follow-field" class="ai-follow" hidden><input type="checkbox" id="ai-follow" checked> 이전 대화 이어서 묻기<span class="caption">최근 6시간의 질문·답변 5개까지 글만 함께 보내요</span></label>
 <div class="actions"><button type="button" class="plain" id="ai-clear" hidden>대화 지우기</button><button type="submit">질문 보내기</button></div>
 </fieldset>
 </form>
@@ -64,5 +65,5 @@
 <div class="actions"><button type="button" id="close-family" class="secondary">닫기</button></div>
 </dialog>
 <div id="toast" role="status" aria-live="polite" hidden></div>
-<script src="config.js?v=chatgpt-plan-2" defer></script><script src="service.js?v=onehand-20261120" defer></script><script src="shared.js?v=chatgpt-plan-2" defer></script><script src="ai-direct.js?v=gemini-free-1" defer></script><script src="app.js?v=ai-chat-1" defer></script>
+<script src="config.js?v=chatgpt-plan-2" defer></script><script src="service.js?v=onehand-20261120" defer></script><script src="shared.js?v=chatgpt-plan-2" defer></script><script src="ai-direct.js?v=ai-follow-1" defer></script><script src="app.js?v=ai-follow-1" defer></script>
 </body></html>

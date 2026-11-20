@@ -105,3 +105,35 @@ test('record summaries match the numbers the Mac sends',()=>{
  const python=JSON.parse(execFileSync('python3',['-c',script],{cwd:path.resolve(__dirname,'..'),input:JSON.stringify(data)}));
  for(const scope of ['feeding','schedule','shopping'])assert.deepEqual(direct.summarize(scope,data,today),python[scope],scope);
 });
+
+test('follow-ups send only recent, short, text-only turns in each AI format',async()=>{
+ const now=Date.parse('2026-11-21T06:00:00Z'),at=h=>new Date(now-h*3600000).toISOString();
+ const log=[{q:'too old',a:'x',at:at(7)},...Array.from({length:6},(_,i)=>({q:'q'+i,a:'a'+i,ai:'Gemini',at:at(1)})),{q:'long',a:'가'.repeat(5000),at:at(0.5)},{q:'broken',at:at(0.1)}];
+ const earlier=direct.history(log,now);
+ assert.equal(earlier.length,direct.HISTORY_TURNS);
+ assert.deepEqual(earlier.map(x=>x.q),['q2','q3','q4','q5','long']);
+ assert.equal(earlier.at(-1).a.length,1500);
+ assert.deepEqual(Object.keys(earlier[0]),['q','a']);
+ assert.deepEqual(direct.history(null,now),[]);
+ const two=[{q:'첫 질문',a:'첫 답'},{q:'둘째',a:'둘째 답'}];
+ const records={scope:'feeding',summary:{}};
+ let calls=serve({'https://generativelanguage.googleapis.com/v1beta/models/m:generateContent':[200,{candidates:[{content:{parts:[{text:'ok'}]}}]}]});
+ await direct.ask('antigravity',{key:'k',model:'m'},'그거 더 자세히',records,two);
+ let body=JSON.parse(calls[0].options.body);
+ assert.deepEqual(body.contents.map(x=>[x.role,x.parts[0].text]).slice(0,4),[['user','첫 질문'],['model','첫 답'],['user','둘째'],['model','둘째 답']]);
+ // Record summaries go only with the new question.
+ assert.deepEqual(JSON.parse(body.contents[4].parts[0].text),{question:'그거 더 자세히',records});
+ calls=serve({'https://api.anthropic.com/v1/messages':[200,{stop_reason:'end_turn',content:[{type:'text',text:'ok'}]}]});
+ await direct.ask('claude',{key:'k',model:'m'},'이어서',null,two);
+ body=JSON.parse(calls[0].options.body);
+ assert.deepEqual(body.messages.map(x=>x.role),['user','assistant','user','assistant','user']);
+ assert.equal(body.messages[1].content,'첫 답');
+ calls=serve({'https://api.openai.com/v1/responses':[200,{output:[{type:'message',content:[{type:'output_text',text:'ok'}]}]}]});
+ await direct.ask('codex',{key:'k',model:'m'},'이어서',null,two);
+ body=JSON.parse(calls[0].options.body);
+ assert.deepEqual(body.input.map(x=>[x.role,x.content]).slice(0,2),[['user','첫 질문'],['assistant','첫 답']]);
+ // Without earlier turns the request stays as before.
+ calls=serve({'https://api.openai.com/v1/responses':[200,{output:[{type:'message',content:[{type:'output_text',text:'ok'}]}]}]});
+ await direct.ask('codex',{key:'k',model:'m'},'안녕',null);
+ assert.equal(JSON.parse(calls[0].options.body).input,JSON.stringify({question:'안녕'}));
+});
