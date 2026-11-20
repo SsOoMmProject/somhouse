@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI API 키 받는 방법 · 솜하우스</title><link rel="stylesheet" href="style.css?v=aikeys-20261120"></head>
+<body>
+<header><div><span class="logo">✿</span> <strong>솜하우스</strong><small>우리 가족의 작은 기록</small></div></header>
+<main class="policy">
+<h1>AI API 키 받는 방법</h1>
+<p>솜하우스의 <strong>AI 대화</strong>는 가족이 직접 받은 API 키로도 쓸 수 있어요. 세 AI 중 하나만 있으면 됩니다. 키를 받은 뒤 AI 탭에서 그 AI의 카드를 펼쳐 붙여 넣고 <strong>연결</strong>을 누르세요.</p>
+
+<table class="key-table">
+<thead><tr><th>카드</th><th>받는 곳</th><th>키 모양</th><th>요금</th></tr></thead>
+<tbody>
+<tr><td><a href="#openai">Codex</a></td><td>OpenAI Platform</td><td><code>sk-</code>로 시작</td><td>먼저 충전(선불)</td></tr>
+<tr><td><a href="#anthropic">Claude</a></td><td>Claude Console</td><td><code>sk-ant-</code>로 시작</td><td>먼저 충전(선불)</td></tr>
+<tr><td><a href="#gemini">Antigravity</a></td><td>Google AI Studio</td><td><code>AIza</code>로 시작</td><td>무료로 시작 가능 (<a href="#gemini-free">주의</a>)</td></tr>
+</tbody>
+</table>
+
+<h2 id="before">시작하기 전에</h2>
+<ul>
+<li><strong>구독과는 따로예요.</strong> ChatGPT Plus, Claude Pro, Google One AI 같은 월 구독이 있어도 API는 별도로 결제해요. 짧은 질문 한 번은 보통 수십 원 이하지만, 쓴 만큼 청구돼요.</li>
+<li><strong>키는 비밀번호와 같아요.</strong> 키를 가진 사람은 누구나 내 돈으로 AI를 쓸 수 있어요. 메신저나 사진으로 공유하지 마세요.</li>
+<li><strong>키는 이 기기에만 저장돼요.</strong> 솜하우스 서버로는 보내지 않고, 질문은 휴대폰에서 AI 회사로 바로 가요. 그래서 휴대폰·태블릿마다 따로 연결해야 하고, 공용 기기에서는 연결하지 마세요.</li>
+<li><strong>사용 한도를 걸어 두세요.</strong> 세 회사 모두 결제·사용량 화면에서 월 사용 한도나 알림을 정할 수 있어요. 키가 새어 나가도 피해가 커지지 않아요.</li>
+<li>회사 사이트의 메뉴 이름과 위치는 바뀔 수 있어요. 아래 설명과 다르면 그 사이트의 도움말을 확인해 주세요.</li>
+</ul>
+
+<h2 id="openai">Codex 카드 — OpenAI API 키</h2>
+<ol>
+<li><a href="https://platform.openai.com/" target="_blank" rel="noopener noreferrer">platform.openai.com</a>에 접속해 로그인해요. ChatGPT와 같은 계정을 써도 되지만, 결제는 따로예요.</li>
+<li><strong>Settings → Billing</strong>에서 결제 수단을 등록하고 크레딧을 충전해요. 충전한 만큼만 쓰는 선불 방식이고, 처음에는 가장 적은 금액(약 5달러)으로 충분해요. 충전한 크레딧은 1년이 지나면 사라져요.</li>
+<li><a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">API keys 페이지</a>에서 <strong>Create new secret key</strong>를 눌러요. 이름은 알아보기 쉽게 <code>솜하우스</code>로 정하면 돼요.</li>
+<li>만들어진 키(<code>sk-</code>로 시작)를 바로 복사해요. 이 화면을 닫으면 다시 볼 수 없어요. 잃어버리면 새로 만들면 돼요.</li>
+<li>솜하우스 AI 탭 → <strong>Codex</strong> 카드에 붙여 넣고 <strong>연결</strong>을 눌러요.</li>
+</ol>
+<p class="caption">"크레딧이나 결제 설정을 확인해 주세요"가 나오면 충전이 안 됐거나 다 쓴 거예요.</p>
+
+<h2 id="anthropic">Claude 카드 — Anthropic API 키</h2>
+<ol>
+<li><a href="https://platform.claude.com/" target="_blank" rel="noopener noreferrer">platform.claude.com</a>(Claude Console)에 접속해 가입·로그인해요. claude.ai 구독과는 별개예요.</li>
+<li>결제(Billing) 화면에서 결제 수단을 등록하고 크레딧을 충전해요. 선불 방식이에요.</li>
+<li><a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">Settings → API keys</a>에서 <strong>Create key</strong>를 누르고 이름(<code>솜하우스</code>)을 정해요.</li>
+<li>만들어진 키(<code>sk-ant-</code>로 시작)를 바로 복사해요. 한 번만 보여요. 잃어버리면 새로 만들면 돼요.</li>
+<li>솜하우스 AI 탭 → <strong>Claude</strong> 카드에 붙여 넣고 <strong>연결</strong>을 눌러요.</li>
+</ol>
+<p class="caption"><strong>Create key</strong> 버튼이 눌리지 않으면 조직 관리자 권한이 없는 계정이에요. 직접 만든 개인 계정으로 로그인해 주세요.</p>
+
+<h2 id="gemini">Antigravity 카드 — Gemini API 키 (Google)</h2>
+<ol>
+<li><a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Google AI Studio의 API 키 페이지</a>에 Google 계정으로 로그인해요.</li>
+<li><strong>Create API key</strong>(API 키 만들기)를 누르고, 프로젝트를 고르거나 새로 만들어요.</li>
+<li>만들어진 키(<code>AIza</code>로 시작)를 복사해요.</li>
+<li>솜하우스 AI 탭 → <strong>Antigravity</strong> 카드에 붙여 넣고 <strong>연결</strong>을 눌러요.</li>
+</ol>
+<p id="gemini-free"><strong>무료 등급 주의:</strong> 결제를 설정하지 않은 무료 등급에서는 Google이 보낸 질문과 답변을 서비스 개선에 쓰고 사람이 검토할 수도 있다고 안내해요. 가족 기록 집계를 함께 보내려면 AI Studio에서 결제(Cloud Billing)를 연결해 유료 조건으로 쓰는 걸 권해요. 자세한 내용은 <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">Gemini API 추가 약관</a>을 확인해 주세요.</p>
+
+<h2 id="connect">솜하우스에 연결한 뒤</h2>
+<ul>
+<li>연결할 때는 키가 맞는지만 확인하고 요금은 들지 않아요. 질문을 보낼 때부터 청구돼요.</li>
+<li>카드에서 모델을 바꿀 수 있어요. 처음에는 Claude는 <code>claude-opus-5-5</code>, OpenAI·Gemini는 그 계정에서 쓸 수 있는 최신 모델로 정해져요.</li>
+<li><strong>참고할 가족 기록 집계</strong>를 고르면 날짜별 건수와 수유량 숫자만 보내요. 메모·병원 정보·제목은 보내지 않아요.</li>
+<li>오류가 나면 화면에 이유가 나와요: 키가 틀림, 크레딧 부족, 사용 한도 도달, 모델 사용 불가.</li>
+</ul>
+
+<h2 id="remove">키를 지우거나 기기를 바꿀 때</h2>
+<ul>
+<li>솜하우스에서 지우기: AI 탭 → 그 카드의 <strong>키 연결 해제</strong>. 그 기기에서만 지워져요.</li>
+<li>키 자체를 없애기: 위의 각 회사 API 키 페이지에서 그 키를 삭제(revoke)해요. 휴대폰을 잃어버렸거나 키가 새어 나간 것 같으면 바로 삭제하고 새 키를 만드세요.</li>
+<li>새 휴대폰에서는 키를 다시 붙여 넣어야 해요. 키를 다시 볼 수 없으면 새로 만들어 연결하면 돼요.</li>
+</ul>
+
+<div class="actions" style="justify-content:flex-start"><a class="button" href="./#ai">AI 대화로 돌아가기</a><a class="button secondary" href="privacy.html">개인정보처리방침</a></div>
+<p class="caption">문의: <a href="https://github.com/SsOoMmProject/somhouse/issues" target="_blank" rel="noopener noreferrer">GitHub 이슈</a></p>
+</main>
+</body></html>

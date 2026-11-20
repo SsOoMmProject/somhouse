@@ -965,6 +965,7 @@ class FamilyAPI(unittest.TestCase):
         for path in ("/server.py", "/ai.py", "/ai-config.json", "/antigravity-config.json", "/.git/config", "/somhouse.sqlite3", "/initial-accounts.txt", "/../server.py"):
             self.assertEqual(self.request(path)[0], 404)
         self.assertEqual(self.request("/")[0], 200)
+        self.assertEqual(self.request("/ai-keys.html")[0], 200)
         self.assertEqual(self.request("/api/items/shopping/a", "PUT", self.item("mismatch"), token)[0], 400)
 
     def test_login_rate_limit(self):
