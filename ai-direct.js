@@ -10,6 +10,13 @@
     + '수유량 합계는 ml가 명시된 기록만 포함합니다. 가족 기록 질문에 필요한 집계가 없으면 이를 알리세요. '
     + '기록을 생성하거나 변경했다고 말하지 마세요. 의료 진단이나 처방은 하지 말고 필요하면 소아과 상담을 권하세요.';
   const MAX_ANSWER_LENGTH = 8000, TIMEOUT_MS = 60000;
+  // Earlier turns sent with a follow-up: the last few, recent ones, each cut short. Text only, never record summaries.
+  const HISTORY_TURNS = 5, HISTORY_HOURS = 6, HISTORY_TEXT = 1500;
+  function history(log, now = Date.now()) {
+    return (Array.isArray(log) ? log : []).filter(x => x && typeof x.q === 'string' && typeof x.a === 'string'
+      && now - Date.parse(x.at) <= HISTORY_HOURS * 3600000 && Date.parse(x.at) <= now + 60000)
+      .slice(-HISTORY_TURNS).map(x => ({q: x.q.slice(0, HISTORY_TEXT), a: x.a.slice(0, HISTORY_TEXT)}));
+  }
   const PROVIDERS = {
     codex: {keyName: 'OpenAI API 키', keyPage: 'https://platform.openai.com/api-keys'},
     claude: {keyName: 'Anthropic API 키', keyPage: 'https://console.anthropic.com/settings/keys'},
@@ -111,16 +118,17 @@
   }
   const REFUSED = 'AI가 이 질문에는 답하지 않았어요. 질문을 바꿔 다시 시도해 주세요.';
 
-  async function ask(provider, {key, model}, question, records) {
+  async function ask(provider, {key, model}, question, records, earlier = []) {
     const context = {question};
     if (records) context.records = records;
     const prompt = JSON.stringify(context);
+    const turns = (role, answerRole, text) => earlier.flatMap(x => [{role, ...text(x.q)}, {role: answerRole, ...text(x.a)}]);
     if (provider === 'claude') {
       const body = await call('https://api.anthropic.com/v1/messages', {method: 'POST', headers: {
         ...ANTHROPIC, 'x-api-key': key, 'content-type': 'application/json', 'anthropic-beta': 'server-side-fallback-2026-07-01',
       }, body: JSON.stringify({
         model, max_tokens: 16000, system: SYSTEM, output_config: {effort: 'low'}, fallbacks: 'default',
-        messages: [{role: 'user', content: prompt}],
+        messages: [...turns('user', 'assistant', t => ({content: t})), {role: 'user', content: prompt}],
       })});
       if (body.stop_reason === 'refusal') throw failure(REFUSED);
       return reply((body.content || []).filter(x => x.type === 'text').map(x => x.text).join('\n'));
@@ -128,7 +136,8 @@
     if (provider === 'codex') {
       const body = await call('https://api.openai.com/v1/responses', {method: 'POST', headers: {
         Authorization: 'Bearer ' + key, 'Content-Type': 'application/json',
-      }, body: JSON.stringify({model, instructions: SYSTEM, input: prompt, store: false})});
+      }, body: JSON.stringify({model, instructions: SYSTEM, store: false,
+        input: earlier.length ? [...turns('user', 'assistant', t => ({content: t})), {role: 'user', content: prompt}] : prompt})});
       const text = (body.output || []).filter(x => x.type === 'message').flatMap(x => x.content || [])
         .filter(x => x.type === 'output_text').map(x => x.text).join('\n');
       if (!text && (body.output || []).some(x => (x.content || []).some(c => c.type === 'refusal'))) throw failure(REFUSED);
@@ -137,7 +146,8 @@
     if (provider === 'antigravity') {
       const body = await call(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
         method: 'POST', headers: {'x-goog-api-key': key, 'Content-Type': 'application/json'},
-        body: JSON.stringify({systemInstruction: {parts: [{text: SYSTEM}]}, contents: [{role: 'user', parts: [{text: prompt}]}]}),
+        body: JSON.stringify({systemInstruction: {parts: [{text: SYSTEM}]},
+          contents: [...turns('user', 'model', t => ({parts: [{text: t}]})), {role: 'user', parts: [{text: prompt}]}]}),
       });
       const candidate = (body.candidates || [])[0];
       if (body.promptFeedback?.blockReason || candidate?.finishReason === 'SAFETY') throw failure(REFUSED);
@@ -168,7 +178,7 @@
     return days;
   }
 
-  const api = {SYSTEM, PROVIDERS, CLAUDE_MODEL, GEMINI_TIER, geminiShortlist, models, connect, ask, summarize};
+  const api = {SYSTEM, PROVIDERS, CLAUDE_MODEL, GEMINI_TIER, HISTORY_TURNS, geminiShortlist, history, models, connect, ask, summarize};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.SomhouseAI = api;
 })(typeof window !== 'undefined' ? window : this);

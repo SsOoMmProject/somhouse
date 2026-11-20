@@ -460,7 +460,7 @@ async function manageChildren(){
  if(after.length===before.length)before.forEach((old,i)=>{if(old!==after[i])rename[old]=after[i];});
  if(await saveChildren(after,Object.keys(rename).length?rename:undefined))render();
 }
-const AI_PICK='somhouse-ai-provider',AI_KEYS='somhouse-ai-keys-v1',AI_LOG='somhouse-ai-log-v1',AI_LOG_MAX=50,aiDirect=typeof SomhouseAI!=='undefined'?SomhouseAI:null;
+const AI_PICK='somhouse-ai-provider',AI_KEYS='somhouse-ai-keys-v1',AI_LOG='somhouse-ai-log-v1',AI_LOG_MAX=50,AI_FOLLOW='somhouse-ai-follow',aiDirect=typeof SomhouseAI!=='undefined'?SomhouseAI:null;
 // API keys stay in this browser, per signed-in account, and are never sent to the Mac.
 function aiAccount(){return shared?`${shared.base}|${shared.username}`:'';}
 function aiKeyStore(){try{const all=JSON.parse(localStorage.getItem(AI_KEYS)||'{}');return all&&typeof all==='object'?all:{};}catch{return {};}}
@@ -492,6 +492,9 @@ function aiLogView(waiting){
  box.scrollTop=box.scrollHeight;
  $('#ai-clear').hidden=!entries.length;
 }
+// Follow-ups are on unless this device turned them off. Only own-key AIs get earlier turns.
+function aiFollow(){try{return localStorage.getItem(AI_FOLLOW)!=='0';}catch{return true;}}
+function setAIFollow(on){try{if(on)localStorage.removeItem(AI_FOLLOW);else localStorage.setItem(AI_FOLLOW,'0');}catch{}if(ai.config)$('#ai-status').textContent=aiStatusText();}
 function clearAILog(){
  if(!aiLog().length||ai.pending)return;
  if(typeof confirm==='function'&&!confirm('이 기기에 남은 AI 대화를 모두 지울까요?'))return;
@@ -576,7 +579,7 @@ function aiStatusText(){
  const config=ai.config,picked=aiOption(ai.selected);
  if(config.readOnly)return '게스트 보기에서는 질문할 수 없어요. 가족 계정으로 로그인하면 질문을 보낼 수 있어요.';
  if(picked?.mode==='plan')return '내 ChatGPT 플랜을 사용해요. 입력한 질문만 보내요.';
- if(picked)return `${picked.mode==='mac'?'맥미니 ':'내 키로 '}${aiName(picked)}에게 질문해요. 질문마다 새로 답해요.`;
+ if(picked)return `${picked.mode==='mac'?'맥미니 ':'내 키로 '}${aiName(picked)}에게 질문해요. ${picked.mode==='key'&&aiFollow()?'최근 대화를 이어서 답해요.':'질문마다 새로 답해요.'}`;
  if(!aiOptions().length&&config.chatgptPlan&&!config.chatgptPlan.connected)return '내 ChatGPT 구독을 연결하면 여기에서 질문할 수 있어요.';
  if(!aiOptions().length)return '아직 연결된 AI가 없어요. Gemini API 키를 연결하면 여기에서 바로 질문할 수 있어요.';
  return '질문할 AI를 골라 주세요.';
@@ -586,6 +589,7 @@ function pickAI(value){
  ai.selected=picked?picked.value:'';
  if(picked)try{localStorage.setItem(AI_PICK,picked.value);}catch{}
  $('#ai-scope-field').hidden=!picked?.summaries;
+ $('#ai-follow-field').hidden=picked?.mode!=='key';$('#ai-follow').checked=aiFollow();
  if(!picked?.summaries)$('#ai-scope').value='none';
  if(ai.config)$('#ai-status').textContent=aiStatusText();
  connectionView();
@@ -687,14 +691,14 @@ async function askAI(e){
  const values=new FormData(e.target);
  const question=String(values.get('question')||'').trim(),scope=picked.summaries?values.get('scope')||'none':'none';
  if(!question){$('#ai-status').textContent='질문을 입력해 주세요.';return;}
- const account=aiAccount(),name=aiName(picked);
+ const account=aiAccount(),name=aiName(picked),earlier=picked.mode==='key'&&aiFollow()?aiDirect.history(aiLog(account)):[];
  state.pending=true;connectionView();
  $('#ai-status').textContent=`${name} 답변을 기다리고 있어요…`;
  aiLogView({q:question,ai:name});
  try{
   const result=picked.mode==='plan'?await shared.request('/api/chatgpt/ask','POST',{question,scope:'none',model:state.config.chatgptPlan.model},shared.base,shared.token,55000)
    :picked.mode==='mac'?await shared.askAI(question,scope,picked.p.id)
-   :await aiDirect.ask(picked.p.id,picked.key,question,scope==='none'?null:{scope,summary:aiDirect.summarize(scope,data,Somhouse.localDateTime().slice(0,10))});
+   :await aiDirect.ask(picked.p.id,picked.key,question,scope==='none'?null:{scope,summary:aiDirect.summarize(scope,data,Somhouse.localDateTime().slice(0,10))},earlier);
   if(ai!==state||aiAccount()!==account)return;
   if(typeof result.answer!=='string'||!result.answer.trim())throw Error('답변을 확인하지 못했어요. 다시 시도해 주세요.');
   saveAILog(account,[...aiLog(account),{q:question,a:result.answer,ai:name,at:new Date().toISOString()}]);
@@ -962,7 +966,7 @@ takeInvite();
 route();
 if(shared?.base){
  if(window.SOMHOUSE_LOCAL_TRIAL===true&&!shared.token)$('#password-login').open=true;
- $('#ai-form').onsubmit=askAI;$('#ai-clear').onclick=clearAILog;
+ $('#ai-form').onsubmit=askAI;$('#ai-clear').onclick=clearAILog;$('#ai-follow').onchange=e=>setAIFollow(e.target.checked);
  const aiBox=$('#ai-providers');
  aiBox.onchange=e=>{const t=e.target;if(t?.name==='provider')pickAI(t.value);else if(t?.dataset?.aiModel)chooseAIModel(t.dataset.aiModel,t.value);};
  aiBox.onclick=e=>{const b=e.target?.closest?.('button');if(b?.dataset.plan)return planAction(b.dataset.plan);if(b?.dataset.aiConnect)connectAIKey(b.dataset.aiConnect);else if(b?.dataset.aiDisconnect)disconnectAIKey(b.dataset.aiDisconnect);};

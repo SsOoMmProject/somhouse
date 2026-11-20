@@ -303,3 +303,44 @@ test('the chat stays on this device per account, survives reopening, and can be 
  assert.equal(b.get('#ai-clear').hidden,true);
  assert.deepEqual(Object.keys(JSON.parse(b.context.localStorage.getItem('somhouse-ai-log-v1'))),['http://127.0.0.1:8787|dad']);
 });
+
+test('own-key follow-ups carry recent chat turns and can be turned off; the Mac gets none',async()=>{
+ const calls=[];
+ const b=browser({
+  session:{base:'http://127.0.0.1:8787',token:'existing',username:'mom'},
+  fetcher:async(url,options)=>{
+   calls.push({url,options});
+   if(url.includes(':generateContent'))return {ok:true,status:200,json:async()=>({candidates:[{content:{parts:[{text:'이어진 답'}]}}]})};
+   if(url.endsWith('/api/ai'))return {ok:true,json:async()=>options.method==='GET'?{enabled:true,providers:providers(['claude'])}:{answer:'맥 답'}};
+   return {ok:true,json:async()=>({data:blank()})};
+  },
+ });
+ const recent=new Date(Date.now()-600000).toISOString();
+ b.context.localStorage.setItem('somhouse-ai-keys-v1',JSON.stringify({'http://127.0.0.1:8787|mom':{antigravity:{key:'AIza'+'c'.repeat(35),model:'gemini-3.8-flash',models:['gemini-3.8-flash']}}}));
+ b.context.localStorage.setItem('somhouse-ai-log-v1',JSON.stringify({'http://127.0.0.1:8787|mom':[{q:'기저귀 추천',a:'브랜드 A, B',ai:'Gemini',at:recent}]}));
+ b.context.localStorage.setItem('somhouse-ai-provider','key:antigravity');
+ await b.settle();
+ b.context.location.hash='#ai';b.events.get('hashchange')();await b.settle();
+ assert.equal(b.get('#ai-follow-field').hidden,false);
+ assert.equal(b.get('#ai-follow').checked,true);
+ assert.match(b.get('#ai-status').textContent,/최근 대화를 이어서 답해요/);
+ const form=b.get('#ai-form');
+ const ask=async q=>{form.values={question:q,scope:'none'};await form.onsubmit({preventDefault(){},target:form});return JSON.parse(calls.filter(x=>x.url.includes(':generateContent')).at(-1).options.body).contents;};
+ let contents=await ask('A가 더 좋아?');
+ assert.deepEqual(contents.map(x=>x.parts[0].text).slice(0,2),['기저귀 추천','브랜드 A, B']);
+ assert.equal(contents.length,3);
+ // Turned off on this device: only the new question goes.
+ b.get('#ai-follow').onchange({target:{checked:false}});
+ assert.equal(b.context.localStorage.getItem('somhouse-ai-follow'),'0');
+ assert.match(b.get('#ai-status').textContent,/질문마다 새로 답해요/);
+ contents=await ask('혼자 질문');
+ assert.equal(contents.length,1);
+ b.get('#ai-follow').onchange({target:{checked:true}});
+ assert.equal(b.context.localStorage.getItem('somhouse-ai-follow'),null);
+ // The Mac path never gets earlier turns and hides the switch.
+ b.get('#ai-providers').onchange({target:{name:'provider',value:'mac:claude'}});
+ assert.equal(b.get('#ai-follow-field').hidden,true);
+ form.values={question:'맥 질문',scope:'none'};await form.onsubmit({preventDefault(){},target:form});
+ const mac=calls.filter(x=>x.url.endsWith('/api/ai')&&x.options.method==='POST').at(-1);
+ assert.deepEqual(JSON.parse(mac.options.body),{question:'맥 질문',scope:'none',provider:'claude'});
+});
