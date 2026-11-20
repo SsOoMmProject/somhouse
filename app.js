@@ -486,17 +486,19 @@ function aiOptions(){
  return list;
 }
 function aiOption(value){return value?aiOptions().find(x=>x.value===value)||null:null;}
-// One folded card per AI. Only cards with a way to ask are open, and only those can be picked.
+// A key for Google's card is a Gemini API key, so it answers as Gemini; the Mac runs the Antigravity CLI.
+function aiName(o){return o.mode==='key'&&o.p.id==='antigravity'?'Gemini':o.p.name;}
+// Until Somhouse can ask them from the web without a paid key, these open their own apps.
+const AI_APPS={codex:{name:'ChatGPT',url:'https://chatgpt.com/'},claude:{name:'Claude',url:'https://claude.ai/'}};
+// Gemini comes first and open: its key can start free. The others fold to a link to their app
+// unless this family already asks them here.
 function aiProvidersView(){
  const config=ai.config,options=aiOptions(),usable=p=>options.some(o=>o.p.id===p.id);
  const radio=(o,text,caption)=>`<label class="ai-pick"><input type="radio" name="provider" value="${esc(o.value)}"${ai.selected===o.value?' checked':''}> ${text}</label><p class="caption">${caption}</p>`;
  const plan=config.chatgptPlan,personal=options.find(o=>o.mode==='plan');
  let planCard='';
- if(!config.readOnly&&!plan){
-  planCard='<details class="ai-provider" data-provider="chatgpt" open><summary><strong>내 ChatGPT 구독</strong><span class="badge off">서버 설정 필요</span></summary>'
-   +'<div class="body"><p>솜하우스에서 구독으로 질문하려면 관리자가 OpenAI 웹 앱 연결을 설정해야 해요.</p>'
-   +'<a href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer">ChatGPT 웹에서 직접 질문하기 ↗</a></div></details>';
- }else if(plan&&!config.readOnly){
+ // Without a server sign-in (waiting for OpenAI's approval) the ChatGPT app link lives in the OpenAI card.
+ if(plan&&!config.readOnly){
   const models=plan.models||(plan.model?[{slug:plan.model,name:plan.model}]:[]);
   const controls=plan.connected
    ?(personal?radio(personal,'내 ChatGPT 구독으로 질문하기',esc(plan.email||'')):'')
@@ -507,36 +509,46 @@ function aiProvidersView(){
    :'<p>본인의 ChatGPT 플랜 사용을 허용하면 구독 한도에서 답해요. 입력한 질문만 OpenAI로 보내요.</p><button type="button" data-plan="start" data-oai-siwc-button>ChatGPT로 계속하기</button>';
   planCard=`<details class="ai-provider" data-provider="chatgpt" open><summary><strong>내 ChatGPT 구독</strong><span class="badge${plan.connected?'':' off'}">${plan.connected?'연결됨':'연결하기'}</span></summary><div class="body">${controls}</div></details>`;
  }
- return planCard+[...config.providers].sort((a,b)=>Number(usable(b))-Number(usable(a))).map(p=>{
-  const id=esc(p.id),name=esc(p.name),info=aiDirect?.PROVIDERS[p.id];
+ const rank=p=>p.id==='antigravity'?2:Number(usable(p));
+ const cardsHTML=[...config.providers].sort((a,b)=>rank(b)-rank(a)).map(p=>{
+  const id=esc(p.id),name=esc(p.name),info=aiDirect?.PROVIDERS[p.id],gemini=p.id==='antigravity',app=AI_APPS[p.id];
   const mac=options.find(o=>o.value==='mac:'+p.id),own=options.find(o=>o.value==='key:'+p.id);
   let body='';
   if(mac)body+=radio(mac,`맥미니 ${name}로 질문하기`,`관리자 계정으로 답해요 · 모델: ${esc(p.model||'CLI 기본값')} · ${p.recordSummaries?'가족 기록 집계를 함께 보낼 수 있어요.':'질문만 보내요.'}`);
   if(own){
    const models=Array.isArray(own.key.models)&&own.key.models.length?own.key.models:[own.key.model];
-   body+=radio(own,`내 ${esc(info.keyName)}로 질문하기`,'이 기기에서 바로 AI 회사로 보내요. 사용한 만큼 키 주인에게 요금이 청구돼요.')
+   body+=radio(own,`내 ${esc(info.keyName)}로 질문하기`,gemini?'이 기기에서 바로 Google로 보내요. 무료 한도를 넘으면 결제를 연결한 키 주인에게 요금이 청구돼요.':'이 기기에서 바로 AI 회사로 보내요. 사용한 만큼 키 주인에게 요금이 청구돼요.')
     +`<label class="field ai-model">모델<select data-ai-model="${id}">${models.map(m=>`<option value="${esc(m)}"${m===own.key.model?' selected':''}>${esc(m)}</option>`).join('')}</select></label>`
     +`<div class="actions"><button type="button" class="secondary" data-ai-disconnect="${id}">키 연결 해제</button></div>`;
   }else if(info&&!config.readOnly){
    const form=`<label class="field">${esc(info.keyName)}로 연결<input type="password" id="ai-key-${id}" autocomplete="off" spellcheck="false" placeholder="키를 붙여 넣어 주세요"></label>`
     +`<div class="actions"><button type="button" data-ai-connect="${id}">연결</button></div>`
-    +`<p class="caption">키는 이 기기에만 저장되고 솜하우스 서버로는 보내지 않아요. 사용한 만큼 AI 회사가 키 주인에게 요금을 청구해요. 공용 기기에서는 연결하지 마세요. <a href="${esc(info.keyPage)}" target="_blank" rel="noopener">키 발급받기</a></p>`;
-   // With the Mac already answering, a key is optional: keep its form folded.
-   body+=mac?`<details class="ai-admin"><summary>내 ${esc(info.keyName)}로도 연결하기</summary>${form}</details>`:form;
+    +(gemini?'<p class="caption">Google AI Studio에서 무료로 키를 받아 시작할 수 있어요. 무료 등급에서는 질문이 Google 서비스 개선에 쓰일 수 있어요. 결제를 연결하면 무료 한도를 넘은 만큼 요금이 청구돼요.</p>':'')
+    +`<p class="caption">키는 이 기기에만 저장되고 솜하우스 서버로는 보내지 않아요.${gemini?'':' 구독과 별개로 사용한 만큼 AI 회사가 키 주인에게 요금을 청구해요.'} 공용 기기에서는 연결하지 마세요. <a href="${esc(info.keyPage)}" target="_blank" rel="noopener">키 발급받기</a></p>`;
+   // With the Mac already answering, a key is optional: keep its form folded. Paid-only keys stay folded behind the app link.
+   body+=mac?`<details class="ai-admin"><summary>내 ${esc(info.keyName)}로도 연결하기</summary>${form}</details>`
+    :gemini?form:`<details class="ai-admin"><summary>${esc(info.keyName)}로 연결하기 (유료)</summary>${form}</details>`;
   }
+  if(app&&!mac&&!own&&!config.readOnly)body=`<p><a class="button secondary" href="${app.url}" target="_blank" rel="noopener noreferrer">${app.name} 앱에서 질문하기 ↗</a></p>`
+   +`<p class="caption">${p.id==='codex'?'솜하우스 안에서 ChatGPT 구독으로 질문하는 연결은 OpenAI 승인 후 열려요.':'솜하우스 안에서 구독으로 질문하는 공식 연결이 아직 없어요.'} 지금은 ${app.name} 앱이나 웹에서 질문해 주세요.</p>`+body;
   if(!mac&&!own&&!p.enabled&&!config.homeOnly&&!config.readOnly)body+=`<details class="ai-admin"><summary>맥미니에 연결하기 (관리자)</summary><p class="caption">관리자가 맥미니에서 ${name} CLI에 로그인한 뒤 아래 명령을 실행하면 키 없이 쓸 수 있어요.</p><p class="caption"><code>python3 server.py ai-config --provider ${id}</code></p></details>`;
   if(!body)body='<p class="caption">게스트 보기에서는 연결할 수 없어요.</p>';
-  const open=Boolean(mac||own),badge=mac&&own?'연결됨':mac?'맥미니 연결됨':own?'내 키 연결됨':'연결 안 됨';
-  return `<details class="ai-provider" data-provider="${id}"${open?' open':''}><summary><strong>${name}</strong><span class="caption">${esc(p.company)}</span><span class="badge${open?'':' off'}">${badge}</span></summary><div class="body">${body}</div></details>`;
- }).join('');
+  const connected=Boolean(mac||own),open=connected||(gemini&&!config.readOnly);
+  const badge=mac&&own?'연결됨':mac?'맥미니 연결됨':own?'내 키 연결됨':app&&!config.readOnly?'앱에서 질문':gemini&&!config.readOnly?'무료로 시작':'연결 안 됨';
+  const title=mac?name:gemini?'Gemini':p.id==='codex'?'ChatGPT':name;
+  return `<details class="ai-provider" data-provider="${id}"${open?' open':''}><summary><strong>${title}</strong><span class="caption">${esc(p.company)}</span><span class="badge${connected?'':' off'}">${badge}</span></summary><div class="body">${body}</div></details>`;
+ });
+ // Gemini first, then a ChatGPT plan the server can sign in to, then the rest.
+ const first=config.providers.some(p=>p.id==='antigravity')?1:0;
+ return cardsHTML.slice(0,first).join('')+planCard+cardsHTML.slice(first).join('');
 }
 function aiStatusText(){
  const config=ai.config,picked=aiOption(ai.selected);
  if(config.readOnly)return '게스트 보기에서는 질문할 수 없어요. 가족 계정으로 로그인하면 질문을 보낼 수 있어요.';
  if(picked?.mode==='plan')return '내 ChatGPT 플랜을 사용해요. 입력한 질문만 보내요.';
- if(picked)return `${picked.mode==='mac'?'맥미니 ':'내 키로 '}${picked.p.name}에게 질문해요. 질문마다 새로 답해요.`;
+ if(picked)return `${picked.mode==='mac'?'맥미니 ':'내 키로 '}${aiName(picked)}에게 질문해요. 질문마다 새로 답해요.`;
  if(!aiOptions().length&&config.chatgptPlan&&!config.chatgptPlan.connected)return '내 ChatGPT 구독을 연결하면 여기에서 질문할 수 있어요.';
- if(!aiOptions().length)return '아직 연결된 AI가 없어요. 아래에서 연결 방법을 확인해 주세요.';
+ if(!aiOptions().length)return '아직 연결된 AI가 없어요. Gemini API 키를 연결하면 여기에서 바로 질문할 수 있어요.';
  return '질문할 AI를 골라 주세요.';
 }
 function pickAI(value){
@@ -646,19 +658,19 @@ async function askAI(e){
  const question=String(values.get('question')||'').trim(),scope=picked.summaries?values.get('scope')||'none':'none';
  if(!question){$('#ai-status').textContent='질문을 입력해 주세요.';return;}
  state.pending=true;connectionView();
- $('#ai-status').textContent=`${picked.p.name} 답변을 기다리고 있어요…`;
+ $('#ai-status').textContent=`${aiName(picked)} 답변을 기다리고 있어요…`;
  try{
   const result=picked.mode==='plan'?await shared.request('/api/chatgpt/ask','POST',{question,scope:'none',model:state.config.chatgptPlan.model},shared.base,shared.token,55000)
    :picked.mode==='mac'?await shared.askAI(question,scope,picked.p.id)
    :await aiDirect.ask(picked.p.id,picked.key,question,scope==='none'?null:{scope,summary:aiDirect.summarize(scope,data,Somhouse.localDateTime().slice(0,10))});
   if(ai!==state)return;
   if(typeof result.answer!=='string'||!result.answer.trim())throw Error('답변을 확인하지 못했어요. 다시 시도해 주세요.');
-  $('#ai-result-title').textContent=`${picked.p.name} 답변`;
+  $('#ai-result-title').textContent=`${aiName(picked)} 답변`;
   $('#ai-asked').textContent=question;
   $('#ai-answer').textContent=result.answer;
   $('#ai-result').hidden=false;
   $('#ai-question').value='';
-  $('#ai-status').textContent=result.truncated?'답변이 길어 일부만 표시했어요.':`${picked.p.name} 답변을 받았어요.`;
+  $('#ai-status').textContent=result.truncated?'답변이 길어 일부만 표시했어요.':`${aiName(picked)} 답변을 받았어요.`;
  }catch(error){
   if(ai!==state)return;
   if(error.status===401&&picked.mode!=='key')showLogin(error.message);else $('#ai-status').textContent=error.message;
