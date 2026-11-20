@@ -208,9 +208,10 @@ class Store:
     @staticmethod
     def settings(db):
         values = {key: json.loads(value) for key, value in db.execute(
-            "SELECT key,value FROM family_settings WHERE key IN ('children','handoff','timer','feeding_alarm')")}
+            "SELECT key,value FROM family_settings WHERE key IN ('children','handoff','timer','feeding_alarm','nap_alarm')")}
         return {"children": values.get("children", []), "handoff": values.get("handoff"), "timer": values.get("timer"),
-                "feedingAlarm": bool((values.get("feeding_alarm") or {}).get("enabled"))}
+                "feedingAlarm": bool((values.get("feeding_alarm") or {}).get("enabled")),
+                "napAlarm": bool((values.get("nap_alarm") or {}).get("enabled"))}
 
     @staticmethod
     def put_setting(db, key, value):
@@ -1057,13 +1058,15 @@ class Handler(BaseHTTPRequestHandler):
                 elif path == "/api/handoff" and self.command == "POST":
                     result = self.handoff_request(db, store, username)
                 elif path == "/api/feeding-alarm" and self.command == "POST":
-                    # A Calendar reminder when a usual feeding time passes; it needs the family's Google Calendar.
-                    enabled = self.body(1024).get("enabled")
-                    if not isinstance(enabled, bool):
-                        raise Problem(400, "밥 알람 설정을 확인해 주세요.")
+                    # Calendar reminders when a usual feeding time passes ("feeding") or the baby has been awake
+                    # longer than usual ("nap"); they need the family's Google Calendar.
+                    body = self.body(1024)
+                    enabled, kind = body.get("enabled"), body.get("kind", "feeding")
+                    if not isinstance(enabled, bool) or kind not in ("feeding", "nap"):
+                        raise Problem(400, "알람 설정을 확인해 주세요.")
                     if enabled and (google is None or google.calendar is None):
-                        raise Problem(409, "Google 캘린더를 연결하면 밥 알람을 켤 수 있어요.")
-                    store.put_setting(db, "feeding_alarm", alarm_setting(enabled, username))
+                        raise Problem(409, "Google 캘린더를 연결하면 " + ("밥" if kind == "feeding" else "낮잠") + " 알람을 켤 수 있어요.")
+                    store.put_setting(db, kind + "_alarm", alarm_setting(enabled, username))
                     result = {"data": store.state(db), "settings": store.settings(db)}
                     if google is not None:
                         result["sources"] = google.sources()

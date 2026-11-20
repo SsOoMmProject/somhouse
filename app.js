@@ -311,6 +311,8 @@ function nowCard(){
   const m=Somhouse.sleepMinutes(sleep),awake=sleep.end&&sleep.end<=now?ago(sleep.end,now):'';
   const head=awake?(awake==='방금'?'방금 깸':`깬 지 ${awake.replace(' 전','')}`):'깬 시각 미입력';
   sleepHtml=`<strong>${esc(head)}</strong><span>${esc(sleep.category)}${m!==null?` ${esc(Somhouse.duration(m))}`:''} · ${esc(day(sleep.date))}${sleep.end?`~${esc(day(sleep.end))}`:''}</span>`;
+  const nap=shared?.googleStatus?.nap_alarm;
+  if(nap?.enabled&&nap.next)sleepHtml+=`<span class="guess">⏰ 낮잠 알람 ${esc(day(nap.next))} (보통 깬 지 ${esc(Somhouse.duration(nap.usual_minutes))})</span>`;
  }
  return `<section class="now-card" aria-label="지금 아기 상태"><div><p>🍼 마지막 수유</p>${feedHtml}${timerHtml()}</div><div><p>😴 마지막 수면</p>${sleepHtml}${open?`<button class="sleep-toggle wake" data-sleep-end="${esc(open.id)}">☀️ 수면 종료</button>`:'<button class="sleep-toggle" data-sleep-start="1">😴 수면 시작</button>'}</div><div class="diaper-tile"><p>🧷 마지막 기저귀</p>${diaperHtml}<div class="tile-actions">${['소변','대변','둘 다'].map(c=>`<button class="secondary small" data-diaper="${c}">${diaperIcons[c]} ${c}</button>`).join('')}</div></div></section>${handoffStrip()}`;
 }
@@ -391,25 +393,33 @@ function patternView(){
  const axis=[0,6,12,18,24].map(h=>`<span style="left:${(h/24*100).toFixed(2)}%">${h}</span>`).join('');
  return `<section class="card pattern"><h2>최근 7일 하루 흐름</h2><p class="caption"><span class="lg sleep"></span>수면 <span class="lg feed"></span>수유 <span class="lg diaper"></span>기저귀 · 표시를 누르면 그 기록을 열어요. 자정을 넘긴 수면은 두 날에 나눠 그려요.</p><div class="pt-rows">${rows}</div><div class="pt-axis">${axis}</div></section>`;
 }
-// Usual feeding times from the last 7 days (computed on the Mac) and the Calendar alarm switch.
+// Calendar alarms (computed on the Mac): usual feeding times, the usual daytime wake window, and their switches.
 function alarmView(){
- const alarm=shared?.googleStatus?.feeding_alarm;if(!alarm||shared.readOnly)return '';
+ const alarm=shared?.googleStatus?.feeding_alarm,nap=shared?.googleStatus?.nap_alarm;if(!alarm||shared.readOnly)return '';
  const slots=Array.isArray(alarm.slots)?alarm.slots:[];
  const times=slots.length?`<div class="alarm-times">${slots.map(x=>`<span class="badge">${esc(x.time)} <small>${esc(x.days)}일</small></span>`).join(' ')}</div>`
   :'<p class="caption">아직 뚜렷한 수유 시간대가 없어요. 최근 7일 중 3일 이상, 비슷한 시간에 먹은 기록이 쌓이면 보여요.</p>';
  const state=alarm.enabled?(alarm.next?`다음 알람: <strong>${esc(alarm.next.replace('T',' '))}</strong> (평소 ${esc(alarm.usual)}에 먹는데 기록이 없으면)`:'수유 시간대가 생기면 알람을 맞춰요.'):'꺼져 있어요.';
- return `<section class="card alarm-card"><h2>⏰ 밥 알람</h2><p class="caption">최근 7일 동안 자주 먹은 시간대예요 (숫자는 그 시간대에 먹은 날 수).</p>${times}<p>${state}</p><p class="caption">평소 시간이 30분 지나도록 그 전후 수유 기록이 없으면 Google 캘린더 ‘솜하우스 수유’에서 알림이 와요. 수유를 기록하면 알림은 다음 시간대로 옮겨져요. 휴대폰 Google 캘린더 앱에서 ‘솜하우스 수유’ 캘린더가 보이고 알림이 켜져 있어야 해요.</p><div class="actions"><button type="button" class="${alarm.enabled?'secondary':''}" data-feeding-alarm="${alarm.enabled?'off':'on'}">${alarm.enabled?'밥 알람 끄기':'밥 알람 켜기'}</button></div></section>`;
+ const toggle=(kind,on,label)=>`<div class="actions"><button type="button" class="${on?'secondary':''}" data-alarm-kind="${kind}" data-alarm="${on?'off':'on'}">${label} ${on?'끄기':'켜기'}</button></div>`;
+ let napHtml='';
+ if(nap){
+  const usual=nap.usual_minutes?Somhouse.duration(nap.usual_minutes):'';
+  const napState=!usual?`아직 기록이 부족해요. 낮에 깬 뒤 다시 잠든 기록이 ${esc(5-(nap.samples||0))}번 더 있으면 알 수 있어요.`
+   :`최근 7일 낮에는 깬 뒤 보통 <strong>${esc(usual)}</strong> 지나 잠들었어요 (${esc(nap.samples)}번).${nap.enabled?nap.next?` 다음 알람: <strong>${esc(nap.next.replace('T',' '))}</strong>`:' 깨면 알람을 맞춰요.':''}`;
+  napHtml=`<h3>😴 낮잠 알람</h3><p>${napState}${nap.enabled?'':' 꺼져 있어요.'}</p><p class="caption">낮(7시~20시)에 깬 뒤 평소만큼 지나도 수면 기록이 없으면 알림이 와요. 수면을 기록하면 사라져요.</p>${toggle('nap',nap.enabled,'낮잠 알람')}`;
+ }
+ return `<section class="card alarm-card"><h2>⏰ 알람</h2><h3>🍼 밥 알람</h3><p class="caption">최근 7일 동안 자주 먹은 시간대예요 (숫자는 그 시간대에 먹은 날 수).</p>${times}<p>${state}</p><p class="caption">평소 시간이 30분 지나도록 그 전후 수유 기록이 없으면 알림이 와요. 수유를 기록하면 알림은 다음 시간대로 옮겨져요.</p>${toggle('feeding',alarm.enabled,'밥 알람')}${napHtml}<p class="caption">알림은 Google 캘린더 ‘솜하우스 수유’에서 와요. 휴대폰 Google 캘린더 앱에서 이 캘린더가 보이고 알림이 켜져 있어야 해요.</p></section>`;
 }
-async function feedingAlarm(on){
+async function alarmSwitch(kind,on){
  if(busy||!shared?.token||shared.readOnly)return;
- const token=shared.token;busy=true;connectionView();
+ const token=shared.token,name=kind==='nap'?'낮잠 알람':'밥 알람';busy=true;connectionView();
  try{
-  const result=await shared.request('/api/feeding-alarm','POST',{enabled:on});
+  const result=await shared.request('/api/feeding-alarm','POST',{kind,enabled:on});
   if(shared.token!==token)return;
   if(valid(result.data))data=result.data;
   if(result.settings)shared.settings={...shared.settings,...result.settings};
   if('google_status' in result){shared.sources=result.sources||shared.sources;shared.googleStatus=result.google_status||null;}
-  message(on?'밥 알람을 켰어요. 잠시 뒤 Google 캘린더에 다음 알람이 생겨요.':'밥 알람을 껐어요. 캘린더의 알람 일정도 곧 지워져요.');
+  message(on?`${name}을 켰어요. 알람 시각이 되면 Google 캘린더 알림이 와요.`:`${name}을 껐어요. 캘린더의 알람 일정도 곧 지워져요.`);
  }catch(error){if(shared.token===token){if(error.status===401)showLogin(error.message);else{message(error.message);alert(error.message);}}}
  finally{busy=false;connectionView();render();}
 }
@@ -828,7 +838,7 @@ document.addEventListener('click',async e=>{
  if(b.dataset.reset){filters[b.dataset.reset]={};render();}
  if(busy||mode!=='shared'||!sharedReady)return;
  if(await aiHelpClick(b))return;
- if(['on','off'].includes(b.dataset.feedingAlarm)){await feedingAlarm(b.dataset.feedingAlarm==='on');return;}
+ if(['on','off'].includes(b.dataset.alarm)&&['feeding','nap'].includes(b.dataset.alarmKind)){await alarmSwitch(b.dataset.alarmKind,b.dataset.alarm==='on');return;}
  if(b.dataset.step){
   const input=document.querySelector('#fields input[name="amount"]'),category=document.querySelector('#fields select[name="category"]')?.value,unit=units[category];
   if(!input||!unit)return;
