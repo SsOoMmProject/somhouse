@@ -29,7 +29,7 @@ from shopping_records import SCHEMA as SHOPPING_SCHEMA
 from google_delivery import SCHEMA as DELIVERY_SCHEMA
 from holidays import HolidayFeed, SCHEMA as HOLIDAY_SCHEMA, listing as holiday_listing
 from demo import GUEST, READ_ONLY_MESSAGE, demo_payload
-from sleep_wake import end_sleep_on_feeding
+from sleep_wake import end_open_sleep, end_sleep_on_feeding
 import google_web
 from google_setup import provision
 import families
@@ -771,6 +771,14 @@ class Handler(BaseHTTPRequestHandler):
                 queue_keep(db, keep.email, "records", woke["id"], encode(woke))
         return woke
 
+    @staticmethod
+    def queue_change(db, google, keep, item):
+        """Send one changed record (already written) to Google or Keep."""
+        if google is not None:
+            google.queue(db, "records", item["id"], item, "save")
+        elif keep is not None:
+            queue_keep(db, keep.email, "records", item["id"], encode(item))
+
     def handoff_request(self, db, store, username):
         """One line for the next caregiver ("약 먹였어요"); an empty text clears it."""
         text = self.body(4096).get("text")
@@ -793,6 +801,12 @@ class Handler(BaseHTTPRequestHandler):
                 raise Problem(409, "이미 직수 타이머가 돌고 있어요. 화면을 새로고침해 주세요.")
             side = body.get("side") if body.get("side") in TIMER_SIDES else TIMER_SIDES[0]
             timer = {"segments": [{"side": side, "start": now}], "by": username}
+            # Nursing means the baby is awake: the open sleep ends when the timer starts (cancel reopens it).
+            store.snapshot(db)
+            woke = end_open_sleep(db, now[:16])
+            if woke:
+                timer["woke"] = {"id": woke["id"], "end": woke["end"]}
+                self.queue_change(db, google, keep, woke)
         elif action in ("switch", "finish", "cancel"):
             if not timer:
                 raise Problem(409, "돌고 있는 직수 타이머가 없어요. 화면을 새로고침해 주세요.")
@@ -806,6 +820,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.save_item(db, store, google, keep, "records", saved)
                 timer = None
             else:
+                # Cancelling also undoes the wake-up the start wrote, unless someone changed that sleep since.
+                woke = timer.get("woke") or {}
+                row = db.execute("SELECT body FROM items WHERE kind='records' AND id=?", (woke.get("id"),)).fetchone()
+                sleep = json.loads(row[0]) if row else None
+                if sleep and sleep.get("end") == woke.get("end"):
+                    self.save_item(db, store, google, keep, "records", {**sleep, "end": ""})
                 timer = None
         else:
             raise Problem(400, "타이머 동작을 확인해 주세요.")
@@ -813,6 +833,8 @@ class Handler(BaseHTTPRequestHandler):
         result = {"data": store.state(db), "aliases": load_aliases(db), "settings": store.settings(db)}
         if saved:
             result["saved"] = saved
+        if action == "start" and timer.get("woke"):
+            result["woke"] = timer["woke"]
         return result
 
     def family_request(self, family, username):
