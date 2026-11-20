@@ -43,7 +43,9 @@ function connectionView(){
  const connected=mode==='shared'&&Boolean(shared?.token);
  $('#connection-title').textContent=connected?(shared.readOnly?'게스트 보기 · 예시 기록':(shared.family.home?'가족 기록':shared.family.name||'우리 가족')+' · '+shared.username):'가족 로그인';
  $('#connection').classList.toggle('compact',connected);
- $('#login-form').hidden=connected;$('#google-login-box').hidden=connected;$('#password-login').hidden=connected;$('#logout').hidden=!connected;
+ const canLogIn=!connected&&Boolean(shared?.base);
+ $('#login-form').hidden=!canLogIn;$('#password-login').hidden=!canLogIn;
+ $('#google-login-box').hidden=!canLogIn||window.SOMHOUSE_LOCAL_TRIAL===true;$('#logout').hidden=!connected;
  // A Google sign-in has no Somhouse password to change.
  $('#change-password').hidden=!connected||shared.readOnly||shared.username==='family'||shared.username.includes('@');
  $('#manage-family').hidden=!connected||shared.readOnly;
@@ -888,7 +890,8 @@ async function familyChange(body,done){
 window.addEventListener('hashchange',()=>{if(!takeInvite())route();});
 takeInvite();
 route();
-if(shared){
+if(shared?.base){
+ if(window.SOMHOUSE_LOCAL_TRIAL===true&&!shared.token)$('#password-login').open=true;
  $('#ai-form').onsubmit=askAI;
  const aiBox=$('#ai-providers');
  aiBox.onchange=e=>{const t=e.target;if(t?.name==='provider')pickAI(t.value);else if(t?.dataset?.aiModel)chooseAIModel(t.dataset.aiModel,t.value);};
@@ -1044,4 +1047,7 @@ if(shared){
   }
   if(mode==='shared'){if(!returned.has('google-error'))message('가족의 기록을 불러오고 있어요…');refreshShared(true);}
  }
-}else message('화면을 불러오지 못했어요. 잠시 후 다시 열어주세요.');
+}else if(window.SOMHOUSE_LOCAL_TRIAL===true){
+ $('#connection-title').textContent='Mac에서 시험판 열기';
+ message('지금 화면에서는 시험 계정으로 로그인할 수 없어요. 미리보기를 닫고 시험판을 실행한 Mac의 Safari에서 열어 주세요. 휴대폰으로 Mac 화면을 원격 조작해도 돼요.');
+}else message('솜하우스 서버 주소를 확인할 수 없어요. 솜하우스를 원래 주소에서 다시 열어 주세요.');

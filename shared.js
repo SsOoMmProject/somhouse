@@ -3,7 +3,8 @@
   'use strict';
   const SESSION = 'somhouse-session-v1', SERVER = 'somhouse-server-url';
   function serverURL(value) {
-    const url = new URL(value);
+    let url;
+    try { url = new URL(value); } catch { throw Error('솜하우스 서버 주소를 확인할 수 없어요. 솜하우스를 원래 주소에서 다시 열어 주세요.'); }
     const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
     if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) || url.username || url.password || url.search || url.hash || !['', '/'].includes(url.pathname)) {
       throw Error('맥미니의 HTTPS 주소를 입력해 주세요. 로컬 시험은 http://127.0.0.1:8787을 사용할 수 있어요.');
@@ -13,11 +14,16 @@
   class Client {
     constructor() {
       this.base = ''; this.token = ''; this.username = ''; this.readOnly = false; this.sources = null; this.googleStatus = null; this.aliases = {}; this.calendarEvents = []; this.holidays = []; this.settings = {children: []}; this.family = {home: true, name: ''};
-      try {this.base = serverURL(root.SOMHOUSE_API_URL);} catch {}
-      if (['localhost', '127.0.0.1'].includes(location.hostname)) this.base = 'http://127.0.0.1:8787';
-      try { this.base = serverURL(localStorage.getItem(SERVER)); } catch {}
-      const trial = root.SOMHOUSE_LOCAL_TRIAL === true && location.hostname === '127.0.0.1';
-      if (trial) this.base = location.origin;
+      const trial = root.SOMHOUSE_LOCAL_TRIAL === true;
+      if (trial) {
+        // Sign-in returns to this origin on the Mac. A preview cannot resume that browser session.
+        if (location.hostname !== '127.0.0.1' || !location.origin?.startsWith('http://127.0.0.1:')) return;
+        this.base = location.origin;
+      } else {
+        try {this.base = serverURL(root.SOMHOUSE_API_URL);} catch {}
+        if (['localhost', '127.0.0.1'].includes(location.hostname)) this.base = 'http://127.0.0.1:8787';
+        try { this.base = serverURL(localStorage.getItem(SERVER)); } catch {}
+      }
       for (const name of ['localStorage', 'sessionStorage']) {
         try {
           const saved = JSON.parse(root[name].getItem(SESSION));
@@ -30,7 +36,6 @@
           break;
         } catch {}
       }
-      if (!this.base && ['localhost', '127.0.0.1'].includes(location.hostname)) this.base = 'http://127.0.0.1:8787';
     }
     // The public relay (Tailscale Funnel) sometimes takes 5-20 seconds to open a connection.
     // Requests that are safe to repeat get one more try; a POST (other than login) never repeats.
