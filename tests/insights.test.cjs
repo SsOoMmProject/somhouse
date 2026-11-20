@@ -71,3 +71,26 @@ test('records to double-check: a double entry and a long stretch with nothing re
  assert.equal(f.server.data.records.some(x=>x.id==='w'),false);
  assert.doesNotMatch(f.b.get('#content').innerHTML,/확인해 볼 기록/);
 });
+
+test('buying again: purchase days are kept and a usual gap suggests the next time',async()=>{
+ const f=family();
+ const today=f.day(0),d=n=>f.day(n);
+ await f.load('shopping',[
+  {id:'a',title:'기저귀',quantity:'1팩',done:'yes',boughtAt:[d(-20),d(-11)].join(',')},
+  {id:'b',title:' 기저귀 ',quantity:'2팩',done:'yes',boughtAt:d(-2)},
+  {id:'c',title:'물티슈',quantity:'1',done:'no',boughtAt:[d(-30),d(-20)].join(',')},
+  {id:'e',title:'분유',quantity:'1통',done:'yes',boughtAt:d(-1)}]);
+ let html=await f.open('shopping');
+ // 기저귀: bought d-20, d-11, d-2 → every 9 days → due d+7, not yet.
+ assert.doesNotMatch(html,/곧 살 때예요/);
+ assert.deepEqual(JSON.parse(JSON.stringify(f.b.eval(`rebuyList('${d(6)}').map(x=>[x.item.id,x.every,x.due])`))),[['b',9,d(7)]]);
+ // 물티슈 is already on the list; 분유 was bought once only.
+ html=f.b.eval(`(()=>{const real=rebuyList;rebuyList=()=>real('${d(6)}');const h=rebuyCard();rebuyList=real;return h;})()`);
+ assert.match(html,/<strong>기저귀<\/strong> · 2팩<br>보통 9일마다 샀어요 \(3번\)/);
+ await f.click({rebuy:'b'});
+ assert.equal(f.server.data.shopping.find(x=>x.id==='b').done,'no');
+ // ✓ 샀어요 adds today to the purchase days.
+ await f.b.events.get('click')({target:{closest:sel=>sel==='a'?null:{dataset:{action:'toggle',key:'shopping',id:'b'}}}});
+ const b=f.server.data.shopping.find(x=>x.id==='b');
+ assert.deepEqual([b.done,b.boughtAt],['yes',[d(-2),today].join(',')]);
+});
