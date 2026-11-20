@@ -271,7 +271,7 @@ python3 -m venv /tmp/somhouse-chatgpt-venv
 /tmp/somhouse-chatgpt-venv/bin/python server.py serve --chatgpt-local --port 18764 --data-dir /tmp/somhouse-chatgpt-local
 ```
 
-**휴대폰에서 접속하는 운영 웹**에는 OpenAI가 호스팅 앱의 **ChatGPT plan usage**를 승인하고 발급한 클라이언트 ID가 필요합니다. 신청할 콜백은 서버 공개 HTTPS 주소 뒤에 `/auth/openai/callback`을 붙인 값입니다. 승인 안내의 사용 권한·토큰 인증 방식·추론 계약을 확인한 후, 서비스를 실행하는 Python에 위 의존성을 설치하고 운영 데이터 폴더의 `chatgpt-web-client.json`에 아래 값을 저장합니다(소유자만 읽기·쓰기, 0600). `none` 인증이면 비밀값을 생략하고, `client_secret_basic`이면 `client_secret`에 발급받은 값을 추가합니다. 서비스 재시작 후 테스트 계정 하나에서 동의, 질문, 연결 해제를 검증합니다. 설정 파일이 없으면 기존 AI 옵션만 표시됩니다.
+**휴대폰에서 접속하는 운영 웹**에는 OpenAI가 호스팅 앱의 **ChatGPT plan usage**를 승인하고 발급한 클라이언트 ID가 필요합니다. 신청할 콜백은 서버 공개 HTTPS 주소 뒤에 `/auth/openai/callback`을 붙인 값입니다. 승인 안내의 사용 권한·토큰 인증 방식·추론 계약을 확인한 후, 서비스를 실행하는 Python에 위 의존성을 설치하고 운영 데이터 폴더의 `chatgpt-web-client.json`에 아래 값을 저장합니다(소유자만 읽기·쓰기, 0600). `none` 인증이면 비밀값을 생략하고, `client_secret_basic`이면 `client_secret`에 발급받은 값을 추가합니다. 서비스 재시작 후 테스트 계정 하나에서 동의, 질문, 연결 해제를 검증합니다. 설정 파일이 없으면 AI 탭의 **내 ChatGPT 구독**에 **서버 설정 필요**가 표시됩니다. 이때 **ChatGPT 웹에서 직접 질문하기**를 누르면 ChatGPT가 새 탭에서 열립니다.
 
 ```json
 {
