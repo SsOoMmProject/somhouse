@@ -18,6 +18,15 @@ test('the text has both weeks, the question and the safety line', () => {
  assert.doesNotMatch(text, /직수/, 'a kind with no records is left out');
 });
 
+test('a kind the family does not record is left out, never shown as zero', () => {
+ const none = week({measured_ml_per_day: 700, sleep_hours_per_day: 0, diapers_per_day: 0, poo_per_day: 0});
+ const text = buildText('week', '', {this_week: none, last_week: week({days_with_records: 0, feedings_per_day: 0, measured_ml_per_day: null, sleep_hours_per_day: 0, diapers_per_day: 0, poo_per_day: 0})});
+ assert.doesNotMatch(text, /수면 0|기저귀 0|대변 0|수유 0/);
+ assert.match(text, /기록이 있는 날 0일\): 기록 없음/);
+ assert.match(text, /없었다고 판단하지 마세요/);
+ assert.match(buildText('week', '', {this_week: week({poo_per_day: 0}), last_week: none}), /기저귀 7\.2회, 대변 0회/, 'with diaper records, no poo is a real zero');
+});
+
 test('a typed question replaces the topic and is cut to length', () => {
  const text = buildText('week', ' 밤중 수유를 줄여도 될까요? ', numbers);
  assert.match(text, /질문: 밤중 수유를 줄여도 될까요\?\n/);

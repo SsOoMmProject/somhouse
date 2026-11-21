@@ -12,17 +12,20 @@
   const QUESTION_MAX = 300;
   const num = v => (v === null || v === undefined ? null : Number(v));
   function weekLine(name, w) {
-    const parts = [`수유 ${w.feedings_per_day}회`];
+    // A kind the family did not record is left out: "대변 0회" would read as a baby who did not poo.
+    const parts = [];
+    if (num(w.feedings_per_day) > 0) parts.push(`수유 ${w.feedings_per_day}회`);
     if (num(w.measured_ml_per_day) !== null) parts.push(`분유 ${w.measured_ml_per_day}ml`);
     if (num(w.breastfeeding_minutes_per_day) !== null) parts.push(`직수 ${w.breastfeeding_minutes_per_day}분`);
-    parts.push(`수면 ${w.sleep_hours_per_day}시간`, `기저귀 ${w.diapers_per_day}회`, `대변 ${w.poo_per_day}회`);
-    return `- ${name} (${w.from} ~ ${w.to}, 기록이 있는 날 ${w.days_with_records}일): 하루 평균 ${parts.join(', ')}`;
+    if (num(w.sleep_hours_per_day) > 0) parts.push(`수면 ${w.sleep_hours_per_day}시간`);
+    if (num(w.diapers_per_day) > 0) parts.push(`기저귀 ${w.diapers_per_day}회`, `대변 ${w.poo_per_day}회`);
+    return `- ${name} (${w.from} ~ ${w.to}, 기록이 있는 날 ${w.days_with_records}일): ${parts.length ? `하루 평균 ${parts.join(', ')}` : '기록 없음'}`;
   }
   function buildText(topic, question, numbers) {
     const ask = String(question || '').trim().slice(0, QUESTION_MAX) || TOPICS[topic]?.ask || TOPICS.week.ask;
     return ['아기 육아 기록을 앱이 계산한 하루 평균 숫자예요. 7일로 나누었으니, 기록이 있는 날이 7일보다 적으면 실제보다 낮게 보일 수 있어요.',
       weekLine('최근 7일', numbers.this_week), weekLine('그 전 7일', numbers.last_week), '',
-      `질문: ${ask}`, '', '숫자에 없는 내용은 추측하지 말고, 진단이나 처방은 하지 마세요. 걱정되는 변화가 있으면 소아과 상담을 권해 주세요.'].join('\n');
+      `질문: ${ask}`, '', '적혀 있지 않은 항목은 기록하지 않은 것이니 없었다고 판단하지 마세요. 숫자에 없는 내용은 추측하지 말고, 진단이나 처방은 하지 마세요. 걱정되는 변화가 있으면 소아과 상담을 권해 주세요.'].join('\n');
   }
   const api = {TOPICS, buildText};
   if (typeof module !== 'undefined' && module.exports) { module.exports = api; return; }
