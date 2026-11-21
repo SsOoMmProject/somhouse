@@ -5,7 +5,7 @@
    app computes; record text is never sent. Loaded before app.js and only called after it has run. */
 const aiHelp={loading:false,records:null,schedule:null,stats:null,scope:''};
 function aiHelpReset(){
- aiHelp.loading=false;aiHelp.scope='';aiHelp.guesses=new Map();aiHelp.guessing=false;aiHelp.autoCount=0;
+ aiHelp.loading=false;aiHelp.scope='';aiHelp.guesses=new Map();
  aiHelp.records={text:'',items:null,status:'',working:false};
  aiHelp.schedule={text:'',image:null,items:null,status:'',working:false};
  aiHelp.stats={summary:'',by:'',at:'',status:'',working:false};
@@ -154,9 +154,8 @@ function aiHelpDrop(k,index){
 }
 
 // ② Voice or Calendar input the rules could not read: the AI suggests a reading, the form opens to check it.
-// Opening the review page reads up to 5 items in the background (5 in all until logout, so the AI's limits are
-// not used up); each reading is kept until logout. The rest wait for their button.
-const REVIEW_AUTO=5;
+// These words came from the family's Google account, so one goes to the AI only when a person taps its button.
+// Each reading is kept until logout.
 async function aiGuess(picked,entry){
  const now=aiStamp(entry.when)||Somhouse.localDateTime();
  const answer=await aiHelpAsk(picked,aiRecordPrompt(now,String(entry.title||'').slice(0,AI_INPUT_MAX)));
@@ -164,27 +163,6 @@ async function aiGuess(picked,entry){
 }
 function aiGuessForm(entry,found){
  openForm(found.record.type,null,{...found.record,memo:found.record.memo||(entry.title?'음성 원문: '+entry.title:'')},entry.key);
-}
-async function aiReviewAuto(){
- const picked=aiHelpOption(),state=ai;
- if(!picked||aiHelp.guessing)return;
- const todo=reviewItems().filter(x=>x.status!=='웹 기록 유지'&&!aiHelp.guesses.has(x.key)).slice(0,REVIEW_AUTO-aiHelp.autoCount);
- if(!todo.length)return;
- aiHelp.guessing=true;
- try{
-  for(const entry of todo){
-   if(ai!==state||page!=='review')break;
-   aiHelp.autoCount++;aiHelp.guesses.set(entry.key,{state:'working'});if(!editingScreen())render();
-   try{const found=await aiGuess(picked,entry);if(ai!==state)return;aiHelp.guesses.set(entry.key,found?{state:'done',found}:{state:'none'});}
-   catch(error){
-    if(ai!==state)return;
-    aiHelp.guesses.set(entry.key,{state:'error',message:error.message});
-    if(error.status===401&&picked.mode!=='key'){showLogin(error.message);return;}
-    break; // a limit or a network problem: leave the rest for the button
-   }
-   if(!editingScreen())render();
-  }
- }finally{if(ai===state){aiHelp.guessing=false;if(page==='review'&&!editingScreen())render();}}
 }
 async function aiHelpReview(key){
  const entry=reviewItems().find(x=>x.key===key),picked=aiHelpOption(),state=ai,cached=aiHelp.guesses.get(key);
