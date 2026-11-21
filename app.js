@@ -208,7 +208,7 @@ function reviewCard(x){
 }
 function reviewView(){
  const cards=reviewItems().map(reviewCard).join('');
- return `<h1>확인 필요</h1><p>음성이나 캘린더로 남겼지만 그대로 저장하지 못한 입력이에요. 첫 번째 버튼을 누르면 종류·양·시각을 고칠 수 있는 입력창이 열려요. Google의 원본 Task·일정은 바뀌지 않고, 처리 이력은 원본 시트에 남아요.</p>${cards||'<div class="card empty">확인할 입력이 없어요.</div>'}<button class="plain" data-page="home">← 홈으로</button>`;
+ return `<h1>확인 필요</h1><p>음성이나 캘린더로 남겼지만 그대로 저장하지 못한 입력이에요. 첫 번째 버튼을 누르면 종류·양·시각을 고칠 수 있는 입력창이 열려요. Google의 원본 Task·일정은 바뀌지 않고, 처리 이력은 원본 시트에 남아요.</p>${cards&&aiHelpOption()?'<p class="caption">‘✨ AI로 해석’을 누른 입력의 원문만 고른 AI로 보내요. 무료 Gemini 키는 보낸 내용이 Google 서비스 개선에 쓰이고 사람이 검토할 수 있어요.</p>':''}${cards||'<div class="card empty">확인할 입력이 없어요.</div>'}<button class="plain" data-page="home">← 홈으로</button>`;
 }
 
 const filters={records:{},schedule:{},shopping:{}};
@@ -796,7 +796,6 @@ function render(){
  const past=document.querySelector('details.past');if(past)schedulePastOpen=past.open;
  showGoogleStatus(true);
  $('#content').innerHTML=page==='home'?homeView():page==='stats'?statsView():page==='review'?reviewView():page==='report'?reportView():listView(page);
- if(page==='review'&&reviewItems().length)Promise.resolve().then(aiReviewAuto); // after this render, in the background
  connectionView();
  const form=$('#filter-form');if(form){const apply=e=>{e?.preventDefault?.();const next=Object.fromEntries(new FormData(form));if(next.from&&next.to&&next.from>next.to){alert('시작 날짜는 마지막 날짜보다 늦을 수 없어요.');return}filters[page]=next;render()};form.onsubmit=apply;form.onchange=apply;}
 }
