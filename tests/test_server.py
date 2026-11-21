@@ -285,23 +285,41 @@ class FamilyAPI(unittest.TestCase):
         self.assertEqual((code, body["settings"]["feedingAlarm"]), (200, False))
         self.assertFalse(self.request("/api/data", token=token)[1]["settings"]["feedingAlarm"])
 
-    def test_diaper_stock_setup_add_and_off(self):
+    def test_stock_list_add_use_buy_set_remove(self):
         token = self.login(1)
-        self.assertEqual(self.request("/api/diaper-stock", "POST", {"add": 1}, token)[0], 409)
-        self.assertEqual(self.request("/api/diaper-stock", "POST", {"perPack": 0, "packs": 1, "alertDays": 3}, token)[0], 400)
-        self.assertEqual(self.request("/api/diaper-stock", "POST", {"perPack": 60, "packs": 1.5, "alertDays": 30}, token)[0], 400)
-        body = self.request("/api/diaper-stock", "POST", {"perPack": 60, "packs": 1.5, "loose": 4, "alertDays": 3}, token)[1]
-        stock = body["settings"]["diaperStock"]
-        self.assertEqual((stock["count"], stock["perPack"], stock["alertDays"]), (94, 60, 3))
-        # Two diaper changes later, buying 2 packs adds 120 to what is left.
-        later = (datetime.strptime(stock["at"], "%Y-%m-%dT%H:%M") + timedelta(minutes=1)).isoformat(timespec="minutes")
+        post = lambda body: self.request("/api/stock", "POST", body, token)
+        self.assertEqual(post({"action": "add", "name": "", "count": 1})[0], 400)
+        self.assertEqual(post({"action": "use", "id": "nope"})[0], 404)
+        diaper = post({"action": "add", "name": "기저귀", "count": 30})[1]["settings"]["stock"][0]
+        self.assertEqual((diaper["name"], diaper["count"], diaper["unit"]), ("기저귀", 30, "개"))
+        self.assertEqual(post({"action": "add", "name": "기저귀", "count": 1})[0], 409)
+        formula = post({"action": "add", "name": "분유", "count": 2, "unit": "통"})[1]["settings"]["stock"][1]
+        # 분유 goes down by hand; 기저귀 only with diaper records.
+        self.assertEqual(post({"action": "use", "id": formula["id"]})[1]["settings"]["stock"][1]["count"], 1)
+        self.assertEqual(post({"action": "use", "id": diaper["id"]})[0], 400)
+        later = (datetime.strptime(diaper["at"], "%Y-%m-%dT%H:%M") + timedelta(minutes=1)).isoformat(timespec="minutes")
         for i in range(2):
             self.request(f"/api/items/records/d{i}", "PUT", {"id": f"d{i}", "type": "diaper", "date": later, "category": "소변"}, token)
         with patch("server.local_now", lambda: later + ":30"):
-            body = self.request("/api/diaper-stock", "POST", {"add": 2}, token)[1]
-        self.assertEqual(body["settings"]["diaperStock"]["count"], 92 + 120)
-        self.assertEqual(self.request("/api/diaper-stock", "POST", {"add": 0}, token)[0], 400)
-        self.assertIsNone(self.request("/api/diaper-stock", "POST", {"off": True}, token)[1]["settings"]["diaperStock"])
+            stock = post({"action": "buy", "id": diaper["id"], "add": 60})[1]["settings"]["stock"]
+        self.assertEqual(stock[0]["count"], 28 + 60)
+        self.assertEqual(post({"action": "set", "id": diaper["id"], "count": 50})[1]["settings"]["stock"][0]["count"], 50)
+        self.assertEqual(post({"action": "buy", "id": diaper["id"], "add": 0})[0], 400)
+        self.assertEqual(len(post({"action": "remove", "id": formula["id"]})[1]["settings"]["stock"]), 1)
+
+    def test_an_earlier_diaper_stock_shows_as_the_stock_list_item(self):
+        token = self.login(1)
+        with self.store.connect() as db:
+            self.store.put_setting(db, "stock", None)
+            self.store.put_setting(db, "diaper_stock", {"perPack": 60, "count": 70, "at": "2026-11-21T09:00", "alertDays": 5})
+        stock = self.request("/api/data", token=token)[1]["settings"]["stock"]
+        self.assertEqual([(x["id"], x["name"], x["count"], x["alertDays"]) for x in stock], [("diaper", "기저귀", 70, 5)])
+        # The first change moves it into the list for good.
+        stock = self.request("/api/stock", "POST", {"action": "set", "id": "diaper", "count": 65}, token)[1]["settings"]["stock"]
+        self.assertEqual([(x["name"], x["count"]) for x in stock], [("기저귀", 65)])
+        with self.store.connect() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM family_settings WHERE key='diaper_stock'").fetchone())
+            self.store.put_setting(db, "stock", None)
 
     def test_handoff_note_and_shared_breastfeeding_timer(self):
         import server as server_module

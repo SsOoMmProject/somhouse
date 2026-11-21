@@ -16,7 +16,12 @@ test('the stats tab shows usual feeding times and turns the Calendar alarm on an
  await b.settle();
  const open=async page=>{b.context.location.hash='#'+page;b.events.get('hashchange')();await b.settle();};
  await open('stats');
+ // Folded to one line until opened.
  let html=b.get('#content').innerHTML;
+ assert.match(html,/<strong>⏰ 알람<\/strong><span class="caption">밥 꺼짐<\/span>/);
+ assert.doesNotMatch(html,/data-alarm-kind/);
+ await b.events.get('click')({target:{closest:sel=>sel==='a'?null:{dataset:{alarmOpen:'1'}}}});
+ html=b.get('#content').innerHTML;
  assert.match(html,/🍼 밥 알람/);
  assert.match(html,/<span class="badge">03:15 <small>6일<\/small><\/span> <span class="badge">14:05 <small>7일<\/small><\/span>/);
  assert.match(html,/꺼져 있어요/);
@@ -55,6 +60,8 @@ test('the nap alarm shows the usual wake window and switches on with its own kin
   return base(url,options);
  };
  await b.settle();b.context.location.hash='#stats';b.events.get('hashchange')();await b.settle();
+ assert.match(b.get('#content').innerHTML,/밥 꺼짐 · 낮잠 꺼짐/);
+ await b.events.get('click')({target:{closest:sel=>sel==='a'?null:{dataset:{alarmOpen:'1'}}}});
  assert.match(b.get('#content').innerHTML,/낮에 깬 뒤 다시 잠든 기록이 3번 더 있으면/);
  await b.events.get('click')({target:{closest:sel=>sel==='a'?null:{dataset:{alarmKind:'nap',alarm:'on'}}}});
  assert.deepEqual(sent,[{kind:'nap',enabled:true}]);
