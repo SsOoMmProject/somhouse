@@ -186,7 +186,7 @@ function item(x,k,compact=false,timeOnly=false){
  // Only when the Calendar title would actually change; while waiting, a label instead of a second button.
  const gs=shared?.googleStatus,writeback=compact||k!=='records'?'':(gs?.writeback_pending||[]).includes(x.id)?'<span class="badge gcal done-toggle">📆 캘린더 반영 중</span>':(gs?.writeback_ready||[]).includes(x.id)?`<button class="secondary done-toggle" data-writeback="${esc(x.id)}">캘린더에도 반영</button>`:'';
  const toggle=k==='shopping'&&!compact?`<button class="${x.done==='yes'?'plain':'secondary'} done-toggle" data-action="toggle" data-key="${k}" data-id="${esc(x.id)}">${x.done==='yes'?'다시 사기':'✓ 샀어요'}</button>`:'';
- const body=`<strong>${desc(x,k)}</strong> ${badges}<p>${esc(when)}${x.place?` · 📍 ${esc(x.place)}`:''}${x.memo?'<br>'+esc(x.memo):''}</p>${x.url?link(x.url):''}`;
+ const body=`<strong>${desc(x,k)}</strong> ${badges}${k==='shopping'?shoppingStockBadge(x):''}<p>${esc(when)}${x.place?` · 📍 ${esc(x.place)}`:''}${x.memo?'<br>'+esc(x.memo):''}</p>${x.url?link(x.url):''}`;
  return `<div class="item${compact?'':' tappable'}${k==='shopping'&&x.done==='yes'?' done':''}"${compact?'':` data-action="edit" data-key="${k}" data-id="${esc(x.id)}" role="button" tabindex="0" aria-label="눌러서 수정"`}>${toggle}${writeback}${body}</div>`;
 }
 // A mirrored Google Calendar event: read-only, opened in Google to edit.
@@ -394,8 +394,12 @@ function patternView(){
  return `<section class="card pattern"><h2>최근 7일 하루 흐름</h2><p class="caption"><span class="lg sleep"></span>수면 <span class="lg feed"></span>수유 <span class="lg diaper"></span>기저귀 · 표시를 누르면 그 기록을 열어요. 자정을 넘긴 수면은 두 날에 나눠 그려요.</p><div class="pt-rows">${rows}</div><div class="pt-axis">${axis}</div></section>`;
 }
 // Calendar alarms (computed on the Mac): usual feeding times, the usual daytime wake window, and their switches.
+// Folded to one line until opened (kept open across refreshes).
+const alarmUi={open:false};
 function alarmView(){
  const alarm=shared?.googleStatus?.feeding_alarm,nap=shared?.googleStatus?.nap_alarm;if(!alarm||shared.readOnly)return '';
+ const head=`<button type="button" class="alarm-head" data-alarm-open="1" aria-expanded="${alarmUi.open}"><strong>⏰ 알람</strong><span class="caption">밥 ${alarm.enabled?'켜짐':'꺼짐'}${nap?` · 낮잠 ${nap.enabled?'켜짐':'꺼짐'}`:''}</span><span aria-hidden="true">${alarmUi.open?'▾':'▸'}</span></button>`;
+ if(!alarmUi.open)return `<section class="card alarm-card folded">${head}</section>`;
  const slots=Array.isArray(alarm.slots)?alarm.slots:[];
  const times=slots.length?`<div class="alarm-times">${slots.map(x=>`<span class="badge">${esc(x.time)} <small>${esc(x.days)}일</small></span>`).join(' ')}</div>`
   :'<p class="caption">아직 뚜렷한 수유 시간대가 없어요. 최근 7일 중 3일 이상, 비슷한 시간에 먹은 기록이 쌓이면 보여요.</p>';
@@ -408,7 +412,7 @@ function alarmView(){
    :`최근 7일 낮에는 깬 뒤 보통 <strong>${esc(usual)}</strong> 지나 잠들었어요 (${esc(nap.samples)}번).${nap.enabled?nap.next?` 다음 알람: <strong>${esc(nap.next.replace('T',' '))}</strong>`:' 깨면 알람을 맞춰요.':''}`;
   napHtml=`<h3>😴 낮잠 알람</h3><p>${napState}${nap.enabled?'':' 꺼져 있어요.'}</p><p class="caption">낮(7시~20시)에 깬 뒤 평소만큼 지나도 수면 기록이 없으면 알림이 와요. 수면을 기록하면 사라져요.</p>${toggle('nap',nap.enabled,'낮잠 알람')}`;
  }
- return `<section class="card alarm-card"><h2>⏰ 알람</h2><h3>🍼 밥 알람</h3><p class="caption">최근 7일 동안 자주 먹은 시간대예요 (숫자는 그 시간대에 먹은 날 수).</p>${times}<p>${state}</p><p class="caption">평소 시간이 30분 지나도록 그 전후 수유 기록이 없으면 알림이 와요. 수유를 기록하면 알림은 다음 시간대로 옮겨져요.</p>${toggle('feeding',alarm.enabled,'밥 알람')}${napHtml}<p class="caption">알림은 Google 캘린더 ‘솜하우스 수유’에서 와요. 휴대폰 Google 캘린더 앱에서 이 캘린더가 보이고 알림이 켜져 있어야 해요.</p></section>`;
+ return `<section class="card alarm-card">${head}<h3>🍼 밥 알람</h3><p class="caption">최근 7일 동안 자주 먹은 시간대예요 (숫자는 그 시간대에 먹은 날 수).</p>${times}<p>${state}</p><p class="caption">평소 시간이 30분 지나도록 그 전후 수유 기록이 없으면 알림이 와요. 수유를 기록하면 알림은 다음 시간대로 옮겨져요.</p>${toggle('feeding',alarm.enabled,'밥 알람')}${napHtml}<p class="caption">알림은 Google 캘린더 ‘솜하우스 수유’에서 와요. 휴대폰 Google 캘린더 앱에서 이 캘린더가 보이고 알림이 켜져 있어야 해요.</p></section>`;
 }
 async function alarmSwitch(kind,on){
  if(busy||!shared?.token||shared.readOnly)return;
@@ -487,8 +491,9 @@ function listView(k){
 }
 function shoppingItems(items){
  if(!items.length)return '';
- const pending=shoppingOrder(items.filter(x=>x.done!=='yes')),done=items.filter(x=>x.done==='yes');
- return `${pending.map(x=>item(x,'shopping')).join('')||'<p class="empty">살 것이 없어요.</p>'}${done.length?`<details class="past"><summary>산 것 ${done.length}개</summary>${done.map(x=>item(x,'shopping')).join('')}</details>`:''}`;
+ // A bought 기저귀 item that is being counted as stock (A안) stays in view above the folded bought list.
+ const counting=shoppingStock()?.latest.id,pending=shoppingOrder(items.filter(x=>x.done!=='yes')),done=items.filter(x=>x.done==='yes'&&x.id!==counting),stocked=items.filter(x=>x.done==='yes'&&x.id===counting);
+ return `${pending.map(x=>item(x,'shopping')).join('')||'<p class="empty">살 것이 없어요.</p>'}${stocked.length?`<p class="caption">재고로 세는 중</p>${stocked.map(x=>item(x,'shopping')).join('')}`:''}${done.length?`<details class="past"><summary>산 것 ${done.length}개</summary>${done.map(x=>item(x,'shopping')).join('')}</details>`:''}`;
 }
 function scheduleItems(items){
  const now=Somhouse.localDateTime(),upcoming=items.filter(x=>x.date>=now).reverse(),past=items.filter(x=>x.date<now);
@@ -839,6 +844,7 @@ document.addEventListener('click',async e=>{
  if(b.dataset.reset){filters[b.dataset.reset]={};render();}
  if(busy||mode!=='shared'||!sharedReady)return;
  if(await aiHelpClick(b)||await insightsClick(b))return;
+ if(b.dataset.alarmOpen){alarmUi.open=!alarmUi.open;render();return;}
  if(['on','off'].includes(b.dataset.alarm)&&['feeding','nap'].includes(b.dataset.alarmKind)){await alarmSwitch(b.dataset.alarmKind,b.dataset.alarm==='on');return;}
  if(b.dataset.step){
   const input=document.querySelector('#fields input[name="amount"]'),category=document.querySelector('#fields select[name="category"]')?.value,unit=units[category];

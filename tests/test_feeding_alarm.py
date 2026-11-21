@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from feeding_alarm import FeedingAlarm, feeding_times, stock_plan, next_alarm, next_nap, sleeps_of, usual_times, usual_wake, wake_windows
+from feeding_alarm import FeedingAlarm, diaper_source, feeding_times, stock_plan, next_alarm, next_nap, sleeps_of, usual_times, usual_wake, wake_windows
 from google_records import GoogleError, GoogleRecords, encode
 from server import Store
 
@@ -322,6 +322,30 @@ class CalendarStock(unittest.TestCase):
             db.execute("INSERT INTO items VALUES ('shopping','mine',?)", (encode({"id": "mine", "title": "하기스 기저귀 2단계", "quantity": "2", "done": "no"}),))
         self.sync(NOW.replace(minute=4))
         self.assertEqual([x["id"] for x in self.shopping()], ["mine"])
+
+
+class DiaperSources(unittest.TestCase):
+    """Stock is being tried two ways; the Mac follows whichever holds a 기저귀 count."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.store = Store(self.temp.name)
+
+    def test_stock_list_then_earlier_setting_then_bought_shopping_items(self):
+        with self.store.connect() as db:
+            self.assertIsNone(diaper_source(db))
+            for item_id, body in (("a", {"title": "기저귀", "quantity": "1", "done": "yes", "stockCount": "60", "stockAt": "2026-11-18T09:00"}),
+                                  ("b", {"title": "하기스 기저귀", "quantity": "1", "done": "no", "stockCount": "40", "stockAt": "2026-11-20T09:00"}),
+                                  ("c", {"title": "기저귀", "quantity": "1", "done": "yes"}),
+                                  ("d", {"title": "물티슈", "quantity": "1", "done": "yes", "stockCount": "5", "stockAt": "2026-11-20T09:00"})):
+                db.execute("INSERT INTO items VALUES ('shopping',?,?)", (item_id, encode({"id": item_id, **body})))
+            self.assertEqual(diaper_source(db), {"count": 100, "at": "2026-11-18T09:00", "alertDays": 3})
+            self.store.put_setting(db, "diaper_stock", {"count": 70, "at": "2026-11-19T09:00", "alertDays": 5})
+            self.assertEqual(diaper_source(db), {"count": 70, "at": "2026-11-19T09:00", "alertDays": 5})
+            self.store.put_setting(db, "stock", [{"id": "x", "name": "분유", "count": 2, "at": "2026-11-19T09:00"},
+                                                 {"id": "y", "name": "기저귀", "count": 30, "at": "2026-11-21T09:00", "alertDays": 2}])
+            self.assertEqual(diaper_source(db), {"count": 30, "at": "2026-11-21T09:00", "alertDays": 2})
 
 
 if __name__ == "__main__":

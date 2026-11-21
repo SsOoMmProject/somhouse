@@ -25,7 +25,7 @@ from ai import AIError, Assistants, parse_question, summarize_records, SCOPES
 from google_records import (GoogleAPI, GoogleError, GoogleRecords, SCHEMA as GOOGLE_SCHEMA, SCOPES as GOOGLE_SCOPES,
                             load_config as load_google_config, read_config as read_google_config)
 from calendar_records import FEEDING_KINDS, SLEEP_KINDS, SCHEMA as CALENDAR_SCHEMA, WritebackRefused, load_aliases, relearn
-from feeding_alarm import SCHEMA as ALARM_SCHEMA, setting_value as alarm_setting, stock_plan, stock_setting
+from feeding_alarm import SCHEMA as ALARM_SCHEMA, STOCK_ITEM, setting_value as alarm_setting, stock_plan, stock_setting
 from shopping_records import SCHEMA as SHOPPING_SCHEMA
 from google_delivery import SCHEMA as DELIVERY_SCHEMA
 from holidays import HolidayFeed, SCHEMA as HOLIDAY_SCHEMA, listing as holiday_listing
@@ -208,11 +208,16 @@ class Store:
     @staticmethod
     def settings(db):
         values = {key: json.loads(value) for key, value in db.execute(
-            "SELECT key,value FROM family_settings WHERE key IN ('children','handoff','timer','feeding_alarm','nap_alarm','diaper_stock')")}
+            "SELECT key,value FROM family_settings WHERE key IN ('children','handoff','timer','feeding_alarm','nap_alarm','diaper_stock','stock')")}
+        # A diaper stock set up before the stock list shows as its 기저귀 item until the list is first changed.
+        legacy, stock = values.get("diaper_stock"), values.get("stock")
+        if stock is None and isinstance(legacy, dict) and isinstance(legacy.get("count"), int):
+            stock = [{"id": "diaper", "name": STOCK_ITEM, "unit": "개", "count": legacy["count"], "at": legacy.get("at", ""),
+                      "alertDays": legacy.get("alertDays", 3), "low": 0}]
         return {"children": values.get("children", []), "handoff": values.get("handoff"), "timer": values.get("timer"),
                 "feedingAlarm": bool((values.get("feeding_alarm") or {}).get("enabled")),
                 "napAlarm": bool((values.get("nap_alarm") or {}).get("enabled")),
-                "diaperStock": values.get("diaper_stock")}
+                "stock": stock or []}
 
     @staticmethod
     def put_setting(db, key, value):
@@ -844,29 +849,49 @@ class Handler(BaseHTTPRequestHandler):
         return {"data": store.state(db), "settings": store.settings(db)}
 
     def stock_request(self, db, store):
-        """Diapers on hand: set it up (pack size, packs and loose ones left, days ahead to remind), add bought
-        packs, or turn it off. Every diaper change recorded after it was set counts as one used."""
-        body, current, now = self.body(1024), stock_setting(db), local_now()[:16]
-        number = lambda value, low, high: isinstance(value, (int, float)) and not isinstance(value, bool) and low <= value <= high
-        if body.get("off") is True:
-            store.put_setting(db, "diaper_stock", None)
-        elif "add" in body:
-            if current is None:
-                raise Problem(409, "먼저 남은 기저귀를 입력해 주세요.")
-            if not number(body["add"], 0.5, 50):
-                raise Problem(400, "산 팩 수를 0.5~50 사이로 입력해 주세요.")
-            items = [json.loads(row[0]) for row in db.execute("SELECT body FROM items WHERE kind='records'")]
-            left = stock_plan(current, items, datetime.strptime(now, "%Y-%m-%dT%H:%M"))["left"]
-            store.put_setting(db, "diaper_stock", {**current, "count": left + round(body["add"] * current["perPack"]),
-                                                   "at": now, "listed": ""})
+        """The stock list: things at home and how many. An item named 기저귀 also loses one for every diaper change
+        recorded after its count was set (`at`); other items go down with "use". Actions: add, set, use, buy, remove."""
+        body, now = self.body(2048), local_now()[:16]
+        stock = [dict(x) for x in store.settings(db)["stock"]]
+        action, found = body.get("action"), next((x for x in stock if x.get("id") == body.get("id")), None)
+        whole = lambda value, low, high: isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+        items = None
+
+        def left(item):
+            nonlocal items
+            if STOCK_ITEM not in item["name"]:
+                return item["count"]
+            if items is None:
+                items = [json.loads(row[0]) for row in db.execute("SELECT body FROM items WHERE kind='records'")]
+            return stock_plan(item, items, datetime.strptime(now, "%Y-%m-%dT%H:%M"))["left"]
+
+        if action == "add":
+            name, unit = str(body.get("name", "")).strip(), str(body.get("unit") or "개").strip()
+            if not 0 < len(name) <= 30 or not 0 < len(unit) <= 5 or not whole(body.get("count"), 0, 10000):
+                raise Problem(400, "이름(30자 이내), 수량(0~10000), 단위를 확인해 주세요.")
+            if len(stock) >= 30:
+                raise Problem(400, "재고는 30개까지 둘 수 있어요.")
+            if any(x["name"] == name for x in stock):
+                raise Problem(409, f"‘{name}’은 이미 있어요. 수량을 고쳐 주세요.")
+            stock.append({"id": secrets.token_hex(6), "name": name, "unit": unit, "count": body["count"], "at": now,
+                          "alertDays": 3, "low": 1})
+        elif found is None:
+            raise Problem(404, "재고 항목을 찾지 못했어요. 새로고침해 주세요.")
+        elif action == "remove":
+            stock.remove(found)
+        elif action == "set" and whole(body.get("count"), 0, 10000):
+            found.update(count=body["count"], at=now)
+        elif action == "buy" and whole(body.get("add"), 1, 10000):
+            found.update(count=left(found) + body["add"], at=now)
+        elif action == "use" and STOCK_ITEM not in found["name"]:
+            found.update(count=max(0, found["count"] - 1), at=now)
         else:
-            per_pack, packs, loose, days = (body.get(k) for k in ("perPack", "packs", "loose", "alertDays"))
-            loose = 0 if loose is None else loose
-            if not (isinstance(per_pack, int) and 1 <= per_pack <= 300 and number(packs, 0, 50)
-                    and isinstance(loose, int) and 0 <= loose <= 1000 and isinstance(days, int) and 1 <= days <= 14):
-                raise Problem(400, "팩당 매수(1~300), 남은 팩(0~50), 낱개(0~1000), 알림(1~14일 전)을 확인해 주세요.")
-            store.put_setting(db, "diaper_stock", {"perPack": per_pack, "count": round(packs * per_pack) + loose,
-                                                   "at": now, "alertDays": days, "listed": ""})
+            raise Problem(400, "재고 변경 내용을 확인해 주세요.")
+        store.put_setting(db, "stock", stock)
+        store.put_setting(db, "diaper_stock", None)
+        if action in ("set", "buy") and STOCK_ITEM in found["name"]:
+            # A new diaper count starts a new reminder; the earlier one may add 기저귀 to the list again later.
+            db.execute("DELETE FROM family_settings WHERE key='stock_listed'")
         return {"data": store.state(db), "settings": store.settings(db)}
 
     def timer_request(self, db, store, google, keep, username):
@@ -1084,7 +1109,7 @@ class Handler(BaseHTTPRequestHandler):
                     result = {"data": store.state(db), "settings": store.settings(db), "moved": len(moved)}
                 elif path == "/api/handoff" and self.command == "POST":
                     result = self.handoff_request(db, store, username)
-                elif path == "/api/diaper-stock" and self.command == "POST":
+                elif path == "/api/stock" and self.command == "POST":
                     result = self.stock_request(db, store)
                     if google is not None:
                         result["sources"] = google.sources()
@@ -1204,7 +1229,7 @@ class Handler(BaseHTTPRequestHandler):
                     and (store.directory / "google-records.json").exists()):
                 result["google_status"] = {"auth_state": "configuration_error", "services": {}, "review": 0, "errors": []}
             sync = google or keep
-            if sync is not None and (path.startswith("/api/items/") or path in ("/api/review", "/api/confirm", "/api/calendar-writeback", "/api/settings", "/api/timer", "/api/feeding-alarm", "/api/diaper-stock")):
+            if sync is not None and (path.startswith("/api/items/") or path in ("/api/review", "/api/confirm", "/api/calendar-writeback", "/api/settings", "/api/timer", "/api/feeding-alarm", "/api/stock")):
                 sync.wake.set()
             self.respond(200, result)
         except (Problem, AIError) as error:

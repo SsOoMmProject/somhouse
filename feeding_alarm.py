@@ -97,7 +97,28 @@ def next_alarm(feedings, now, slots):
     return None, None
 
 
+def diaper_source(db):
+    """The diaper count to follow, as {count, at, alertDays}, from (being tried side by side):
+    B) the stock list's item named 기저귀, or the earlier diaper-only setting; A) shopping items named 기저귀 that
+    were counted when bought (stockCount, stockAt): their total since the first of them."""
+    settings = {key: json.loads(value) for key, value in db.execute(
+        "SELECT key,value FROM family_settings WHERE key IN ('stock','diaper_stock')")}
+    for item in settings.get("stock") or []:
+        if (isinstance(item, dict) and STOCK_ITEM in str(item.get("name", "")) and isinstance(item.get("count"), int)
+                and stamp(item.get("at"))):
+            return {"count": item["count"], "at": item["at"], "alertDays": item.get("alertDays", 3)}
+    legacy = settings.get("diaper_stock")
+    if isinstance(legacy, dict) and isinstance(legacy.get("count"), int) and stamp(legacy.get("at")):
+        return {"count": legacy["count"], "at": legacy["at"], "alertDays": legacy.get("alertDays", 3)}
+    bought = [x for x in (json.loads(row[0]) for row in db.execute("SELECT body FROM items WHERE kind='shopping'"))
+              if STOCK_ITEM in str(x.get("title", "")) and str(x.get("stockCount", "")).isdigit() and stamp(x.get("stockAt"))]
+    if bought:
+        return {"count": sum(int(x["stockCount"]) for x in bought), "at": min(x["stockAt"] for x in bought), "alertDays": 3}
+    return None
+
+
 def stock_setting(db):
+    """The earlier diaper-only setting (kept readable for families who set it up before the stock list)."""
     row = db.execute("SELECT value FROM family_settings WHERE key='diaper_stock'").fetchone()
     return json.loads(row[0]) if row else None
 
@@ -328,8 +349,10 @@ class StockAlarm(CalendarAlarm):
 
     def plan(self, db, now=None):
         now = now or local_now()
-        setting = stock_setting(db)
+        setting = diaper_source(db)
+        listed = db.execute("SELECT value FROM family_settings WHERE key='stock_listed'").fetchone()
         plan = stock_plan(setting, records_of(db), now) or {"left": None, "daily": None, "runout": None, "alarm": None}
+        plan["listed"] = json.loads(listed[0]) if listed else ""
         plan.update(setting=setting, now=now, key=f"{(setting or {}).get('at', '')}|{plan['alarm'].isoformat() if plan['alarm'] else ''}")
         return plan
 
@@ -344,7 +367,7 @@ class StockAlarm(CalendarAlarm):
         with self.store.connect() as db:
             plan = self.plan(db)
         setting, alarm = plan["setting"], plan["alarm"]
-        if not alarm or plan["now"] < alarm or setting.get("listed") == plan["key"]:
+        if not alarm or plan["now"] < alarm or plan["listed"] == plan["key"]:
             return
         with self.store.lock, self.store.connect() as db:
             pending = any(item.get("done") != "yes" and STOCK_ITEM in str(item.get("title", ""))
@@ -354,8 +377,8 @@ class StockAlarm(CalendarAlarm):
                         "memo": f"솜하우스 재고 알림 · 남은 기저귀 약 {plan['left']}개"}
                 db.execute("INSERT INTO items VALUES ('shopping',?,?)", (item["id"], json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":"))))
                 self.calendar.records.queue(db, "shopping", item["id"], item, "save")
-            db.execute("UPDATE family_settings SET value=? WHERE key='diaper_stock'",
-                       (json.dumps({**setting, "listed": plan["key"]}, ensure_ascii=False, sort_keys=True, separators=(",", ":")),))
+            db.execute("INSERT INTO family_settings VALUES('stock_listed',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                       (json.dumps(plan["key"], ensure_ascii=False),))
 
     def status(self, db):
         plan = self.plan(db)
