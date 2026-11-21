@@ -45,7 +45,13 @@ DEFAULT_DATA = Path.home() / "Library/Application Support/Somhouse"
 DEFAULT_RETURN = "https://ssoommproject.github.io/somhouse/"
 KINDS = ("records", "schedule", "shopping")
 STATIC = {"index.html", "app.js", "ai-direct.js", "ai-help.js", "insights.js", "service.js", "shared.js", "config.js", "style.css",
-          "manifest.webmanifest", "icon-192.png", "icon-512.png", "about.html", "privacy.html", "terms.html"}
+          "manifest.webmanifest", "icon-192.png", "icon-512.png", "about.html", "privacy.html", "terms.html", "features.js"}
+# Optional feature files; they may or may not exist in this checkout (see features.js).
+OPTIONAL_STATIC = re.compile(r"(?:features/[a-z0-9-]{1,40}\.js|sw\.js)")
+# Family-shared items of optional features, one row each so two phones cannot overwrite each other.
+FEATURE_STORES = ("profile", "privacy", "meds", "growth", "vaccines")
+MAX_FEATURE_ITEMS = 3000
+MAX_FEATURE_ITEM = 4096
 ITERATIONS = 600_000
 MAX_BODY = 4 * 1024 * 1024
 MIN_PASSWORD_LENGTH = 12
@@ -95,6 +101,28 @@ def validate_data(data):
         for item in data[kind]:
             validate_item(kind, item)
     return data
+
+
+def valid_feature_item(item):
+    """One optional-feature item: a JSON object with a short id, small enough to keep many of them."""
+    if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not 0 < len(item["id"]) <= 200:
+        raise Problem(400, "기능 항목을 확인해 주세요.")
+    if len(encode(item).encode()) > MAX_FEATURE_ITEM:
+        raise Problem(400, "기능 항목이 너무 커요.")
+    return item
+
+
+def validate_feature_backup(value):
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or any(k not in FEATURE_STORES or not isinstance(v, list) for k, v in value.items()):
+        raise Problem(400, "백업의 기능 항목을 확인해 주세요.")
+    for entries in value.values():
+        if len(entries) > MAX_FEATURE_ITEMS:
+            raise Problem(400, "백업의 기능 항목이 너무 많아요.")
+        for entry in entries:
+            valid_feature_item(entry)
+    return value
 
 
 def fingerprint(kind, item):
@@ -177,6 +205,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS items(kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(kind,id));
                 CREATE TABLE IF NOT EXISTS imports(kind TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY(kind,fingerprint));
                 CREATE TABLE IF NOT EXISTS family_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS feature_items(feature TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(feature,id));
             """ + chatgpt_plan.SCHEMA + KEEP_SCHEMA + GOOGLE_SCHEMA + CALENDAR_SCHEMA + ALARM_SCHEMA + SHOPPING_SCHEMA + DELIVERY_SCHEMA + HOLIDAY_SCHEMA)
             for table, column, definition in (
                 ("google_voice_receipts", "captured", "TEXT"),
@@ -214,10 +243,22 @@ class Store:
         if stock is None and isinstance(legacy, dict) and isinstance(legacy.get("count"), int):
             stock = [{"id": "diaper", "name": STOCK_ITEM, "unit": "개", "count": legacy["count"], "at": legacy.get("at", ""),
                       "alertDays": legacy.get("alertDays", 3), "low": 0}]
-        return {"children": values.get("children", []), "handoff": values.get("handoff"), "timer": values.get("timer"),
-                "feedingAlarm": bool((values.get("feeding_alarm") or {}).get("enabled")),
-                "napAlarm": bool((values.get("nap_alarm") or {}).get("enabled")),
-                "stock": stock or []}
+        result = {"children": values.get("children", []), "handoff": values.get("handoff"), "timer": values.get("timer"),
+                  "feedingAlarm": bool((values.get("feeding_alarm") or {}).get("enabled")),
+                  "napAlarm": bool((values.get("nap_alarm") or {}).get("enabled")),
+                  "stock": stock or []}
+        features = Store.feature_items(db)
+        if features:
+            result["features"] = features
+        return result
+
+    @staticmethod
+    def feature_items(db):
+        """Items of optional features by feature, in the order they were first saved."""
+        found = {}
+        for feature, body in db.execute("SELECT feature,body FROM feature_items ORDER BY rowid"):
+            found.setdefault(feature, []).append(json.loads(body))
+        return found
 
     @staticmethod
     def put_setting(db, key, value):
@@ -239,7 +280,11 @@ class Store:
         path = folder / (("auto-" if automatic else "") + time.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(6) + ".json")
         with path.open("x", encoding="utf-8") as file:
             path.chmod(0o600)
-            file.write(encode(self.state(db)))
+            backup = self.state(db)
+            features = self.feature_items(db)
+            if features:
+                backup["feature_items"] = features
+            file.write(encode(backup))
             file.flush()
             os.fsync(file.fileno())
         if automatic:
@@ -316,6 +361,7 @@ class Store:
     def merge(self, db, data, restore=False):
         # Validate the entire upload before any snapshot or write.
         validate_data(data)
+        features = validate_feature_backup(data.get("feature_items")) if restore else {}
         self.snapshot(db)
         existing = self.state(db)
         seen = {k: {fingerprint(k, x) for x in existing[k]} for k in KINDS}
@@ -334,6 +380,16 @@ class Store:
                     seen[kind].add(fp)
                     added += 1
                 db.execute("INSERT OR IGNORE INTO imports VALUES(?,?)", (kind, fp))
+        # Only an administrator's restore brings feature items back; a browser's merge never writes them.
+        if restore:
+            for feature, entries in features.items():
+                for entry in entries:
+                    before = db.total_changes
+                    db.execute("INSERT OR IGNORE INTO feature_items VALUES(?,?,?)", (feature, entry["id"], encode(entry)))
+                    if db.total_changes > before:
+                        added += 1
+                    else:
+                        skipped += 1
         return {"data": self.state(db), "added": added, "skipped": skipped}
 
 
@@ -848,6 +904,26 @@ class Handler(BaseHTTPRequestHandler):
         store.put_setting(db, "handoff", {"text": text, "by": username, "at": local_now()[:16]} if text else None)
         return {"data": store.state(db), "settings": store.settings(db)}
 
+    def feature_request(self, db, store):
+        """Save or remove one item of an optional feature (see features.js); a backup is taken first."""
+        body = self.body(16 * 1024)
+        feature, action = body.get("feature"), body.get("action")
+        if feature not in FEATURE_STORES or action not in ("put", "delete"):
+            raise Problem(400, "기능 요청을 확인해 주세요.")
+        item = valid_feature_item(body.get("item"))
+        if action == "put":
+            exists = db.execute("SELECT 1 FROM feature_items WHERE feature=? AND id=?", (feature, item["id"])).fetchone()
+            count = db.execute("SELECT COUNT(*) FROM feature_items WHERE feature=?", (feature,)).fetchone()[0]
+            if not exists and count >= MAX_FEATURE_ITEMS:
+                raise Problem(409, "이 기능에 저장할 수 있는 항목 수를 넘었어요.")
+            store.snapshot(db)
+            db.execute("INSERT INTO feature_items VALUES(?,?,?) ON CONFLICT(feature,id) DO UPDATE SET body=excluded.body",
+                       (feature, item["id"], encode(item)))
+        else:
+            store.snapshot(db)
+            db.execute("DELETE FROM feature_items WHERE feature=? AND id=?", (feature, item["id"]))
+        return {"data": store.state(db), "settings": store.settings(db)}
+
     def stock_request(self, db, store):
         """The stock list: things at home and how many. An item named 기저귀 also loses one for every diaper change
         recorded after its count was set (`at`); other items go down with "use". Actions: add, set, use, buy, remove."""
@@ -998,7 +1074,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not path.startswith("/api/"):
                 name = "index.html" if path == "/" else path.removeprefix("/")
-                if self.command != "GET" or name not in STATIC:
+                optional = OPTIONAL_STATIC.fullmatch(name) is not None and (ROOT / name).is_file()
+                if self.command != "GET" or (name not in STATIC and not optional):
                     raise Problem(404, "페이지를 찾을 수 없습니다.")
                 self.respond(200, (ROOT / name).read_bytes(), (mimetypes.guess_type(name)[0] or "text/plain") + "; charset=utf-8")
                 return
@@ -1130,6 +1207,8 @@ class Handler(BaseHTTPRequestHandler):
                         result["google_status"] = google.status(db)
                 elif path == "/api/timer" and self.command == "POST":
                     result = self.timer_request(db, store, google, keep, username)
+                elif path == "/api/feature-data" and self.command == "POST":
+                    result = self.feature_request(db, store)
                 elif path == "/api/merge" and self.command == "POST":
                     # Old device records (before login existed) belong to the original family only.
                     if not family.home:
