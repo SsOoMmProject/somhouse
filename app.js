@@ -483,6 +483,7 @@ function recordGroups(items){
  return groups+(hidden?`<button class="secondary more" data-more-days="7">이전 기록 더 보기 (${hidden}일 남음)</button>`:'');
 }
 function listView(k){
+ const featurePage=featureHost.page(k);if(featurePage)return featurePage.view();
  const names={records:'기록을 누르면 고치거나 지울 수 있어요.',schedule:'병원 예약과 가족 일정을 관리해요. 일정을 누르면 고치거나 지울 수 있어요.',shopping:'‘✓ 샀어요’로 바로 완료하고, 항목을 누르면 고치거나 지울 수 있어요. Google 음성 장보기는 관리자가 상품 규격과 가격 검색을 설정한 경우에만 가격 비교 링크를 남겨요.'};
  const items=Somhouse.filter(sorted(k),filters[k]),now=Somhouse.localDateTime();
  const head=k==='schedule'?`다가오는 ${items.filter(x=>x.date>=now).length} · 지난 ${items.filter(x=>x.date<now).length}`:k==='shopping'?`살 것 ${items.filter(x=>x.done!=='yes').length} · 산 것 ${items.filter(x=>x.done==='yes').length}`:`기록 ${items.length}개`;
@@ -797,7 +798,7 @@ function render(){
  else{dashboard.hidden=true;if(dashboardHtml){dashboard.innerHTML='';dashboardHtml='';}}
  const past=document.querySelector('details.past');if(past)schedulePastOpen=past.open;
  showGoogleStatus(true);
- $('#content').innerHTML=page==='home'?homeView():page==='stats'?statsView():page==='review'?reviewView():page==='report'?reportView():featureHost.page(page)?featureHost.page(page).view():listView(page);
+ $('#content').innerHTML=page==='home'?homeView():page==='stats'?statsView():page==='review'?reviewView():page==='report'?reportView():listView(page);
  if(page==='review'&&reviewItems().length)Promise.resolve().then(aiReviewAuto); // after this render, in the background
  connectionView();
  const form=$('#filter-form');if(form){const apply=e=>{e?.preventDefault?.();const next=Object.fromEntries(new FormData(form));if(next.from&&next.to&&next.from>next.to){alert('시작 날짜는 마지막 날짜보다 늦을 수 없어요.');return}filters[page]=next;render()};form.onsubmit=apply;form.onchange=apply;}
