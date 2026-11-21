@@ -69,7 +69,8 @@ test('a dose is saved for the whole family and shown on home', async () => {
  assert.deepEqual([saved[0].name, saved[0].dose, saved[0].every, saved[0].by], ['해열제', '3ml', '6', 'family1']);
  b.context.location.hash = '#home'; b.eval('route()');
  assert.match(b.get('#content').innerHTML, /💊 해열제/);
- assert.match(b.get('#content').innerHTML, /까지 기다려요/);
+ assert.match(b.get('#content').innerHTML, /적어 둔 간격 .*까지/);
+ assert.doesNotMatch(b.get('#content').innerHTML, /기다려|먹이세요|먹여도/);
 });
 
 test('a repeat inside the interval asks first, and no means nothing is saved', async () => {

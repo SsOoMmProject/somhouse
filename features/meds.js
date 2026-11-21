@@ -55,7 +55,7 @@
   const ago = minutes => (minutes < 1 ? '방금' : `${Somhouse.duration(minutes)} 전`);
   function statusLine(x, now) {
     const who = x.entry.by ? ` · ${esc(shortName(x.entry.by))}` : '', dose = x.entry.dose ? ` ${esc(x.entry.dose)}` : '';
-    const next = x.next ? (x.wait ? `<span class="badge warn">${esc(dayNear(x.next, now))}까지 기다려요</span>` : '<span class="badge">적어 둔 간격 지남</span>') : '';
+    const next = x.next ? (x.wait ? `<span class="badge warn">적어 둔 간격 ${esc(dayNear(x.next, now))}까지</span>` : '<span class="badge">적어 둔 간격 지남</span>') : '';
     return `<li><strong>💊 ${esc(x.entry.name)}</strong>${dose} · ${esc(ago(x.agoMinutes))}${who} ${next}</li>`;
   }
   function homeCard() {
