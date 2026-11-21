@@ -15,6 +15,8 @@ function valid(d){
 const shared=window.SomhouseShared?new window.SomhouseShared.Client():null;
 let mode=shared?.token?'shared':'login', sharedReady=false, busy=false, refreshing=false, refreshTask=null, migratedRaw, legacyWarning='', needsRender=false;
 let ai={config:null,checking:false,pending:false,selected:''}, googleStatusHtml='', dashboardHtml='', missedPolls=0, googleFooter='';
+// Optional features (features.js); with none turned on, every call below is a no-op.
+const featureHost=typeof SomhouseFeatures!=='undefined'?SomhouseFeatures:{slot:()=>'',page:()=>null,click:async()=>false,reset(){},start(){},stamp:()=>''};
 function message(text){$('#connection-status').textContent=text;}
 function accountMessage(text){
  const status=$('#account-status');
@@ -84,13 +86,13 @@ function showGoogleStatus(connected){
 }
 function showLogin(text){
  shared.clear();mode='login';sharedReady=false;data=empty();migratedRaw=undefined;
- ai={config:null,checking:false,pending:false,selected:''};aiHelpReset();reportReset();
+ ai={config:null,checking:false,pending:false,selected:''};aiHelpReset();reportReset();featureHost.reset();
  $('#ai-form').reset();$('#ai-scope-field').hidden=true;$('#ai-providers').innerHTML='';
  $('#ai-status').textContent='';aiLogView();
  for(const dialog of [$('#dialog'),$('#password-dialog'),$('#family-dialog')])if(dialog.open)dialog.close();
  accountMessage('');render();message(text);
 }
-function editingScreen(){return $('#dialog').open||$('#password-dialog').open||$('#family-dialog').open||Boolean(document.activeElement?.closest?.('#filter-form,.ai-help,.stock-form'));}
+function editingScreen(){return $('#dialog').open||$('#password-dialog').open||$('#family-dialog').open||Boolean(document.activeElement?.closest?.('#filter-form,.ai-help,.stock-form,.feature-form'));}
 async function loadFamilyData(){
  let raw, original;
  // The guest sees made-up records only; this device's old family records are never sent with a guest login.
@@ -121,11 +123,11 @@ function refreshShared(force=false){
  refreshing=true;
  refreshTask=(async()=>{
   try{
-   const reviewBefore=JSON.stringify(reviewItems()),statusBefore=JSON.stringify(shared.googleStatus);
+   const reviewBefore=JSON.stringify(reviewItems()),statusBefore=JSON.stringify(shared.googleStatus),featuresBefore=featureHost.stamp();
    const next=await loadFamilyData();
    if(shared.token!==token)return;
    if(!valid(next))throw Error('기록을 확인하지 못했어요. 다시 연결하고 있습니다.');
-   const changed=JSON.stringify(next)!==JSON.stringify(data)||(['review','home'].includes(page)&&JSON.stringify(shared.googleStatus)!==statusBefore)||(page==='review'&&JSON.stringify(reviewItems())!==reviewBefore),wasReady=sharedReady;
+   const changed=JSON.stringify(next)!==JSON.stringify(data)||(['review','home'].includes(page)&&JSON.stringify(shared.googleStatus)!==statusBefore)||(page==='review'&&JSON.stringify(reviewItems())!==reviewBefore)||featureHost.stamp()!==featuresBefore,wasReady=sharedReady;
    data=next;sharedReady=true;missedPolls=0;lastSync=Date.now();if(changed)needsRender=true;
    message(shared.readOnly?'게스트 보기예요. 실제 가족 기록이 아닌 예시 기록이에요. 입력창은 열어 볼 수 있지만 저장·수정·삭제는 되지 않아요.':'기록은 자동으로 저장되고 가족과 함께 업데이트돼요.'+legacyWarning);
    if((needsRender||!wasReady)&&(!editingScreen()||!wasReady))render();else connectionView();
@@ -212,7 +214,7 @@ function reviewView(){
 }
 
 const filters={records:{},schedule:{},shopping:{}};
-function route(){const name=location.hash.slice(1);page=Object.hasOwn(pageTitles,name)?name:'home';render()}
+function route(){const name=location.hash.slice(1);page=Object.hasOwn(pageTitles,name)||featureHost.page(name)?name:'home';render()}
 function quickButtons(){return '<div class="quick"><button class="secondary" data-add="feeding">수유 기록</button><button class="secondary" data-add="sleep">수면</button><button class="secondary" data-add="hospital">병원 방문</button><button class="secondary" data-add="schedule">일정</button><button class="secondary" data-add="shopping">구매 물품</button></div>'}
 const feedingKinds=['분유','모유','혼합','기타'],sleepKinds=['낮잠','밤잠'];
 function unconfirmed(){return data.records.filter(x=>['feeding','sleep'].includes(x.type)&&x.confirm==='category').sort((a,b)=>b.date.localeCompare(a.date));}
@@ -319,7 +321,7 @@ function nowCard(){
 function homeView(){
   const now=Somhouse.localDateTime();
   const upcoming=[...data.schedule.filter(x=>x.date>=now).map(x=>({...x,source:'web'})),...googleEvents().filter(x=>(x.allDay?x.date>=now.slice(0,10):x.date>=now)).map(x=>({...x,source:'google'}))].sort((a,b)=>a.date.localeCompare(b.date));
-  return `<h1>우리 가족의 오늘</h1><p class="intro">${esc(now.slice(0,10))} · 작은 순간을 차곡차곡 남겨요.</p>${nowCard()}${quickButtons()}${repeatButtons()}${checkBox()}
+  return `<h1>우리 가족의 오늘</h1><p class="intro">${esc(now.slice(0,10))} · 작은 순간을 차곡차곡 남겨요.</p>${nowCard()}${featureHost.slot('alert')}${quickButtons()}${repeatButtons()}${checkBox()}${featureHost.slot('home')}
     <div class="grid">${[['다가오는 일정',upcoming.slice(0,3),'schedule','예정된 일정이 없어요.'],['구매 예정',shoppingOrder(data.shopping.filter(x=>x.done!=='yes')).slice(0,3),'shopping','필요한 물품을 추가해보세요.'],['최근 육아 기록',sorted('records').slice(0,3),'records','첫 수유나 병원 방문을 기록해보세요.']].map(([title,items,k,msg])=>`<section class="card"><h2>${title}</h2>${items.length?items.map(x=>x.source==='google'?googleItem(x):item(x,k,true)).join(''):`<p class="empty">${msg}</p>`}<button class="plain" data-page="${k}">전체 보기 →</button></section>`).join('')}</div>
     <h2 class="section-head">기간별 요약</h2>${summaryCards()}<p class="caption">용량은 ‘80ml’처럼 단위가 있는 기록만, 직수는 ‘15분’처럼 분으로 적은 기록만 합산해요. 주 단위는 하루 평균도 함께 보여요.</p>${googleFooter}`;
 }
@@ -441,7 +443,7 @@ function statsView(){
  const gaps=feeds.slice(1).map((x,i)=>Somhouse.sleepMinutes({date:feeds[i].date,end:x.date})).filter(m=>m!==null&&m<=8*60);
  const count=rows.reduce((s,r)=>s+r.count,0),measured=rows.filter(r=>r.measuredCount&&Number.isFinite(r.volume)),volume=measured.reduce((s,r)=>s+r.volume,0);
  const cards=[['하루 평균 횟수',`${(count/statsDays).toFixed(1)}회`],['하루 평균 용량',measured.length?`${Math.round(volume/statsDays).toLocaleString('ko-KR')}ml`:'—'],['평균 수유 간격',gaps.length?Somhouse.duration(Math.round(gaps.reduce((s,m)=>s+m,0)/gaps.length)):'—'],[`${statsDays}일 합계`,`${count}회${measured.length?` · ${volume.toLocaleString('ko-KR')}ml`:''}`]];
- return `<h1>통계</h1><div class="actions report-link"><button type="button" class="secondary" data-page="report">🩺 소아과용 2주 요약 보기</button></div>${aiSummaryCard()}${alarmView()}${patternView()}<h2 class="section-head">수유</h2><div class="quick stats-period" aria-label="조회 기간">${periods}</div><div class="summary-cards stats-cards">${cards.map(([label,value])=>`<div class="summary-card"><p>${label}</p><strong>${esc(value)}</strong></div>`).join('')}</div><p class="caption">평균 간격은 연속된 두 수유 사이가 8시간 이하인 경우만 계산해요.</p><section class="card"><h2>최근 ${statsDays}일</h2><p class="caption">횟수에는 모든 수유를, 용량에는 ml·cc·밀리리터·미리·씨씨 단위가 있는 기록만 집계해요. 직수 시간과 단위 없는 값은 용량에 합산하지 않아요.</p><table class="stats-table"><thead><tr><th scope="col">날짜</th><th scope="col">수유 횟수</th><th scope="col">합계 용량</th><th scope="col">용량 비교</th></tr></thead><tbody>${table}</tbody></table></section>${amountTrendView()}${sleepStatsView(rows.map(r=>r.date))}${diaperStatsView(rows.map(r=>r.date))}`;
+ return `<h1>통계</h1><div class="actions report-link"><button type="button" class="secondary" data-page="report">🩺 소아과용 2주 요약 보기</button></div>${featureHost.slot('stats')}${aiSummaryCard()}${alarmView()}${patternView()}<h2 class="section-head">수유</h2><div class="quick stats-period" aria-label="조회 기간">${periods}</div><div class="summary-cards stats-cards">${cards.map(([label,value])=>`<div class="summary-card"><p>${label}</p><strong>${esc(value)}</strong></div>`).join('')}</div><p class="caption">평균 간격은 연속된 두 수유 사이가 8시간 이하인 경우만 계산해요.</p><section class="card"><h2>최근 ${statsDays}일</h2><p class="caption">횟수에는 모든 수유를, 용량에는 ml·cc·밀리리터·미리·씨씨 단위가 있는 기록만 집계해요. 직수 시간과 단위 없는 값은 용량에 합산하지 않아요.</p><table class="stats-table"><thead><tr><th scope="col">날짜</th><th scope="col">수유 횟수</th><th scope="col">합계 용량</th><th scope="col">용량 비교</th></tr></thead><tbody>${table}</tbody></table></section>${amountTrendView()}${sleepStatsView(rows.map(r=>r.date))}${diaperStatsView(rows.map(r=>r.date))}`;
 }
 // Sleep for the chosen period: averages over the days that have sleep records, so a forgotten day does not drag them down.
 function sleepStatsView(dates){
@@ -481,13 +483,14 @@ function recordGroups(items){
  return groups+(hidden?`<button class="secondary more" data-more-days="7">이전 기록 더 보기 (${hidden}일 남음)</button>`:'');
 }
 function listView(k){
+ const featurePage=featureHost.page(k);if(featurePage)return featurePage.view();
  const names={records:'기록을 누르면 고치거나 지울 수 있어요.',schedule:'병원 예약과 가족 일정을 관리해요. 일정을 누르면 고치거나 지울 수 있어요.',shopping:'‘✓ 샀어요’로 바로 완료하고, 항목을 누르면 고치거나 지울 수 있어요. Google 음성 장보기는 관리자가 상품 규격과 가격 검색을 설정한 경우에만 가격 비교 링크를 남겨요.'};
  const items=Somhouse.filter(sorted(k),filters[k]),now=Somhouse.localDateTime();
  const head=k==='schedule'?`다가오는 ${items.filter(x=>x.date>=now).length} · 지난 ${items.filter(x=>x.date<now).length}`:k==='shopping'?`살 것 ${items.filter(x=>x.done!=='yes').length} · 산 것 ${items.filter(x=>x.done==='yes').length}`:`기록 ${items.length}개`;
   const kids=k==='schedule'?`<p class="caption kids">👶 아기: ${children().map(esc).join(', ')||'아직 등록하지 않았어요'} <button class="plain small" data-manage-children="1">${children().length?'아기 이름 관리':'＋ 아기 등록'}</button></p>`:'';
  const add=k==='records'?'<button data-add="feeding">수유 추가</button><button class="secondary" data-add="sleep">수면 추가</button><button class="secondary" data-add="diaper">기저귀 추가</button><button class="secondary" data-add="hospital">병원 추가</button>':`<button data-add="${k}">추가하기</button>`;
  const body=k==='schedule'?scheduleItems(items):k==='shopping'?shoppingItems(items):items.length?recordGroups(items):'';
- return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p>${kids}${k==='shopping'?stockCard()+rebuyCard():aiHelpCard(k)}${k==='records'?checksCard():''}<div class="heading"><h2>${head}</h2><div class="quick">${add}</div></div>${filterView(k)}${body||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}${k==='records'?voiceHelp():''}`;
+ return `<h1>${pageTitles[k]}</h1><p>${names[k]}</p>${kids}${k==='shopping'?stockCard()+rebuyCard():aiHelpCard(k)}${k==='records'?checksCard():''}${featureHost.slot(k)}<div class="heading"><h2>${head}</h2><div class="quick">${add}</div></div>${filterView(k)}${body||`<div class="card empty">${data[k].length?'검색 조건에 맞는 기록이 없어요. 조건을 바꾸거나 초기화해보세요.':'아직 기록이 없어요. 추가 버튼으로 시작해보세요.'}</div>`}${k==='records'?voiceHelp():''}`;
 }
 function shoppingItems(items){
  if(!items.length)return '';
@@ -779,7 +782,7 @@ async function askAI(e){
 function render(){
  needsRender=false;
  document.querySelectorAll('nav button').forEach(b=>{const active=b.dataset.page===page;b.classList.toggle('active',active);if(active)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
- document.title=`${pageTitles[page]} · 솜하우스`;
+ document.title=`${pageTitles[page]||featureHost.page(page)?.title||'홈'} · 솜하우스`;
  const connected=mode==='shared'&&sharedReady,showAI=connected&&page==='ai';
  const aiPanel=$('#ai-panel'),openingAI=aiPanel.hidden&&showAI;
  aiPanel.hidden=!showAI;
@@ -843,7 +846,7 @@ document.addEventListener('click',async e=>{
  if(b.dataset.page){location.hash=b.dataset.page;if(page===b.dataset.page)render();}
  if(b.dataset.reset){filters[b.dataset.reset]={};render();}
  if(busy||mode!=='shared'||!sharedReady)return;
- if(await aiHelpClick(b)||await insightsClick(b))return;
+ if(await aiHelpClick(b)||await insightsClick(b)||await featureHost.click(b))return;
  if(b.dataset.alarmOpen){alarmUi.open=!alarmUi.open;render();return;}
  if(['on','off'].includes(b.dataset.alarm)&&['feeding','nap'].includes(b.dataset.alarmKind)){await alarmSwitch(b.dataset.alarmKind,b.dataset.alarm==='on');return;}
  if(b.dataset.step){
@@ -1197,3 +1200,4 @@ if(shared?.base){
  $('#connection-title').textContent='Mac에서 시험판 열기';
  message('지금 화면에서는 시험 계정으로 로그인할 수 없어요. 미리보기를 닫고 시험판을 실행한 Mac의 Safari에서 열어 주세요. 휴대폰으로 Mac 화면을 원격 조작해도 돼요.');
 }else message('솜하우스 서버 주소를 확인할 수 없어요. 솜하우스를 원래 주소에서 다시 열어 주세요.');
+featureHost.start();
